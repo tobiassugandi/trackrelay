@@ -56,8 +56,11 @@ Goal: start a minimal API locally and establish the development feedback loop.
 
 ### Step 1.4 — Add developer commands
 
-- [ ] Add a `Makefile` with narrowly named commands for install, test, lint, and run.
-- [ ] Document the commands in the README.
+- [x] Pin the project-local interpreter to Python 3.12.
+- [x] Configure TrackRelay as an installable `src`-layout package.
+- [x] Commit a cross-platform `uv.lock` dependency lockfile.
+- [x] Add a `Makefile` with narrowly named commands for sync, test, lint, and run.
+- [x] Document the raw `uv` commands and Make shortcuts in the README.
 
 **Check:** the application starts locally and the liveness test passes.
 
@@ -65,7 +68,7 @@ Goal: start a minimal API locally and establish the development feedback loop.
 
 - [ ] Add typed application settings.
 - [ ] Add `.env.example` without secrets.
-- [ ] Add an appropriate `.gitignore`.
+- [x] Add an appropriate `.gitignore`.
 
 **Learn:** how runtime configuration differs from source code.
 

@@ -66,6 +66,42 @@ CREATED -> PICKED_UP -> IN_TRANSIT -> OUT_FOR_DELIVERY -> DELIVERED
 
 These are planned tools, not current prerequisites. The local synchronous version comes first.
 
+## Local development
+
+[uv](https://docs.astral.sh/uv/) manages TrackRelay's Python interpreter, project environment, dependencies, and lockfile. The repository pins the local interpreter to Python 3.12 in `.python-version`. `uv` will use or install a matching interpreter when needed.
+
+Synchronize the project-local `.venv` from the committed lockfile:
+
+```bash
+uv sync --locked --python 3.12
+```
+
+Run the tests:
+
+```bash
+uv run --locked pytest
+```
+
+Run the linter:
+
+```bash
+uv run --locked ruff check .
+```
+
+Start the local API server:
+
+```bash
+uv run --locked uvicorn trackrelay.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Then visit `http://127.0.0.1:8000/docs` or check liveness with:
+
+```bash
+curl http://127.0.0.1:8000/health/live
+```
+
+The equivalent shortcuts are `make sync`, `make test`, `make lint`, and `make run`. Activating `.venv` manually or setting `PYTHONPATH` is not required because TrackRelay is installed as a project package.
+
 ## Development approach
 
 TrackRelay will be built in very small, observable steps. Each step should:
@@ -82,4 +118,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The repository has been initialized and the project has been documented. No application code has been implemented yet.
+The project has a reproducible local Python environment and a minimal FastAPI application with a tested liveness endpoint. Business behavior has not been implemented yet.

@@ -6,10 +6,16 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.116,<1",
+    "uvicorn[standard]>=0.35,<1",
 ]
 
 [dependency-groups]
 dev = [
     "httpx>=0.28,<1",
     "pytest>=8.4,<10",
+    "ruff>=0.12,<1",
 ]
+
+[build-system]
+requires = ["uv_build>=0.9.17,<0.10.0"]
+build-backend = "uv_build"

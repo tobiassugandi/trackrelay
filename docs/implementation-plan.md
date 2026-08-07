@@ -32,9 +32,9 @@ Goal: start a minimal API locally and establish the development feedback loop.
 
 ### Step 1.1 — Create the Python project metadata
 
-- [ ] Add `pyproject.toml`.
-- [ ] Declare the supported Python version.
-- [ ] Add only the dependencies needed for a minimal FastAPI application and tests.
+- [x] Add `pyproject.toml`.
+- [x] Declare the supported Python version.
+- [x] Add only the dependencies needed for a minimal FastAPI application and tests.
 
 **Learn:** what Python project metadata and dependency groups do.
 

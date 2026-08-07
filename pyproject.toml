@@ -1,0 +1,15 @@
+[project]
+name = "trackrelay"
+version = "0.1.0"
+description = "A reliable shipment-event integration gateway"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.116,<1",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28,<1",
+    "pytest>=8.4,<10",
+]

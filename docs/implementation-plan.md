@@ -40,9 +40,9 @@ Goal: start a minimal API locally and establish the development feedback loop.
 
 ### Step 1.2 — Create the smallest application package
 
-- [ ] Create the TrackRelay package.
-- [ ] Create a FastAPI application object.
-- [ ] Add no business logic yet.
+- [x] Create the TrackRelay package.
+- [x] Create a FastAPI application object.
+- [x] Add no business logic yet.
 
 **Check:** importing the application succeeds.
 

@@ -66,8 +66,8 @@ Goal: start a minimal API locally and establish the development feedback loop.
 
 ### Step 1.5 — Add configuration handling
 
-- [ ] Add typed application settings.
-- [ ] Add `.env.example` without secrets.
+- [x] Add typed application settings.
+- [x] Add `.env.example` without secrets.
 - [x] Add an appropriate `.gitignore`.
 
 **Learn:** how runtime configuration differs from source code.

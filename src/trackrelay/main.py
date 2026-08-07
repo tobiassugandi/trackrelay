@@ -2,7 +2,10 @@
 
 from fastapi import FastAPI
 
-app = FastAPI(title="TrackRelay")
+from trackrelay.config import Settings
+
+settings = Settings()
+app = FastAPI(title=settings.app_name, debug=settings.debug)
 
 
 @app.get("/health/live", tags=["health"])

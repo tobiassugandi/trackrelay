@@ -76,6 +76,14 @@ Synchronize the project-local `.venv` from the committed lockfile:
 uv sync --locked --python 3.12
 ```
 
+TrackRelay has safe defaults and runs without local configuration. To override them, copy the example environment file:
+
+```bash
+cp .env.example .env
+```
+
+The `TRACKRELAY_APP_NAME`, `TRACKRELAY_ENVIRONMENT`, and `TRACKRELAY_DEBUG` variables configure the application name, runtime environment, and debug mode. The local `.env` file is ignored by Git; `.env.example` documents non-secret example values.
+
 Run the tests:
 
 ```bash

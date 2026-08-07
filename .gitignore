@@ -9,6 +9,14 @@ wheels/
 # Virtual environments
 .venv/
 
+# Local configuration
+.env
+.env.*
+!.env.example
+
 # Test and tool caches
 .pytest_cache/
 .ruff_cache/
+
+# Operating-system metadata
+.DS_Store

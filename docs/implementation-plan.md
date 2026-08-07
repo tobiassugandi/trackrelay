@@ -48,9 +48,9 @@ Goal: start a minimal API locally and establish the development feedback loop.
 
 ### Step 1.3 — Add a liveness endpoint
 
-- [ ] Add `GET /health/live`.
-- [ ] Return a small, stable JSON response.
-- [ ] Add one test.
+- [x] Add `GET /health/live`.
+- [x] Return a small, stable JSON response.
+- [x] Add one test.
 
 **Learn:** liveness answers whether the process is running, not whether its dependencies are healthy.
 

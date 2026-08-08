@@ -98,11 +98,11 @@ Goal: start a minimal API locally and establish the development feedback loop.
 
 ### Step 1.9 — Add readiness
 
-- [ ] Add `GET /health/ready`.
-- [ ] Make readiness check database connectivity.
-- [ ] Test ready and not-ready behavior.
+- [x] Add `GET /health/ready`.
+- [x] Make readiness check database connectivity.
+- [x] Test ready and not-ready behavior.
 
-**Milestone:** `local-foundation-v1` — the API starts, PostgreSQL starts, migrations run, and both health endpoints behave correctly.
+**Milestone achieved:** `local-foundation-v1` — the API starts, PostgreSQL starts, migrations run, and both health endpoints behave correctly.
 
 ## Phase 2 — First complete event path
 

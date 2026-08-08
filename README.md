@@ -84,6 +84,34 @@ cp .env.example .env
 
 The `TRACKRELAY_APP_NAME`, `TRACKRELAY_ENVIRONMENT`, and `TRACKRELAY_DEBUG` variables configure the application name, runtime environment, and debug mode. The local `.env` file is ignored by Git; `.env.example` documents non-secret example values.
 
+### Local PostgreSQL
+
+Docker Compose runs PostgreSQL independently of the API, so database startup can be learned and verified before application persistence is introduced. Start it with:
+
+```bash
+make db-up
+```
+
+Inspect its state:
+
+```bash
+make db-status
+```
+
+Open an interactive PostgreSQL shell when you want to inspect it directly:
+
+```bash
+docker compose exec postgres psql -U trackrelay -d trackrelay
+```
+
+Stop the service without deleting its persistent data volume:
+
+```bash
+make db-down
+```
+
+Compose reads `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_PORT` from `.env`, with development defaults when the file is absent. TrackRelay defaults to host port `5433` to avoid conflicting with a separately installed PostgreSQL server; the container itself still listens on the standard port `5432`. `TRACKRELAY_DATABASE_URL` is the future application connection string; the API does not use it until Step 1.7.
+
 Run the tests:
 
 ```bash
@@ -108,7 +136,7 @@ Then visit `http://127.0.0.1:8000/docs` or check liveness with:
 curl http://127.0.0.1:8000/health/live
 ```
 
-The equivalent shortcuts are `make sync`, `make test`, `make lint`, and `make run`. Activating `.venv` manually or setting `PYTHONPATH` is not required because TrackRelay is installed as a project package.
+The equivalent application shortcuts are `make sync`, `make test`, `make lint`, and `make run`. Activating `.venv` manually or setting `PYTHONPATH` is not required because TrackRelay is installed as a project package.
 
 ## Development approach
 
@@ -126,4 +154,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The project has a reproducible local Python environment and a minimal FastAPI application with a tested liveness endpoint. Business behavior has not been implemented yet.
+The project has a reproducible local Python environment, a minimal FastAPI application with a tested liveness endpoint, and a Docker Compose-managed PostgreSQL service. The API does not connect to PostgreSQL yet, and business behavior has not been implemented.

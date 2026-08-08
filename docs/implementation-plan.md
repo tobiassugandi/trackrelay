@@ -74,9 +74,9 @@ Goal: start a minimal API locally and establish the development feedback loop.
 
 ### Step 1.6 — Add PostgreSQL locally
 
-- [ ] Add PostgreSQL to Docker Compose.
-- [ ] Add a local database URL to `.env.example`.
-- [ ] Verify that the database becomes healthy.
+- [x] Add PostgreSQL to Docker Compose.
+- [x] Add a local database URL to `.env.example`.
+- [x] Verify that the database becomes healthy.
 
 **Check:** PostgreSQL starts without requiring the API to use it yet.
 

@@ -90,9 +90,9 @@ Goal: start a minimal API locally and establish the development feedback loop.
 
 ### Step 1.8 — Add Alembic
 
-- [ ] Initialize migration configuration.
-- [ ] Make migrations use the same settings as the application.
-- [ ] Run an empty or metadata-baseline migration.
+- [x] Initialize migration configuration.
+- [x] Make migrations use the same settings as the application.
+- [x] Run an empty or metadata-baseline migration.
 
 **Check:** a clean database can be upgraded to the latest revision.
 

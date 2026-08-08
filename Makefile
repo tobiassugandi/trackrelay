@@ -1,7 +1,7 @@
 UV := uv
 COMPOSE := docker compose
 
-.PHONY: sync test lint run db-up db-status db-check db-down
+.PHONY: sync test lint run db-up db-status db-check db-down migrate migration-status
 
 sync:
 	$(UV) sync --locked --python 3.12
@@ -26,3 +26,9 @@ db-check:
 
 db-down:
 	$(COMPOSE) down
+
+migrate:
+	$(UV) run --locked alembic upgrade head
+
+migration-status:
+	$(UV) run --locked alembic current

@@ -4,9 +4,13 @@ from collections.abc import Iterator
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from trackrelay.config import Settings
+
+
+class Base(DeclarativeBase):
+    """Base class whose metadata Alembic uses for migrations."""
 
 
 def create_database_engine(database_url: str) -> Engine:

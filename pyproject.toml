@@ -5,6 +5,7 @@ description = "A reliable shipment-event integration gateway"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "alembic>=1.16,<2",
     "fastapi>=0.116,<1",
     "pydantic-settings>=2.10,<3",
     "psycopg[binary]>=3.2,<4",

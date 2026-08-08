@@ -104,6 +104,20 @@ Check the application-configured SQLAlchemy connection:
 make db-check
 ```
 
+Apply every pending database migration:
+
+```bash
+make migrate
+```
+
+Inspect the database's current migration revision:
+
+```bash
+make migration-status
+```
+
+Alembic reads the same `TRACKRELAY_DATABASE_URL` setting as the application. The initial `0001_baseline` migration is deliberately empty because no domain tables exist yet; it establishes the starting point for later schema changes.
+
 Open an interactive PostgreSQL shell when you want to inspect it directly:
 
 ```bash
@@ -160,4 +174,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The project has a reproducible local Python environment, a minimal FastAPI application with a tested liveness endpoint, and a Docker Compose-managed PostgreSQL service. SQLAlchemy engine and session infrastructure can connect to the database, but API routes do not query it yet and business behavior has not been implemented.
+The project has a reproducible local Python environment, a minimal FastAPI application with a tested liveness endpoint, and a Docker Compose-managed PostgreSQL service. SQLAlchemy can connect to the database, and Alembic has established the initial migration baseline. API routes do not query PostgreSQL yet, and business behavior has not been implemented.

@@ -1,7 +1,7 @@
 UV := uv
 COMPOSE := docker compose
 
-.PHONY: sync test lint run db-up db-status db-down
+.PHONY: sync test lint run db-up db-status db-check db-down
 
 sync:
 	$(UV) sync --locked --python 3.12
@@ -20,6 +20,9 @@ db-up:
 
 db-status:
 	$(COMPOSE) ps postgres
+
+db-check:
+	$(UV) run --locked python -m trackrelay.database
 
 db-down:
 	$(COMPOSE) down

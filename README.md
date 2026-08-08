@@ -98,6 +98,12 @@ Inspect its state:
 make db-status
 ```
 
+Check the application-configured SQLAlchemy connection:
+
+```bash
+make db-check
+```
+
 Open an interactive PostgreSQL shell when you want to inspect it directly:
 
 ```bash
@@ -110,7 +116,7 @@ Stop the service without deleting its persistent data volume:
 make db-down
 ```
 
-Compose reads `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_PORT` from `.env`, with development defaults when the file is absent. TrackRelay defaults to host port `5433` to avoid conflicting with a separately installed PostgreSQL server; the container itself still listens on the standard port `5432`. `TRACKRELAY_DATABASE_URL` is the future application connection string; the API does not use it until Step 1.7.
+Compose reads `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_PORT` from `.env`, with development defaults when the file is absent. TrackRelay defaults to host port `5433` to avoid conflicting with a separately installed PostgreSQL server; the container itself still listens on the standard port `5432`. SQLAlchemy reads `TRACKRELAY_DATABASE_URL`. Database infrastructure remains separate from the API routes; readiness will use it in Step 1.9.
 
 Run the tests:
 
@@ -154,4 +160,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The project has a reproducible local Python environment, a minimal FastAPI application with a tested liveness endpoint, and a Docker Compose-managed PostgreSQL service. The API does not connect to PostgreSQL yet, and business behavior has not been implemented.
+The project has a reproducible local Python environment, a minimal FastAPI application with a tested liveness endpoint, and a Docker Compose-managed PostgreSQL service. SQLAlchemy engine and session infrastructure can connect to the database, but API routes do not query it yet and business behavior has not been implemented.

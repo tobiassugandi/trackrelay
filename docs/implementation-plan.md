@@ -82,9 +82,9 @@ Goal: start a minimal API locally and establish the development feedback loop.
 
 ### Step 1.7 — Connect SQLAlchemy
 
-- [ ] Add the SQLAlchemy engine and session factory.
-- [ ] Add a tiny connection check.
-- [ ] Keep database access out of route handlers where possible.
+- [x] Add the SQLAlchemy engine and session factory.
+- [x] Add a tiny connection check.
+- [x] Keep database access out of route handlers where possible.
 
 **Learn:** engine, connection, transaction, and session responsibilities.
 

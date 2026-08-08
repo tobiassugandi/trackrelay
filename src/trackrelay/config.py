@@ -18,3 +18,6 @@ class Settings(BaseSettings):
     app_name: str = "TrackRelay"
     environment: Literal["local", "test", "staging", "production"] = "local"
     debug: bool = False
+    database_url: str = (
+        "postgresql+psycopg://trackrelay:trackrelay@localhost:5433/trackrelay"
+    )

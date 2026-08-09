@@ -182,4 +182,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1` milestone is complete: the reproducible FastAPI project starts, PostgreSQL runs through Docker Compose, SQLAlchemy connects, Alembic migrations apply, and liveness and database-aware readiness are tested. Business behavior has not been implemented yet.
+The `local-foundation-v1` milestone is complete: the reproducible FastAPI project starts, PostgreSQL runs through Docker Compose, SQLAlchemy connects, Alembic migrations apply, and liveness and database-aware readiness are tested. Domain work has begun with the five normalized shipment statuses; transitions and event processing have not been implemented yet.

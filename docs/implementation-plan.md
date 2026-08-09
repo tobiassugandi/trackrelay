@@ -110,8 +110,8 @@ Goal: move one Courier Alpha event through the entire synchronous system.
 
 ### Step 2.1 — Define the internal status model
 
-- [ ] Define the five initial shipment statuses.
-- [ ] Write tests for valid values.
+- [x] Define the five initial shipment statuses.
+- [x] Write tests for valid values.
 
 ### Step 2.2 — Define the normalized event schema
 

@@ -132,8 +132,8 @@ Goal: move one Courier Alpha event through the entire synchronous system.
 
 ### Step 2.5 — Add the partners table
 
-- [ ] Store a stable partner ID, name, adapter type, and active flag.
-- [ ] Create and apply a migration.
+- [x] Store a stable partner ID, name, adapter type, and active flag.
+- [x] Create and apply a migration.
 
 ### Step 2.6 — Add the shipments table
 

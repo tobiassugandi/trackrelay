@@ -4,6 +4,7 @@ from alembic import context
 from sqlalchemy import create_engine
 from sqlalchemy.pool import NullPool
 
+import trackrelay.models  # noqa: F401 -- Register models with Base.metadata.
 from trackrelay.config import Settings
 from trackrelay.database import Base
 

@@ -182,4 +182,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1` milestone is complete. Domain work includes normalized shipment statuses and events, and Courier Alpha's external payload can now be validated and translated without HTTP or database access. Transitions, persistence, and end-to-end event processing have not been implemented yet.
+The `local-foundation-v1` milestone is complete. Courier Alpha payloads can be validated and normalized, and migration `0002_partners` establishes persisted courier configuration. Shipment/event persistence, transitions, and end-to-end processing have not been implemented yet.

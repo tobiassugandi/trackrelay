@@ -137,8 +137,8 @@ Goal: move one Courier Alpha event through the entire synchronous system.
 
 ### Step 2.6 — Add the shipments table
 
-- [ ] Store tracking number, current status, status occurrence time, and timestamps.
-- [ ] Create and apply a migration.
+- [x] Store tracking number, current status, status occurrence time, and timestamps.
+- [x] Create and apply a migration.
 
 ### Step 2.7 — Add the events table
 

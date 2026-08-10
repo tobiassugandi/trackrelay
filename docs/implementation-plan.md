@@ -122,8 +122,8 @@ Goal: move one Courier Alpha event through the entire synchronous system.
 
 ### Step 2.3 — Define Courier Alpha's payload
 
-- [ ] Model the Courier Alpha request.
-- [ ] Add representative valid and invalid examples.
+- [x] Model the Courier Alpha request.
+- [x] Add representative valid and invalid examples.
 
 ### Step 2.4 — Build the Courier Alpha adapter
 

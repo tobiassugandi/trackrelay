@@ -1,11 +1,16 @@
-"""Tests for Courier Alpha's external contract."""
+"""Tests for Courier Alpha's external contract and adapter."""
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from pydantic import ValidationError
 from pytest import mark, raises
 
-from trackrelay.partners import AlphaStatusCode, CourierAlphaPayload
+from trackrelay.domain import ShipmentStatus
+from trackrelay.partners import (
+    AlphaStatusCode,
+    CourierAlphaAdapter,
+    CourierAlphaPayload,
+)
 
 
 def valid_alpha_data() -> dict[str, str]:
@@ -61,3 +66,33 @@ def test_courier_alpha_payload_rejects_unknown_fields() -> None:
 
     with raises(ValidationError):
         CourierAlphaPayload.model_validate(data)
+
+
+@mark.parametrize(
+    ("alpha_status", "normalized_status"),
+    [
+        (AlphaStatusCode.CREATED, ShipmentStatus.CREATED),
+        (AlphaStatusCode.PICKED_UP, ShipmentStatus.PICKED_UP),
+        (AlphaStatusCode.IN_TRANSIT, ShipmentStatus.IN_TRANSIT),
+        (AlphaStatusCode.OUT_FOR_DELIVERY, ShipmentStatus.OUT_FOR_DELIVERY),
+        (AlphaStatusCode.DELIVERED, ShipmentStatus.DELIVERED),
+    ],
+)
+def test_courier_alpha_adapter_normalizes_each_status(
+    alpha_status: AlphaStatusCode,
+    normalized_status: ShipmentStatus,
+) -> None:
+    data = valid_alpha_data()
+    data["status"] = alpha_status.value
+    payload = CourierAlphaPayload.model_validate(data)
+    received_at = datetime(2026, 8, 6, 7, 21, 2, tzinfo=UTC)
+
+    event = CourierAlphaAdapter().normalize(payload, received_at=received_at)
+
+    assert event.partner_id == "courier-alpha"
+    assert event.partner_event_id == "ALPHA-001842"
+    assert event.tracking_number == "ALP123456789"
+    assert event.status is normalized_status
+    assert event.occurred_at == payload.event_time
+    assert event.received_at == received_at
+    assert event.raw_payload["status"] == alpha_status.value

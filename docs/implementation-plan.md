@@ -127,8 +127,8 @@ Goal: move one Courier Alpha event through the entire synchronous system.
 
 ### Step 2.4 — Build the Courier Alpha adapter
 
-- [ ] Translate Alpha field names and status codes into the normalized event.
-- [ ] Test the adapter without HTTP or a database.
+- [x] Translate Alpha field names and status codes into the normalized event.
+- [x] Test the adapter without HTTP or a database.
 
 ### Step 2.5 — Add the partners table
 

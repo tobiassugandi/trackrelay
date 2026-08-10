@@ -182,4 +182,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1` milestone is complete: the reproducible FastAPI project starts, PostgreSQL runs through Docker Compose, SQLAlchemy connects, Alembic migrations apply, and liveness and database-aware readiness are tested. Domain work has begun with the five normalized shipment statuses; transitions and event processing have not been implemented yet.
+The `local-foundation-v1` milestone is complete. Domain work now includes the five normalized shipment statuses and an immutable normalized-event schema with distinct occurrence and receipt timestamps. Partner-specific payloads, transitions, persistence, and event processing have not been implemented yet.

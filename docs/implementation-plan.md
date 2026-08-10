@@ -115,8 +115,8 @@ Goal: move one Courier Alpha event through the entire synchronous system.
 
 ### Step 2.2 — Define the normalized event schema
 
-- [ ] Define partner ID, partner event ID, tracking number, normalized status, occurrence time, and raw payload.
-- [ ] Keep received time separate from occurrence time.
+- [x] Define partner ID, partner event ID, tracking number, normalized status, occurrence time, and raw payload.
+- [x] Keep received time separate from occurrence time.
 
 **Learn:** external contracts and internal domain models serve different purposes.
 

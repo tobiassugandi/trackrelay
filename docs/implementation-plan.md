@@ -160,9 +160,9 @@ Goal: move one Courier Alpha event through the entire synchronous system.
 
 ### Step 2.10 — Add the ingestion endpoint
 
-- [ ] Add `POST /api/v1/partners/{partner_id}/events`.
-- [ ] Validate the partner and payload.
-- [ ] Call the Alpha adapter and application service.
+- [x] Add `POST /api/v1/partners/{partner_id}/events`.
+- [x] Validate the partner and payload.
+- [x] Call the Alpha adapter and application service.
 
 ### Step 2.11 — Deliver synchronously downstream
 

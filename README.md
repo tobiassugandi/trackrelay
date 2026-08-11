@@ -172,6 +172,8 @@ curl --include http://127.0.0.1:8000/health/ready
 
 Readiness returns HTTP `200` with `{"status":"ready"}` when PostgreSQL is available and HTTP `503` when it is unavailable.
 
+Courier Alpha can submit an event to `POST /api/v1/partners/courier-alpha/events`. TrackRelay validates the configured partner and Alpha payload, normalizes the event, and persists it with its shipment update. Synchronous delivery to the downstream simulator is the next implementation step.
+
 Start the downstream order-system simulator in a separate terminal:
 
 ```bash
@@ -198,4 +200,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1` milestone is complete. Courier Alpha payloads can be normalized and persisted transactionally, and a separate downstream simulator can validate, record, and expose normalized events in memory. TrackRelay does not send events to it yet, and the HTTP ingestion path has not been implemented.
+The `local-foundation-v1` milestone is complete. Courier Alpha events can enter through HTTP, be normalized, and be persisted transactionally, while a separate downstream simulator can validate, record, and expose normalized events in memory. TrackRelay does not send events to the simulator yet.

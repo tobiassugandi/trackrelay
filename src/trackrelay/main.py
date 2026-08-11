@@ -17,6 +17,7 @@ from trackrelay.models import Partner
 from trackrelay.partners import CourierAlphaAdapter, CourierAlphaPayload
 from trackrelay.services import (
     DeliveryResult,
+    EventPersistenceResult,
     deliver_normalized_event,
     persist_normalized_event,
 )
@@ -24,7 +25,7 @@ from trackrelay.services import (
 settings = Settings()
 app = FastAPI(title=settings.app_name, debug=settings.debug)
 
-EventPersister = Callable[[NormalizedEvent], UUID]
+EventPersister = Callable[[NormalizedEvent], EventPersistenceResult]
 EventDeliverer = Callable[[NormalizedEvent], DeliveryResult]
 
 
@@ -131,10 +132,10 @@ def ingest_partner_event(
         payload,
         received_at=datetime.now(UTC),
     )
-    event_id = persist_event(normalized_event)
+    persistence = persist_event(normalized_event)
     delivery = deliver_event(normalized_event)
     return CreatedEventResponse(
-        event_id=event_id,
+        event_id=persistence.event_id,
         processing_status="processed",
         duplicate=False,
         delivery_status=delivery.status,

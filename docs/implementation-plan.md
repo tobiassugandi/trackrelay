@@ -189,8 +189,8 @@ Goal: retries must not repeat business effects.
 
 ### Step 3.2 — Handle the uniqueness conflict
 
-- [ ] Make concurrent or repeated requests resolve to the original event.
-- [ ] Do not apply the shipment transition again.
+- [x] Make concurrent or repeated requests resolve to the original event.
+- [x] Do not apply the shipment transition again.
 
 ### Step 3.3 — Prevent duplicate downstream effects
 

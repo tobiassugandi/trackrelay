@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Iterator
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from pytest import fixture
@@ -11,7 +11,7 @@ from trackrelay.database import get_session
 from trackrelay.domain import NormalizedEvent, ShipmentStatus
 from trackrelay.main import app, get_event_deliverer, get_event_persister
 from trackrelay.models import Partner
-from trackrelay.services import DeliveryResult
+from trackrelay.services import DeliveryResult, EventPersistenceResult
 
 
 class StubSession:
@@ -47,7 +47,7 @@ def valid_payload() -> dict[str, str]:
 
 def configure_dependencies(
     partner: Partner | None,
-    persist_event: Callable[[NormalizedEvent], UUID],
+    persist_event: Callable[[NormalizedEvent], EventPersistenceResult],
     deliver_event: Callable[[NormalizedEvent], DeliveryResult] | None = None,
 ) -> None:
     def override_session() -> Iterator[StubSession]:
@@ -80,9 +80,12 @@ def test_ingestion_normalizes_and_persists_an_alpha_event(
     persisted: list[NormalizedEvent] = []
     delivered: list[NormalizedEvent] = []
 
-    def persist_event(event: NormalizedEvent) -> UUID:
+    def persist_event(event: NormalizedEvent) -> EventPersistenceResult:
         persisted.append(event)
-        return persisted_event_id
+        return EventPersistenceResult(
+            event_id=persisted_event_id,
+            duplicate=False,
+        )
 
     def deliver_event(event: NormalizedEvent) -> DeliveryResult:
         delivered.append(event)
@@ -117,7 +120,13 @@ def test_ingestion_rejects_an_unknown_partner(
     valid_payload: dict[str, str],
 ) -> None:
     persisted: list[NormalizedEvent] = []
-    configure_dependencies(None, lambda event: persisted.append(event) or uuid4())
+    configure_dependencies(
+        None,
+        lambda event: EventPersistenceResult(
+            event_id=uuid4(),
+            duplicate=False,
+        ),
+    )
 
     response = client.post(
         "/api/v1/partners/unknown/events",
@@ -133,7 +142,13 @@ def test_ingestion_rejects_an_inactive_partner(
     client: TestClient,
     valid_payload: dict[str, str],
 ) -> None:
-    configure_dependencies(alpha_partner(is_active=False), lambda event: uuid4())
+    configure_dependencies(
+        alpha_partner(is_active=False),
+        lambda event: EventPersistenceResult(
+            event_id=uuid4(),
+            duplicate=False,
+        ),
+    )
 
     response = client.post(
         "/api/v1/partners/courier-alpha/events",
@@ -150,7 +165,10 @@ def test_ingestion_rejects_an_unsupported_partner_adapter(
 ) -> None:
     configure_dependencies(
         alpha_partner(adapter_type="courier-beta"),
-        lambda event: uuid4(),
+        lambda event: EventPersistenceResult(
+            event_id=uuid4(),
+            duplicate=False,
+        ),
     )
 
     response = client.post(
@@ -166,7 +184,13 @@ def test_ingestion_rejects_an_invalid_alpha_payload(
     client: TestClient,
     valid_payload: dict[str, str],
 ) -> None:
-    configure_dependencies(alpha_partner(), lambda event: uuid4())
+    configure_dependencies(
+        alpha_partner(),
+        lambda event: EventPersistenceResult(
+            event_id=uuid4(),
+            duplicate=False,
+        ),
+    )
     valid_payload["status"] = "UNKNOWN"
 
     response = client.post(

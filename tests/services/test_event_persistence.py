@@ -42,18 +42,18 @@ def test_persistence_creates_then_updates_a_shipment_atomically() -> None:
             )
         )
 
-    first_event_id = persist_normalized_event(
+    first_result = persist_normalized_event(
         build_event("ALPHA-001", ShipmentStatus.PICKED_UP, first_time),
         sessions=sessions,
     )
-    second_event_id = persist_normalized_event(
+    second_result = persist_normalized_event(
         build_event("ALPHA-002", ShipmentStatus.IN_TRANSIT, second_time),
         sessions=sessions,
     )
 
     with sessions() as session:
         shipment = session.get(Shipment, "TRK-001")
-        first_event = session.get(Event, first_event_id)
+        first_event = session.get(Event, first_result.event_id)
         assert shipment is not None
         assert shipment.current_status is ShipmentStatus.IN_TRANSIT
         assert shipment.current_status_occurred_at.replace(tzinfo=UTC) == second_time
@@ -61,6 +61,8 @@ def test_persistence_creates_then_updates_a_shipment_atomically() -> None:
         assert first_event.processing_status is EventProcessingStatus.PROCESSED
         assert first_event.state_applied is True
         assert session.scalar(select(func.count()).select_from(Event)) == 2
-        assert first_event_id != second_event_id
+        assert first_result.duplicate is False
+        assert second_result.duplicate is False
+        assert first_result.event_id != second_result.event_id
 
     engine.dispose()

@@ -166,9 +166,9 @@ Goal: move one Courier Alpha event through the entire synchronous system.
 
 ### Step 2.11 — Deliver synchronously downstream
 
-- [ ] Send the normalized event to the simulator using HTTPX.
-- [ ] Record a basic delivery result.
-- [ ] Return a clear API response.
+- [x] Send the normalized event to the simulator using HTTPX.
+- [x] Record a basic delivery result.
+- [x] Return a clear API response.
 
 ### Step 2.12 — Verify the vertical slice
 

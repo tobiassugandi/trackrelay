@@ -21,3 +21,5 @@ class Settings(BaseSettings):
     database_url: str = (
         "postgresql+psycopg://trackrelay:trackrelay@localhost:5433/trackrelay"
     )
+    downstream_url: str = "http://127.0.0.1:8001"
+    downstream_timeout_seconds: float = 5.0

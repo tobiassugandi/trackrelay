@@ -2,10 +2,11 @@
 
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -14,17 +15,44 @@ from trackrelay.database import check_database_connection, get_session
 from trackrelay.domain import NormalizedEvent
 from trackrelay.models import Partner
 from trackrelay.partners import CourierAlphaAdapter, CourierAlphaPayload
-from trackrelay.services import persist_normalized_event
+from trackrelay.services import (
+    DeliveryResult,
+    deliver_normalized_event,
+    persist_normalized_event,
+)
 
 settings = Settings()
 app = FastAPI(title=settings.app_name, debug=settings.debug)
 
 EventPersister = Callable[[NormalizedEvent], UUID]
+EventDeliverer = Callable[[NormalizedEvent], DeliveryResult]
+
+
+class IngestionResponse(BaseModel):
+    """Successful synchronous ingestion and delivery outcome."""
+
+    event_id: UUID
+    processing_status: Literal["processed"]
+    delivery_status: Literal["delivered"]
+    downstream_status_code: int
 
 
 def get_event_persister() -> EventPersister:
     """Provide the application service used to persist normalized events."""
     return persist_normalized_event
+
+
+def get_event_deliverer() -> EventDeliverer:
+    """Provide synchronous delivery configured for the local downstream service."""
+
+    def deliver(event: NormalizedEvent) -> DeliveryResult:
+        return deliver_normalized_event(
+            event,
+            downstream_url=settings.downstream_url,
+            timeout_seconds=settings.downstream_timeout_seconds,
+        )
+
+    return deliver
 
 
 @app.get("/health/live", tags=["health"])
@@ -57,6 +85,7 @@ def readiness(
 @app.post(
     "/api/v1/partners/{partner_id}/events",
     status_code=status.HTTP_201_CREATED,
+    response_model=IngestionResponse,
     tags=["events"],
 )
 def ingest_partner_event(
@@ -64,8 +93,9 @@ def ingest_partner_event(
     payload: CourierAlphaPayload,
     session: Annotated[Session, Depends(get_session)],
     persist_event: Annotated[EventPersister, Depends(get_event_persister)],
-) -> dict[str, str]:
-    """Validate, normalize, and persist one Courier Alpha event."""
+    deliver_event: Annotated[EventDeliverer, Depends(get_event_deliverer)],
+) -> IngestionResponse:
+    """Validate, normalize, persist, and deliver one Courier Alpha event."""
     partner = session.get(Partner, partner_id)
     if partner is None:
         raise HTTPException(
@@ -88,4 +118,10 @@ def ingest_partner_event(
         received_at=datetime.now(UTC),
     )
     event_id = persist_event(normalized_event)
-    return {"event_id": str(event_id), "status": "processed"}
+    delivery = deliver_event(normalized_event)
+    return IngestionResponse(
+        event_id=event_id,
+        processing_status="processed",
+        delivery_status=delivery.status,
+        downstream_status_code=delivery.downstream_status_code,
+    )

@@ -82,7 +82,7 @@ TrackRelay has safe defaults and runs without local configuration. To override t
 cp .env.example .env
 ```
 
-The `TRACKRELAY_APP_NAME`, `TRACKRELAY_ENVIRONMENT`, and `TRACKRELAY_DEBUG` variables configure the application name, runtime environment, and debug mode. The local `.env` file is ignored by Git; `.env.example` documents non-secret example values.
+The `TRACKRELAY_APP_NAME`, `TRACKRELAY_ENVIRONMENT`, and `TRACKRELAY_DEBUG` variables configure the application name, runtime environment, and debug mode. `TRACKRELAY_DOWNSTREAM_URL` and `TRACKRELAY_DOWNSTREAM_TIMEOUT_SECONDS` configure synchronous delivery. The local `.env` file is ignored by Git; `.env.example` documents non-secret example values.
 
 ### Local PostgreSQL
 
@@ -172,7 +172,7 @@ curl --include http://127.0.0.1:8000/health/ready
 
 Readiness returns HTTP `200` with `{"status":"ready"}` when PostgreSQL is available and HTTP `503` when it is unavailable.
 
-Courier Alpha can submit an event to `POST /api/v1/partners/courier-alpha/events`. TrackRelay validates the configured partner and Alpha payload, normalizes the event, and persists it with its shipment update. Synchronous delivery to the downstream simulator is the next implementation step.
+Courier Alpha can submit an event to `POST /api/v1/partners/courier-alpha/events`. TrackRelay validates the configured partner and Alpha payload, normalizes and persists the event with its shipment update, then synchronously posts the normalized event to the downstream simulator. A successful response includes the event ID, processing and delivery statuses, and the downstream HTTP status code.
 
 Start the downstream order-system simulator in a separate terminal:
 
@@ -200,4 +200,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1` milestone is complete. Courier Alpha events can enter through HTTP, be normalized, and be persisted transactionally, while a separate downstream simulator can validate, record, and expose normalized events in memory. TrackRelay does not send events to the simulator yet.
+The `local-foundation-v1` milestone is complete. Courier Alpha events can enter through HTTP, be normalized and persisted transactionally, and be sent synchronously to a separate inspectable downstream simulator. Step 2.12 will verify this complete vertical slice against the running services.

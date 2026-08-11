@@ -9,8 +9,9 @@ from pytest import fixture
 
 from trackrelay.database import get_session
 from trackrelay.domain import NormalizedEvent, ShipmentStatus
-from trackrelay.main import app, get_event_persister
+from trackrelay.main import app, get_event_deliverer, get_event_persister
 from trackrelay.models import Partner
+from trackrelay.services import DeliveryResult
 
 
 class StubSession:
@@ -47,12 +48,17 @@ def valid_payload() -> dict[str, str]:
 def configure_dependencies(
     partner: Partner | None,
     persist_event: Callable[[NormalizedEvent], UUID],
+    deliver_event: Callable[[NormalizedEvent], DeliveryResult] | None = None,
 ) -> None:
     def override_session() -> Iterator[StubSession]:
         yield StubSession(partner)
 
     app.dependency_overrides[get_session] = override_session
     app.dependency_overrides[get_event_persister] = lambda: persist_event
+    app.dependency_overrides[get_event_deliverer] = lambda: (
+        deliver_event
+        or (lambda event: DeliveryResult(downstream_status_code=202))
+    )
 
 
 def alpha_partner(**overrides: Any) -> Partner:
@@ -72,12 +78,17 @@ def test_ingestion_normalizes_and_persists_an_alpha_event(
 ) -> None:
     persisted_event_id = uuid4()
     persisted: list[NormalizedEvent] = []
+    delivered: list[NormalizedEvent] = []
 
     def persist_event(event: NormalizedEvent) -> UUID:
         persisted.append(event)
         return persisted_event_id
 
-    configure_dependencies(alpha_partner(), persist_event)
+    def deliver_event(event: NormalizedEvent) -> DeliveryResult:
+        delivered.append(event)
+        return DeliveryResult(downstream_status_code=202)
+
+    configure_dependencies(alpha_partner(), persist_event, deliver_event)
 
     response = client.post(
         "/api/v1/partners/courier-alpha/events",
@@ -87,7 +98,9 @@ def test_ingestion_normalizes_and_persists_an_alpha_event(
     assert response.status_code == 201
     assert response.json() == {
         "event_id": str(persisted_event_id),
-        "status": "processed",
+        "processing_status": "processed",
+        "delivery_status": "delivered",
+        "downstream_status_code": 202,
     }
     assert len(persisted) == 1
     assert persisted[0].partner_id == "courier-alpha"
@@ -95,6 +108,7 @@ def test_ingestion_normalizes_and_persists_an_alpha_event(
     assert persisted[0].tracking_number == "TRK-001"
     assert persisted[0].status is ShipmentStatus.PICKED_UP
     assert persisted[0].raw_payload == valid_payload
+    assert delivered == persisted
 
 
 def test_ingestion_rejects_an_unknown_partner(

@@ -182,4 +182,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1` milestone is complete. Courier Alpha payloads can be validated and normalized, while migrations now persist partner configuration and each shipment's latest normalized state. Event history, transitions, and end-to-end processing have not been implemented yet.
+The `local-foundation-v1` milestone is complete. Courier Alpha payloads can be normalized, and migrations now define partner configuration, current shipment state, and an auditable event record with database-enforced partner-event uniqueness. Transactional event processing and downstream delivery have not been implemented yet.

@@ -1,5 +1,6 @@
 """Normalized event domain schema."""
 
+from enum import StrEnum
 from typing import Annotated
 
 from pydantic import (
@@ -13,6 +14,14 @@ from pydantic import (
 from trackrelay.domain.shipment import ShipmentStatus
 
 Identifier = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+class EventProcessingStatus(StrEnum):
+    """The processing lifecycle of a persisted event."""
+
+    RECEIVED = "received"
+    PROCESSED = "processed"
+    FAILED = "failed"
 
 
 class NormalizedEvent(BaseModel):

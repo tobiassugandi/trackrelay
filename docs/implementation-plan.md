@@ -142,9 +142,9 @@ Goal: move one Courier Alpha event through the entire synchronous system.
 
 ### Step 2.7 — Add the events table
 
-- [ ] Store normalized fields, raw payload, processing state, and whether the state transition was applied.
-- [ ] Add `UNIQUE(partner_id, partner_event_id)`.
-- [ ] Create and apply a migration.
+- [x] Store normalized fields, raw payload, processing state, and whether the state transition was applied.
+- [x] Add `UNIQUE(partner_id, partner_event_id)`.
+- [x] Create and apply a migration.
 
 ### Step 2.8 — Persist one normalized event
 

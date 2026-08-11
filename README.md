@@ -174,6 +174,12 @@ Readiness returns HTTP `200` with `{"status":"ready"}` when PostgreSQL is availa
 
 Courier Alpha can submit an event to `POST /api/v1/partners/courier-alpha/events`. TrackRelay validates the configured partner and Alpha payload, normalizes and persists the event with its shipment update, then synchronously posts the normalized event to the downstream simulator. A successful response includes the event ID, processing and delivery statuses, and the downstream HTTP status code.
 
+### Duplicate-event contract
+
+A logical event is identified by `(partner_id, partner_event_id)`. Multiple HTTP requests carrying that identity are transport retries of the same logical event, not additional events. Likewise, a downstream HTTP delivery is a side effect of the logical event; retrying ingestion must not create another downstream delivery.
+
+The first successful request returns HTTP `201` with `duplicate: false`. An already-seen event will return HTTP `200` with the original `event_id`, `duplicate: true`, `delivery_status: "skipped_duplicate"`, and `downstream_status_code: null`. This response shape is now defined and tested; Steps 3.2 and 3.3 will implement the database-conflict handling and delivery suppression.
+
 Start the downstream order-system simulator in a separate terminal:
 
 ```bash

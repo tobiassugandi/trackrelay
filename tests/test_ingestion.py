@@ -99,6 +99,7 @@ def test_ingestion_normalizes_and_persists_an_alpha_event(
     assert response.json() == {
         "event_id": str(persisted_event_id),
         "processing_status": "processed",
+        "duplicate": False,
         "delivery_status": "delivered",
         "downstream_status_code": 202,
     }

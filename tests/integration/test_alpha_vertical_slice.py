@@ -110,6 +110,7 @@ def test_alpha_pickup_travels_through_the_complete_vertical_slice(
 
     assert response.status_code == 201
     assert response.json()["processing_status"] == "processed"
+    assert response.json()["duplicate"] is False
     assert response.json()["delivery_status"] == "delivered"
     assert response.json()["downstream_status_code"] == 202
 

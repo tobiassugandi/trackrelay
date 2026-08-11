@@ -184,8 +184,8 @@ Goal: retries must not repeat business effects.
 
 ### Step 3.1 — Define duplicate behavior
 
-- [ ] Specify the response returned for an already-seen partner event.
-- [ ] Distinguish transport deliveries from logical events.
+- [x] Specify the response returned for an already-seen partner event.
+- [x] Distinguish transport deliveries from logical events.
 
 ### Step 3.2 — Handle the uniqueness conflict
 

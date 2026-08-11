@@ -28,13 +28,27 @@ EventPersister = Callable[[NormalizedEvent], UUID]
 EventDeliverer = Callable[[NormalizedEvent], DeliveryResult]
 
 
-class IngestionResponse(BaseModel):
-    """Successful synchronous ingestion and delivery outcome."""
+class CreatedEventResponse(BaseModel):
+    """Outcome when a logical event is created and delivered."""
 
     event_id: UUID
     processing_status: Literal["processed"]
+    duplicate: Literal[False]
     delivery_status: Literal["delivered"]
     downstream_status_code: int
+
+
+class DuplicateEventResponse(BaseModel):
+    """Contract for a retry that resolves to an existing logical event."""
+
+    event_id: UUID
+    processing_status: Literal["processed"]
+    duplicate: Literal[True]
+    delivery_status: Literal["skipped_duplicate"]
+    downstream_status_code: None
+
+
+IngestionResponse = CreatedEventResponse | DuplicateEventResponse
 
 
 def get_event_persister() -> EventPersister:
@@ -94,7 +108,7 @@ def ingest_partner_event(
     session: Annotated[Session, Depends(get_session)],
     persist_event: Annotated[EventPersister, Depends(get_event_persister)],
     deliver_event: Annotated[EventDeliverer, Depends(get_event_deliverer)],
-) -> IngestionResponse:
+) -> CreatedEventResponse:
     """Validate, normalize, persist, and deliver one Courier Alpha event."""
     partner = session.get(Partner, partner_id)
     if partner is None:
@@ -119,9 +133,10 @@ def ingest_partner_event(
     )
     event_id = persist_event(normalized_event)
     delivery = deliver_event(normalized_event)
-    return IngestionResponse(
+    return CreatedEventResponse(
         event_id=event_id,
         processing_status="processed",
+        duplicate=False,
         delivery_status=delivery.status,
         downstream_status_code=delivery.downstream_status_code,
     )

@@ -200,4 +200,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1` milestone is complete. Courier Alpha events can enter through HTTP, be normalized and persisted transactionally, and be sent synchronously to a separate inspectable downstream simulator. Step 2.12 will verify this complete vertical slice against the running services.
+The `local-foundation-v1` and `legacy-happy-path-v1` milestones are complete. A PostgreSQL-backed end-to-end test proves that one Courier Alpha event can enter through HTTP, be normalized and persisted with a shipment update, and be sent synchronously to the inspectable downstream simulator.

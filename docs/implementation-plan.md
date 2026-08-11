@@ -172,11 +172,11 @@ Goal: move one Courier Alpha event through the entire synchronous system.
 
 ### Step 2.12 — Verify the vertical slice
 
-- [ ] Send one Courier Alpha `PICKUP` event.
-- [ ] Verify one event row, one shipment with `picked_up`, and one downstream receipt.
-- [ ] Add an end-to-end test for this path.
+- [x] Send one Courier Alpha `PICKUP` event.
+- [x] Verify one event row, one shipment with `picked_up`, and one downstream receipt.
+- [x] Add an end-to-end test for this path.
 
-**Milestone:** `legacy-happy-path-v1` — one courier event travels through every layer.
+**Milestone achieved:** `legacy-happy-path-v1` — one courier event travels through every layer.
 
 ## Phase 3 — Idempotency
 

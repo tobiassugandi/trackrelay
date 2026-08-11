@@ -154,9 +154,9 @@ Goal: move one Courier Alpha event through the entire synchronous system.
 
 ### Step 2.9 — Create the downstream simulator
 
-- [ ] Create a separate minimal FastAPI application.
-- [ ] Add `POST /events`.
-- [ ] Record received normalized events in the simplest inspectable form.
+- [x] Create a separate minimal FastAPI application.
+- [x] Add `POST /events`.
+- [x] Record received normalized events in the simplest inspectable form.
 
 ### Step 2.10 — Add the ingestion endpoint
 

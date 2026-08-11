@@ -1,7 +1,7 @@
 UV := uv
 COMPOSE := docker compose
 
-.PHONY: sync test test-integration lint run db-up db-status db-check db-down migrate migration-status
+.PHONY: sync test test-integration lint run run-downstream db-up db-status db-check db-down migrate migration-status
 
 sync:
 	$(UV) sync --locked --python 3.12
@@ -17,6 +17,9 @@ lint:
 
 run:
 	$(UV) run --locked uvicorn trackrelay.main:app --reload --host 127.0.0.1 --port 8000
+
+run-downstream:
+	$(UV) run --locked uvicorn trackrelay.downstream.main:app --reload --host 127.0.0.1 --port 8001
 
 db-up:
 	$(COMPOSE) up -d --wait postgres

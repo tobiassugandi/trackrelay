@@ -172,6 +172,14 @@ curl --include http://127.0.0.1:8000/health/ready
 
 Readiness returns HTTP `200` with `{"status":"ready"}` when PostgreSQL is available and HTTP `503` when it is unavailable.
 
+Start the downstream order-system simulator in a separate terminal:
+
+```bash
+make run-downstream
+```
+
+It listens on `http://127.0.0.1:8001`. `POST /events` validates and records a normalized event in memory, while `GET /events` makes the received events inspectable. The store is intentionally process-local and resets whenever the simulator restarts.
+
 The equivalent application shortcuts are `make sync`, `make test`, `make lint`, and `make run`. Activating `.venv` manually or setting `PYTHONPATH` is not required because TrackRelay is installed as a project package.
 
 ## Development approach
@@ -190,4 +198,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1` milestone is complete. Courier Alpha payloads can be normalized and persisted with their shipment update in one tested transaction. Database-enforced partner-event uniqueness rolls back the entire transaction on conflict. Downstream delivery and the HTTP ingestion path have not been implemented yet.
+The `local-foundation-v1` milestone is complete. Courier Alpha payloads can be normalized and persisted transactionally, and a separate downstream simulator can validate, record, and expose normalized events in memory. TrackRelay does not send events to it yet, and the HTTP ingestion path has not been implemented.

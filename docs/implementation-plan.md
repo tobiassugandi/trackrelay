@@ -148,9 +148,9 @@ Goal: move one Courier Alpha event through the entire synchronous system.
 
 ### Step 2.8 — Persist one normalized event
 
-- [ ] Add a small repository/service operation.
-- [ ] Persist an event and create or update its shipment in one transaction.
-- [ ] Test against PostgreSQL.
+- [x] Add a small repository/service operation.
+- [x] Persist an event and create or update its shipment in one transaction.
+- [x] Test against PostgreSQL.
 
 ### Step 2.9 — Create the downstream simulator
 

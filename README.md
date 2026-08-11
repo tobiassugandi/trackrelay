@@ -118,6 +118,14 @@ make migration-status
 
 Alembic reads the same `TRACKRELAY_DATABASE_URL` setting as the application. The initial `0001_baseline` migration is deliberately empty because no domain tables exist yet; it establishes the starting point for later schema changes.
 
+Run tests that exercise transaction behavior against PostgreSQL:
+
+```bash
+make test-integration
+```
+
+The default `make test` suite excludes tests marked `integration`, so it remains fast and does not require Docker. Run `make db-up` and `make migrate` before the integration suite.
+
 Open an interactive PostgreSQL shell when you want to inspect it directly:
 
 ```bash
@@ -182,4 +190,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1` milestone is complete. Courier Alpha payloads can be normalized, and migrations now define partner configuration, current shipment state, and an auditable event record with database-enforced partner-event uniqueness. Transactional event processing and downstream delivery have not been implemented yet.
+The `local-foundation-v1` milestone is complete. Courier Alpha payloads can be normalized and persisted with their shipment update in one tested transaction. Database-enforced partner-event uniqueness rolls back the entire transaction on conflict. Downstream delivery and the HTTP ingestion path have not been implemented yet.

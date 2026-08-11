@@ -23,3 +23,9 @@ dev = [
 [build-system]
 requires = ["uv_build>=0.9.17,<0.10.0"]
 build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+addopts = '-m "not integration"'
+markers = [
+    "integration: requires the configured PostgreSQL database",
+]

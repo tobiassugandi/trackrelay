@@ -1,13 +1,16 @@
 UV := uv
 COMPOSE := docker compose
 
-.PHONY: sync test lint run db-up db-status db-check db-down migrate migration-status
+.PHONY: sync test test-integration lint run db-up db-status db-check db-down migrate migration-status
 
 sync:
 	$(UV) sync --locked --python 3.12
 
 test:
 	$(UV) run --locked pytest
+
+test-integration:
+	$(UV) run --locked pytest -o addopts='' -m integration
 
 lint:
 	$(UV) run --locked ruff check .

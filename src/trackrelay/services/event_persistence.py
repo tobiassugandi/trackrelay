@@ -1,6 +1,7 @@
 """Transactional normalized-event persistence."""
 
 from dataclasses import dataclass
+from datetime import UTC
 from uuid import UUID
 
 from sqlalchemy import select
@@ -8,7 +9,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from trackrelay.database import session_factory
-from trackrelay.domain import EventProcessingStatus, NormalizedEvent
+from trackrelay.domain import (
+    EventProcessingStatus,
+    NormalizedEvent,
+    evaluate_shipment_transition,
+)
 from trackrelay.models import Event, Shipment
 
 
@@ -28,7 +33,16 @@ def persist_normalized_event(
     """Create a logical event or resolve a uniqueness race to the original."""
     try:
         with sessions.begin() as session:
-            shipment = session.get(Shipment, normalized_event.tracking_number)
+            shipment = session.scalar(
+                select(Shipment)
+                .where(
+                    Shipment.tracking_number == normalized_event.tracking_number
+                )
+                .with_for_update()
+            )
+            state_applied = True
+            state_rejection_reason: str | None = None
+
             if shipment is None:
                 shipment = Shipment(
                     tracking_number=normalized_event.tracking_number,
@@ -37,8 +51,23 @@ def persist_normalized_event(
                 )
                 session.add(shipment)
             else:
-                shipment.current_status = normalized_event.status
-                shipment.current_status_occurred_at = normalized_event.occurred_at
+                current_occurred_at = shipment.current_status_occurred_at
+                if current_occurred_at.tzinfo is None:
+                    current_occurred_at = current_occurred_at.replace(tzinfo=UTC)
+
+                decision = evaluate_shipment_transition(
+                    current_status=shipment.current_status,
+                    current_occurred_at=current_occurred_at,
+                    incoming_status=normalized_event.status,
+                    incoming_occurred_at=normalized_event.occurred_at,
+                )
+                state_applied = decision.applied
+                if decision.rejection_reason is not None:
+                    state_rejection_reason = decision.rejection_reason.value
+
+                if decision.applied:
+                    shipment.current_status = normalized_event.status
+                    shipment.current_status_occurred_at = normalized_event.occurred_at
 
             session.flush()
 
@@ -51,7 +80,8 @@ def persist_normalized_event(
                 received_at=normalized_event.received_at,
                 raw_payload=normalized_event.raw_payload,
                 processing_status=EventProcessingStatus.PROCESSED,
-                state_applied=True,
+                state_applied=state_applied,
+                state_rejection_reason=state_rejection_reason,
             )
             session.add(persisted_event)
             session.flush()

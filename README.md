@@ -24,7 +24,7 @@ The first shipment state machine will be intentionally small:
 CREATED -> PICKED_UP -> IN_TRANSIT -> OUT_FOR_DELIVERY -> DELIVERED
 ```
 
-Shipment state is monotonic: an event may advance to any later status, allowing for missing intermediate courier updates, but cannot repeat or move backward. Older events are stale. When occurrence timestamps are equal, the later status wins as a deterministic tie-breaker. `DELIVERED` is terminal; if an event is both older and terminal-conflicting, it is classified as stale first.
+Shipment state is monotonic: an event may advance to any later status, allowing for missing intermediate courier updates, but cannot repeat or move backward. Older events are retained for audit with `state_applied = false` and reason `stale_event`, while the shipment remains unchanged. When occurrence timestamps are equal, the later status wins as a deterministic tie-breaker. `DELIVERED` is terminal; if an event is both older and terminal-conflicting, it is classified as stale first.
 
 ## What the project demonstrates
 
@@ -208,4 +208,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1`, `legacy-happy-path-v1`, and `legacy-idempotency-v1` milestones are complete. A PostgreSQL-backed scenario sends the same Courier Alpha event ten times and proves the result is ten accounted requests, one logical event, one shipment transition, one downstream receipt, and nine duplicates. Phase 4 now has tested domain rules for monotonic shipment transitions; applying them during persistence is the next step.
+The `local-foundation-v1`, `legacy-happy-path-v1`, and `legacy-idempotency-v1` milestones are complete. A PostgreSQL-backed scenario sends the same Courier Alpha event ten times and proves the result is ten accounted requests, one logical event, one shipment transition, one downstream receipt, and nine duplicates. Phase 4 now applies monotonic transition rules during persistence and retains stale events without reversing shipment state.

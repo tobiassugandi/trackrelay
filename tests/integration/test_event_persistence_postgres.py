@@ -9,7 +9,11 @@ from pytest import fixture, mark
 from sqlalchemy import delete, func, select
 
 from trackrelay.database import engine, session_factory
-from trackrelay.domain import NormalizedEvent, ShipmentStatus
+from trackrelay.domain import (
+    NormalizedEvent,
+    ShipmentStatus,
+    TransitionRejectionReason,
+)
 from trackrelay.models import Event, Partner, Shipment
 from trackrelay.services import EventPersistenceResult, persist_normalized_event
 
@@ -18,6 +22,7 @@ TRACKING_NUMBER = "INTEGRATION-TRK-001"
 PARTNER_EVENT_ID = "INTEGRATION-ALPHA-001"
 CONCURRENT_TRACKING_NUMBER = "INTEGRATION-TRK-CONCURRENT"
 CONCURRENT_PARTNER_EVENT_ID = "INTEGRATION-ALPHA-CONCURRENT"
+STALE_PARTNER_EVENT_ID = "INTEGRATION-ALPHA-STALE"
 
 
 def cleanup_records() -> None:
@@ -131,3 +136,43 @@ def test_concurrent_duplicates_resolve_to_one_original_event(
                 Event.partner_event_id == CONCURRENT_PARTNER_EVENT_ID,
             )
         ) == 1
+
+
+@mark.integration
+def test_stale_event_is_retained_without_reversing_the_shipment(
+    configured_partner: None,
+) -> None:
+    delivered_time = datetime(2026, 8, 6, 10, 3, tzinfo=UTC)
+    stale_time = datetime(2026, 8, 6, 10, 1, tzinfo=UTC)
+
+    delivered = persist_normalized_event(
+        build_event(ShipmentStatus.DELIVERED, delivered_time)
+    )
+    stale = persist_normalized_event(
+        build_event(
+            ShipmentStatus.OUT_FOR_DELIVERY,
+            stale_time,
+            partner_event_id=STALE_PARTNER_EVENT_ID,
+        )
+    )
+
+    with session_factory() as session:
+        shipment = session.get(Shipment, TRACKING_NUMBER)
+        delivered_event = session.get(Event, delivered.event_id)
+        stale_event = session.get(Event, stale.event_id)
+
+        assert shipment is not None
+        assert shipment.current_status is ShipmentStatus.DELIVERED
+        assert shipment.current_status_occurred_at == delivered_time
+        assert delivered_event is not None
+        assert delivered_event.state_applied is True
+        assert delivered_event.state_rejection_reason is None
+        assert stale_event is not None
+        assert stale_event.state_applied is False
+        assert (
+            stale_event.state_rejection_reason
+            == TransitionRejectionReason.STALE_EVENT.value
+        )
+        assert session.scalar(
+            select(func.count()).select_from(Event).where(Event.partner_id == PARTNER_ID)
+        ) == 2

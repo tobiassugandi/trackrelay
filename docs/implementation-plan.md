@@ -216,8 +216,8 @@ Goal: late events remain auditable but cannot move a shipment backward.
 
 ### Step 4.2 — Detect stale events
 
-- [ ] Compare `occurred_at` with the shipment's current status time.
-- [ ] Store stale events with `state_applied = false` and reason `stale_event`.
+- [x] Compare `occurred_at` with the shipment's current status time.
+- [x] Store stale events with `state_applied = false` and reason `stale_event`.
 
 ### Step 4.3 — Add shipment history
 

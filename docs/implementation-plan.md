@@ -210,9 +210,9 @@ Goal: late events remain auditable but cannot move a shipment backward.
 
 ### Step 4.1 — Define transition rules
 
-- [ ] Define the allowed forward transitions.
-- [ ] Decide how equal timestamps and terminal states behave.
-- [ ] Cover the rules with unit tests.
+- [x] Define the allowed forward transitions.
+- [x] Decide how equal timestamps and terminal states behave.
+- [x] Cover the rules with unit tests.
 
 ### Step 4.2 — Detect stale events
 

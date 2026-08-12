@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Response, status
 from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -106,10 +106,11 @@ def readiness(
 def ingest_partner_event(
     partner_id: str,
     payload: CourierAlphaPayload,
+    response: Response,
     session: Annotated[Session, Depends(get_session)],
     persist_event: Annotated[EventPersister, Depends(get_event_persister)],
     deliver_event: Annotated[EventDeliverer, Depends(get_event_deliverer)],
-) -> CreatedEventResponse:
+) -> IngestionResponse:
     """Validate, normalize, persist, and deliver one Courier Alpha event."""
     partner = session.get(Partner, partner_id)
     if partner is None:
@@ -133,6 +134,16 @@ def ingest_partner_event(
         received_at=datetime.now(UTC),
     )
     persistence = persist_event(normalized_event)
+    if persistence.duplicate:
+        response.status_code = status.HTTP_200_OK
+        return DuplicateEventResponse(
+            event_id=persistence.event_id,
+            processing_status="processed",
+            duplicate=True,
+            delivery_status="skipped_duplicate",
+            downstream_status_code=None,
+        )
+
     delivery = deliver_event(normalized_event)
     return CreatedEventResponse(
         event_id=persistence.event_id,

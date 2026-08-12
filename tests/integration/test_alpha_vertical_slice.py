@@ -4,7 +4,7 @@ from collections.abc import Iterator
 
 from fastapi.testclient import TestClient
 from pytest import fixture, mark
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from trackrelay.database import engine, session_factory
 from trackrelay.domain import EventProcessingStatus, NormalizedEvent, ShipmentStatus
@@ -135,3 +135,69 @@ def test_alpha_pickup_travels_through_the_complete_vertical_slice(
     assert downstream_events[0].partner_event_id == PARTNER_EVENT_ID
     assert downstream_events[0].tracking_number == TRACKING_NUMBER
     assert downstream_events[0].status is ShipmentStatus.PICKED_UP
+
+
+@mark.integration
+def test_repeated_alpha_event_has_one_database_and_downstream_effect(
+    configured_alpha_partner: None,
+) -> None:
+    payload = {
+        "event_id": PARTNER_EVENT_ID,
+        "tracking_number": TRACKING_NUMBER,
+        "status": "PICKUP",
+        "event_time": "2026-08-11T10:00:00+07:00",
+    }
+
+    with TestClient(
+        downstream_app,
+        base_url="http://downstream.test",
+    ) as downstream_client:
+
+        def deliver_to_simulator(event: NormalizedEvent) -> DeliveryResult:
+            return deliver_normalized_event(
+                event,
+                downstream_url="http://downstream.test",
+                client=downstream_client,
+            )
+
+        trackrelay_app.dependency_overrides[get_event_deliverer] = (
+            lambda: deliver_to_simulator
+        )
+
+        with TestClient(trackrelay_app) as trackrelay_client:
+            first_response = trackrelay_client.post(
+                f"/api/v1/partners/{PARTNER_ID}/events",
+                json=payload,
+            )
+            duplicate_response = trackrelay_client.post(
+                f"/api/v1/partners/{PARTNER_ID}/events",
+                json=payload,
+            )
+
+    assert first_response.status_code == 201
+    assert first_response.json()["duplicate"] is False
+    assert duplicate_response.status_code == 200
+    assert duplicate_response.json() == {
+        "event_id": first_response.json()["event_id"],
+        "processing_status": "processed",
+        "duplicate": True,
+        "delivery_status": "skipped_duplicate",
+        "downstream_status_code": None,
+    }
+
+    with session_factory() as session:
+        assert session.scalar(
+            select(func.count())
+            .select_from(Event)
+            .where(
+                Event.partner_id == PARTNER_ID,
+                Event.partner_event_id == PARTNER_EVENT_ID,
+            )
+        ) == 1
+        shipment = session.get(Shipment, TRACKING_NUMBER)
+        assert shipment is not None
+        assert shipment.current_status is ShipmentStatus.PICKED_UP
+
+    downstream_events = event_store.all()
+    assert len(downstream_events) == 1
+    assert downstream_events[0].partner_event_id == PARTNER_EVENT_ID

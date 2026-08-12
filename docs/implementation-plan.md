@@ -194,8 +194,8 @@ Goal: retries must not repeat business effects.
 
 ### Step 3.3 — Prevent duplicate downstream effects
 
-- [ ] Ensure a duplicate request does not create another downstream delivery.
-- [ ] Add database and service tests.
+- [x] Ensure a duplicate request does not create another downstream delivery.
+- [x] Add database and service tests.
 
 ### Step 3.4 — Add a duplicate scenario
 

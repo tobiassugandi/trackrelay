@@ -115,6 +115,41 @@ def test_ingestion_normalizes_and_persists_an_alpha_event(
     assert delivered == persisted
 
 
+def test_ingestion_skips_delivery_and_returns_the_original_duplicate(
+    client: TestClient,
+    valid_payload: dict[str, str],
+) -> None:
+    original_event_id = uuid4()
+    delivered: list[NormalizedEvent] = []
+
+    def persist_duplicate(event: NormalizedEvent) -> EventPersistenceResult:
+        return EventPersistenceResult(
+            event_id=original_event_id,
+            duplicate=True,
+        )
+
+    def deliver_event(event: NormalizedEvent) -> DeliveryResult:
+        delivered.append(event)
+        return DeliveryResult(downstream_status_code=202)
+
+    configure_dependencies(alpha_partner(), persist_duplicate, deliver_event)
+
+    response = client.post(
+        "/api/v1/partners/courier-alpha/events",
+        json=valid_payload,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "event_id": str(original_event_id),
+        "processing_status": "processed",
+        "duplicate": True,
+        "delivery_status": "skipped_duplicate",
+        "downstream_status_code": None,
+    }
+    assert delivered == []
+
+
 def test_ingestion_rejects_an_unknown_partner(
     client: TestClient,
     valid_payload: dict[str, str],

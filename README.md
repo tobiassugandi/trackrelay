@@ -178,7 +178,7 @@ Courier Alpha can submit an event to `POST /api/v1/partners/courier-alpha/events
 
 A logical event is identified by `(partner_id, partner_event_id)`. Multiple HTTP requests carrying that identity are transport retries of the same logical event, not additional events. Likewise, a downstream HTTP delivery is a side effect of the logical event; retrying ingestion must not create another downstream delivery.
 
-The first successful request returns HTTP `201` with `duplicate: false`. An already-seen event will return HTTP `200` with the original `event_id`, `duplicate: true`, `delivery_status: "skipped_duplicate"`, and `downstream_status_code: null`. Persistence now resolves sequential and concurrent uniqueness conflicts to that original event without repeating the shipment update. Step 3.3 will connect this result to the HTTP response and suppress duplicate downstream delivery.
+The first successful request returns HTTP `201` with `duplicate: false`. An already-seen event returns HTTP `200` with the original `event_id`, `duplicate: true`, `delivery_status: "skipped_duplicate"`, and `downstream_status_code: null`. Sequential and concurrent uniqueness conflicts resolve to the original event without repeating the shipment update, and duplicate requests skip downstream delivery.
 
 Start the downstream order-system simulator in a separate terminal:
 

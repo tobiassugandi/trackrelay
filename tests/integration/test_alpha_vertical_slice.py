@@ -138,7 +138,7 @@ def test_alpha_pickup_travels_through_the_complete_vertical_slice(
 
 
 @mark.integration
-def test_repeated_alpha_event_has_one_database_and_downstream_effect(
+def test_ten_retries_have_one_logical_event_and_one_downstream_effect(
     configured_alpha_partner: None,
 ) -> None:
     payload = {
@@ -165,25 +165,28 @@ def test_repeated_alpha_event_has_one_database_and_downstream_effect(
         )
 
         with TestClient(trackrelay_app) as trackrelay_client:
-            first_response = trackrelay_client.post(
-                f"/api/v1/partners/{PARTNER_ID}/events",
-                json=payload,
-            )
-            duplicate_response = trackrelay_client.post(
-                f"/api/v1/partners/{PARTNER_ID}/events",
-                json=payload,
-            )
+            responses = [
+                trackrelay_client.post(
+                    f"/api/v1/partners/{PARTNER_ID}/events",
+                    json=payload,
+                )
+                for _ in range(10)
+            ]
 
-    assert first_response.status_code == 201
-    assert first_response.json()["duplicate"] is False
-    assert duplicate_response.status_code == 200
-    assert duplicate_response.json() == {
-        "event_id": first_response.json()["event_id"],
-        "processing_status": "processed",
-        "duplicate": True,
-        "delivery_status": "skipped_duplicate",
-        "downstream_status_code": None,
+    original_event_id = responses[0].json()["event_id"]
+    assert len(responses) == 10
+    assert [response.status_code for response in responses] == [201] + [200] * 9
+    assert [response.json()["duplicate"] for response in responses] == [False] + [
+        True
+    ] * 9
+    assert {response.json()["event_id"] for response in responses} == {
+        original_event_id
     }
+    assert all(
+        response.json()["delivery_status"] == "skipped_duplicate"
+        and response.json()["downstream_status_code"] is None
+        for response in responses[1:]
+    )
 
     with session_factory() as session:
         assert session.scalar(
@@ -192,6 +195,15 @@ def test_repeated_alpha_event_has_one_database_and_downstream_effect(
             .where(
                 Event.partner_id == PARTNER_ID,
                 Event.partner_event_id == PARTNER_EVENT_ID,
+            )
+        ) == 1
+        assert session.scalar(
+            select(func.count())
+            .select_from(Event)
+            .where(
+                Event.partner_id == PARTNER_ID,
+                Event.partner_event_id == PARTNER_EVENT_ID,
+                Event.state_applied.is_(True),
             )
         ) == 1
         shipment = session.get(Shipment, TRACKING_NUMBER)

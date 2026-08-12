@@ -199,10 +199,10 @@ Goal: retries must not repeat business effects.
 
 ### Step 3.4 — Add a duplicate scenario
 
-- [ ] Send the same event ten times.
-- [ ] Verify ten requests, one event, one state transition, one downstream effect, and nine duplicates.
+- [x] Send the same event ten times.
+- [x] Verify ten requests, one event, one state transition, one downstream effect, and nine duplicates.
 
-**Milestone:** `legacy-idempotency-v1`.
+**Milestone achieved:** `legacy-idempotency-v1`.
 
 ## Phase 4 — Event ordering
 

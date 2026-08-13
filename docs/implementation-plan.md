@@ -242,8 +242,8 @@ Goal: reproduce and measure the weaknesses of synchronous coupling.
 
 ### Step 5.2 — Add slow and unavailable modes
 
-- [ ] Add `SLOW`, `TIMEOUT`, and `UNAVAILABLE` behavior.
-- [ ] Keep every mode deterministic and resettable.
+- [x] Add `SLOW`, `TIMEOUT`, and `UNAVAILABLE` behavior.
+- [x] Keep every mode deterministic and resettable.
 
 ### Step 5.3 — Add delivery attempts
 

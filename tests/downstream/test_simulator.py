@@ -1,10 +1,12 @@
 """Tests for the downstream simulator API."""
 
 from collections.abc import Iterator
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
-from pytest import fixture
+from pytest import fixture, mark
 
+from trackrelay.downstream.control import SLOW_DELAY_SECONDS, TIMEOUT_DELAY_SECONDS
 from trackrelay.downstream.main import app, event_store, simulator_control
 
 
@@ -59,7 +61,7 @@ def test_control_status_starts_healthy(client: TestClient) -> None:
     response = client.get("/control/status")
 
     assert response.status_code == 200
-    assert response.json() == {"mode": "HEALTHY"}
+    assert response.json() == {"mode": "HEALTHY", "delay_seconds": 0.0}
 
 
 def test_return_500_mode_rejects_without_recording_and_is_resettable(
@@ -71,8 +73,14 @@ def test_return_500_mode_rejects_without_recording_and_is_resettable(
     )
 
     assert mode_response.status_code == 200
-    assert mode_response.json() == {"mode": "RETURN_500"}
-    assert client.get("/control/status").json() == {"mode": "RETURN_500"}
+    assert mode_response.json() == {
+        "mode": "RETURN_500",
+        "delay_seconds": 0.0,
+    }
+    assert client.get("/control/status").json() == {
+        "mode": "RETURN_500",
+        "delay_seconds": 0.0,
+    }
 
     failed_delivery = client.post("/events", json=normalized_event_data())
 
@@ -91,4 +99,60 @@ def test_control_rejects_an_unknown_mode(client: TestClient) -> None:
     response = client.put("/control/mode", json={"mode": "UNKNOWN"})
 
     assert response.status_code == 422
-    assert client.get("/control/status").json() == {"mode": "HEALTHY"}
+    assert client.get("/control/status").json() == {
+        "mode": "HEALTHY",
+        "delay_seconds": 0.0,
+    }
+
+
+@mark.parametrize(
+    ("mode", "expected_delay"),
+    [
+        ("SLOW", SLOW_DELAY_SECONDS),
+        ("TIMEOUT", TIMEOUT_DELAY_SECONDS),
+    ],
+)
+def test_delayed_modes_wait_then_accept_and_can_reset(
+    client: TestClient,
+    mode: str,
+    expected_delay: float,
+) -> None:
+    mode_response = client.put("/control/mode", json={"mode": mode})
+
+    assert mode_response.json() == {
+        "mode": mode,
+        "delay_seconds": expected_delay,
+    }
+
+    with patch("trackrelay.downstream.main.sleep") as simulated_sleep:
+        delivery = client.post("/events", json=normalized_event_data())
+
+    simulated_sleep.assert_called_once_with(expected_delay)
+    assert delivery.status_code == 202
+    assert client.get("/events").json() == [normalized_event_data()]
+
+    reset_response = client.put("/control/mode", json={"mode": "HEALTHY"})
+    assert reset_response.json() == {"mode": "HEALTHY", "delay_seconds": 0.0}
+
+
+def test_unavailable_mode_returns_503_without_recording_and_can_reset(
+    client: TestClient,
+) -> None:
+    mode_response = client.put(
+        "/control/mode",
+        json={"mode": "UNAVAILABLE"},
+    )
+
+    assert mode_response.json() == {
+        "mode": "UNAVAILABLE",
+        "delay_seconds": 0.0,
+    }
+
+    delivery = client.post("/events", json=normalized_event_data())
+
+    assert delivery.status_code == 503
+    assert delivery.json() == {"detail": "Simulated downstream unavailability"}
+    assert client.get("/events").json() == []
+
+    client.put("/control/mode", json={"mode": "HEALTHY"})
+    assert client.post("/events", json=normalized_event_data()).status_code == 202

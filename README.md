@@ -192,6 +192,8 @@ make run-downstream
 
 It listens on `http://127.0.0.1:8001`. `POST /events` validates and records a normalized event in memory, while `GET /events` makes the received events inspectable. The store is intentionally process-local and resets whenever the simulator restarts.
 
+The simulator starts in `HEALTHY` mode. `PUT /control/mode` with `{"mode":"RETURN_500"}` makes `POST /events` return a deterministic HTTP `500` without recording the event; use `{"mode":"HEALTHY"}` to restore normal acceptance. `GET /control/status` reports the active mode. Control state is also process-local and resets to `HEALTHY` when the simulator restarts.
+
 The equivalent application shortcuts are `make sync`, `make test`, `make lint`, and `make run`. Activating `.venv` manually or setting `PYTHONPATH` is not required because TrackRelay is installed as a project package.
 
 ## Development approach

@@ -5,15 +5,17 @@ from collections.abc import Iterator
 from fastapi.testclient import TestClient
 from pytest import fixture
 
-from trackrelay.downstream.main import app, event_store
+from trackrelay.downstream.main import app, event_store, simulator_control
 
 
 @fixture
 def client() -> Iterator[TestClient]:
     event_store.clear()
+    simulator_control.reset()
     with TestClient(app) as test_client:
         yield test_client
     event_store.clear()
+    simulator_control.reset()
 
 
 def normalized_event_data() -> dict[str, object]:
@@ -51,3 +53,42 @@ def test_simulator_rejects_an_invalid_event_without_recording_it(
 
     assert response.status_code == 422
     assert client.get("/events").json() == []
+
+
+def test_control_status_starts_healthy(client: TestClient) -> None:
+    response = client.get("/control/status")
+
+    assert response.status_code == 200
+    assert response.json() == {"mode": "HEALTHY"}
+
+
+def test_return_500_mode_rejects_without_recording_and_is_resettable(
+    client: TestClient,
+) -> None:
+    mode_response = client.put(
+        "/control/mode",
+        json={"mode": "RETURN_500"},
+    )
+
+    assert mode_response.status_code == 200
+    assert mode_response.json() == {"mode": "RETURN_500"}
+    assert client.get("/control/status").json() == {"mode": "RETURN_500"}
+
+    failed_delivery = client.post("/events", json=normalized_event_data())
+
+    assert failed_delivery.status_code == 500
+    assert failed_delivery.json() == {"detail": "Simulated downstream failure"}
+    assert client.get("/events").json() == []
+
+    client.put("/control/mode", json={"mode": "HEALTHY"})
+    successful_delivery = client.post("/events", json=normalized_event_data())
+
+    assert successful_delivery.status_code == 202
+    assert client.get("/events").json() == [normalized_event_data()]
+
+
+def test_control_rejects_an_unknown_mode(client: TestClient) -> None:
+    response = client.put("/control/mode", json={"mode": "UNKNOWN"})
+
+    assert response.status_code == 422
+    assert client.get("/control/status").json() == {"mode": "HEALTHY"}

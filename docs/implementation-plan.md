@@ -237,8 +237,8 @@ Goal: reproduce and measure the weaknesses of synchronous coupling.
 
 ### Step 5.1 — Add simulator control state
 
-- [ ] Add `PUT /control/mode` and `GET /control/status`.
-- [ ] Begin with `HEALTHY` and `RETURN_500`.
+- [x] Add `PUT /control/mode` and `GET /control/status`.
+- [x] Begin with `HEALTHY` and `RETURN_500`.
 
 ### Step 5.2 — Add slow and unavailable modes
 

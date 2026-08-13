@@ -18,7 +18,7 @@ from trackrelay.partners import CourierAlphaAdapter, CourierAlphaPayload
 from trackrelay.services import (
     DeliveryResult,
     EventPersistenceResult,
-    deliver_normalized_event,
+    deliver_and_record_normalized_event,
     list_shipment_events,
     persist_normalized_event,
 )
@@ -27,7 +27,7 @@ settings = Settings()
 app = FastAPI(title=settings.app_name, debug=settings.debug)
 
 EventPersister = Callable[[NormalizedEvent], EventPersistenceResult]
-EventDeliverer = Callable[[NormalizedEvent], DeliveryResult]
+EventDeliverer = Callable[[NormalizedEvent, UUID], DeliveryResult]
 
 
 class CreatedEventResponse(BaseModel):
@@ -80,9 +80,10 @@ def get_event_persister() -> EventPersister:
 def get_event_deliverer() -> EventDeliverer:
     """Provide synchronous delivery configured for the local downstream service."""
 
-    def deliver(event: NormalizedEvent) -> DeliveryResult:
-        return deliver_normalized_event(
+    def deliver(event: NormalizedEvent, event_id: UUID) -> DeliveryResult:
+        return deliver_and_record_normalized_event(
             event,
+            event_id=event_id,
             downstream_url=settings.downstream_url,
             timeout_seconds=settings.downstream_timeout_seconds,
         )
@@ -183,7 +184,7 @@ def ingest_partner_event(
             downstream_status_code=None,
         )
 
-    delivery = deliver_event(normalized_event)
+    delivery = deliver_event(normalized_event, persistence.event_id)
     return CreatedEventResponse(
         event_id=persistence.event_id,
         processing_status="processed",

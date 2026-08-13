@@ -247,8 +247,8 @@ Goal: reproduce and measure the weaknesses of synchronous coupling.
 
 ### Step 5.3 — Add delivery attempts
 
-- [ ] Create a delivery-attempts table.
-- [ ] Record attempt number, result, response code, latency, error, and timestamps.
+- [x] Create a delivery-attempts table.
+- [x] Record attempt number, result, response code, latency, error, and timestamps.
 
 ### Step 5.4 — Define transaction boundaries
 

@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from uuid import UUID
 
 from fastapi.testclient import TestClient
 from pytest import fixture, mark
@@ -13,8 +14,8 @@ from trackrelay.downstream.main import app as downstream_app
 from trackrelay.downstream.main import event_store
 from trackrelay.main import app as trackrelay_app
 from trackrelay.main import get_event_deliverer
-from trackrelay.models import Event, Partner, Shipment
-from trackrelay.services import DeliveryResult, deliver_normalized_event
+from trackrelay.models import DeliveryAttempt, Event, Partner, Shipment
+from trackrelay.services import DeliveryResult, deliver_and_record_normalized_event
 
 PARTNER_ID = "courier-alpha"
 PARTNER_EVENT_ID = "E2E-ALPHA-PICKUP-001"
@@ -27,6 +28,17 @@ STALE_EVENT_ID = "E2E-ALPHA-STALE-OFD-001"
 def cleanup_event_and_shipment() -> None:
     """Remove only the records owned by this scenario."""
     with session_factory.begin() as session:
+        scenario_event_ids = select(Event.id).where(
+            Event.partner_id == PARTNER_ID,
+            Event.tracking_number.in_(
+                [TRACKING_NUMBER, OUT_OF_ORDER_TRACKING_NUMBER]
+            ),
+        )
+        session.execute(
+            delete(DeliveryAttempt).where(
+                DeliveryAttempt.event_id.in_(scenario_event_ids)
+            )
+        )
         session.execute(
             delete(Event).where(
                 Event.partner_id == PARTNER_ID,
@@ -96,9 +108,13 @@ def test_alpha_pickup_travels_through_the_complete_vertical_slice(
         base_url="http://downstream.test",
     ) as downstream_client:
 
-        def deliver_to_simulator(event: NormalizedEvent) -> DeliveryResult:
-            return deliver_normalized_event(
+        def deliver_to_simulator(
+            event: NormalizedEvent,
+            event_id: UUID,
+        ) -> DeliveryResult:
+            return deliver_and_record_normalized_event(
                 event,
+                event_id=event_id,
                 downstream_url="http://downstream.test",
                 client=downstream_client,
             )
@@ -137,6 +153,17 @@ def test_alpha_pickup_travels_through_the_complete_vertical_slice(
         assert persisted_event.status is ShipmentStatus.PICKED_UP
         assert persisted_event.processing_status is EventProcessingStatus.PROCESSED
         assert persisted_event.state_applied is True
+        attempt = session.scalar(
+            select(DeliveryAttempt).where(
+                DeliveryAttempt.event_id == persisted_event.id
+            )
+        )
+        assert attempt is not None
+        assert attempt.attempt_number == 1
+        assert attempt.result.value == "delivered"
+        assert attempt.response_code == 202
+        assert attempt.latency_ms >= 0
+        assert attempt.error is None
         assert shipment is not None
         assert shipment.current_status is ShipmentStatus.PICKED_UP
 
@@ -163,9 +190,13 @@ def test_ten_retries_have_one_logical_event_and_one_downstream_effect(
         base_url="http://downstream.test",
     ) as downstream_client:
 
-        def deliver_to_simulator(event: NormalizedEvent) -> DeliveryResult:
-            return deliver_normalized_event(
+        def deliver_to_simulator(
+            event: NormalizedEvent,
+            event_id: UUID,
+        ) -> DeliveryResult:
+            return deliver_and_record_normalized_event(
                 event,
+                event_id=event_id,
                 downstream_url="http://downstream.test",
                 client=downstream_client,
             )
@@ -209,6 +240,11 @@ def test_ten_retries_have_one_logical_event_and_one_downstream_effect(
         ) == 1
         assert session.scalar(
             select(func.count())
+            .select_from(DeliveryAttempt)
+            .where(DeliveryAttempt.event_id == UUID(original_event_id))
+        ) == 1
+        assert session.scalar(
+            select(func.count())
             .select_from(Event)
             .where(
                 Event.partner_id == PARTNER_ID,
@@ -234,9 +270,13 @@ def test_out_of_order_event_is_audited_without_reversing_delivery(
         base_url="http://downstream.test",
     ) as downstream_client:
 
-        def deliver_to_simulator(event: NormalizedEvent) -> DeliveryResult:
-            return deliver_normalized_event(
+        def deliver_to_simulator(
+            event: NormalizedEvent,
+            event_id: UUID,
+        ) -> DeliveryResult:
+            return deliver_and_record_normalized_event(
                 event,
+                event_id=event_id,
                 downstream_url="http://downstream.test",
                 client=downstream_client,
             )
@@ -307,6 +347,11 @@ def test_out_of_order_event_is_audited_without_reversing_delivery(
         )
         assert len(events) == 2
         assert [event.state_applied for event in events] == [False, True]
+        assert session.scalar(
+            select(func.count())
+            .select_from(DeliveryAttempt)
+            .where(DeliveryAttempt.event_id.in_([event.id for event in events]))
+        ) == 2
 
     downstream_events = event_store.all()
     assert [event.partner_event_id for event in downstream_events] == [

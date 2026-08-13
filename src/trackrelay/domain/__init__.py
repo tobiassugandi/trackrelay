@@ -1,5 +1,6 @@
 """Shared TrackRelay domain types."""
 
+from trackrelay.domain.delivery import DeliveryAttemptResult
 from trackrelay.domain.event import EventProcessingStatus, NormalizedEvent
 from trackrelay.domain.shipment import (
     ShipmentStatus,
@@ -9,6 +10,7 @@ from trackrelay.domain.shipment import (
 )
 
 __all__ = [
+    "DeliveryAttemptResult",
     "EventProcessingStatus",
     "NormalizedEvent",
     "ShipmentStatus",

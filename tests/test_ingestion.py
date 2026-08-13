@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Iterator
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 from pytest import fixture
@@ -48,7 +48,7 @@ def valid_payload() -> dict[str, str]:
 def configure_dependencies(
     partner: Partner | None,
     persist_event: Callable[[NormalizedEvent], EventPersistenceResult],
-    deliver_event: Callable[[NormalizedEvent], DeliveryResult] | None = None,
+    deliver_event: Callable[[NormalizedEvent, UUID], DeliveryResult] | None = None,
 ) -> None:
     def override_session() -> Iterator[StubSession]:
         yield StubSession(partner)
@@ -57,7 +57,7 @@ def configure_dependencies(
     app.dependency_overrides[get_event_persister] = lambda: persist_event
     app.dependency_overrides[get_event_deliverer] = lambda: (
         deliver_event
-        or (lambda event: DeliveryResult(downstream_status_code=202))
+        or (lambda event, event_id: DeliveryResult(downstream_status_code=202))
     )
 
 
@@ -87,7 +87,7 @@ def test_ingestion_normalizes_and_persists_an_alpha_event(
             duplicate=False,
         )
 
-    def deliver_event(event: NormalizedEvent) -> DeliveryResult:
+    def deliver_event(event: NormalizedEvent, event_id: UUID) -> DeliveryResult:
         delivered.append(event)
         return DeliveryResult(downstream_status_code=202)
 
@@ -128,7 +128,7 @@ def test_ingestion_skips_delivery_and_returns_the_original_duplicate(
             duplicate=True,
         )
 
-    def deliver_event(event: NormalizedEvent) -> DeliveryResult:
+    def deliver_event(event: NormalizedEvent, event_id: UUID) -> DeliveryResult:
         delivered.append(event)
         return DeliveryResult(downstream_status_code=202)
 

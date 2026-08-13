@@ -194,6 +194,8 @@ It listens on `http://127.0.0.1:8001`. `POST /events` validates and records a no
 
 The simulator starts in `HEALTHY` mode. Change behavior with `PUT /control/mode`; `GET /control/status` reports the active mode and fixed delay. `RETURN_500` returns HTTP `500`, `SLOW` waits 1 second and accepts, `TIMEOUT` waits 6 seconds and accepts, and `UNAVAILABLE` returns HTTP `503`. Failed or unavailable requests are not recorded. Use `{"mode":"HEALTHY"}` to restore normal acceptance. Control state is process-local and resets to `HEALTHY` when the simulator restarts. The 6-second timeout delay intentionally exceeds TrackRelay's default 5-second downstream timeout; the server can still finish and record after the client gives up, a synchronous ambiguity explored in later steps.
 
+TrackRelay stores every actual downstream call in `delivery_attempts`, separate from the logical `events` row. Each attempt records its per-event attempt number, result (`delivered`, `http_error`, or `transport_error`), optional HTTP response code, latency in milliseconds, optional error text, and start/completion timestamps. Duplicate ingestion requests do not make downstream calls and therefore do not create delivery attempts.
+
 The equivalent application shortcuts are `make sync`, `make test`, `make lint`, and `make run`. Activating `.venv` manually or setting `PYTHONPATH` is not required because TrackRelay is installed as a project package.
 
 ## Development approach
@@ -212,4 +214,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, and `legacy-ordering-v1` milestones are complete. PostgreSQL-backed scenarios prove retry idempotency and show that `DELIVERED` at 10:03 followed by `OUT_FOR_DELIVERY` at 10:01 retains both events while the shipment remains delivered.
+The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, and `legacy-ordering-v1` milestones are complete. PostgreSQL-backed scenarios prove retry idempotency and safe out-of-order handling. Phase 5 now provides deterministic downstream failure modes and durable delivery-attempt records; the next step defines what the ingestion API promises when those attempts fail.

@@ -1,6 +1,7 @@
-"""End-to-end test for the first complete Courier Alpha event path."""
+"""PostgreSQL-backed end-to-end Courier Alpha scenarios."""
 
 from collections.abc import Iterator
+from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 from pytest import fixture, mark
@@ -18,6 +19,9 @@ from trackrelay.services import DeliveryResult, deliver_normalized_event
 PARTNER_ID = "courier-alpha"
 PARTNER_EVENT_ID = "E2E-ALPHA-PICKUP-001"
 TRACKING_NUMBER = "E2E-TRK-PICKUP-001"
+OUT_OF_ORDER_TRACKING_NUMBER = "E2E-TRK-OUT-OF-ORDER-001"
+DELIVERED_EVENT_ID = "E2E-ALPHA-DELIVERED-001"
+STALE_EVENT_ID = "E2E-ALPHA-STALE-OFD-001"
 
 
 def cleanup_event_and_shipment() -> None:
@@ -26,11 +30,17 @@ def cleanup_event_and_shipment() -> None:
         session.execute(
             delete(Event).where(
                 Event.partner_id == PARTNER_ID,
-                Event.partner_event_id == PARTNER_EVENT_ID,
+                Event.tracking_number.in_(
+                    [TRACKING_NUMBER, OUT_OF_ORDER_TRACKING_NUMBER]
+                ),
             )
         )
         session.execute(
-            delete(Shipment).where(Shipment.tracking_number == TRACKING_NUMBER)
+            delete(Shipment).where(
+                Shipment.tracking_number.in_(
+                    [TRACKING_NUMBER, OUT_OF_ORDER_TRACKING_NUMBER]
+                )
+            )
         )
 
 
@@ -213,3 +223,93 @@ def test_ten_retries_have_one_logical_event_and_one_downstream_effect(
     downstream_events = event_store.all()
     assert len(downstream_events) == 1
     assert downstream_events[0].partner_event_id == PARTNER_EVENT_ID
+
+
+@mark.integration
+def test_out_of_order_event_is_audited_without_reversing_delivery(
+    configured_alpha_partner: None,
+) -> None:
+    with TestClient(
+        downstream_app,
+        base_url="http://downstream.test",
+    ) as downstream_client:
+
+        def deliver_to_simulator(event: NormalizedEvent) -> DeliveryResult:
+            return deliver_normalized_event(
+                event,
+                downstream_url="http://downstream.test",
+                client=downstream_client,
+            )
+
+        trackrelay_app.dependency_overrides[get_event_deliverer] = (
+            lambda: deliver_to_simulator
+        )
+
+        with TestClient(trackrelay_app) as trackrelay_client:
+            delivered_response = trackrelay_client.post(
+                f"/api/v1/partners/{PARTNER_ID}/events",
+                json={
+                    "event_id": DELIVERED_EVENT_ID,
+                    "tracking_number": OUT_OF_ORDER_TRACKING_NUMBER,
+                    "status": "POD",
+                    "event_time": "2026-08-13T10:03:00+07:00",
+                },
+            )
+            stale_response = trackrelay_client.post(
+                f"/api/v1/partners/{PARTNER_ID}/events",
+                json={
+                    "event_id": STALE_EVENT_ID,
+                    "tracking_number": OUT_OF_ORDER_TRACKING_NUMBER,
+                    "status": "OFD",
+                    "event_time": "2026-08-13T10:01:00+07:00",
+                },
+            )
+            history_response = trackrelay_client.get(
+                f"/api/v1/shipments/{OUT_OF_ORDER_TRACKING_NUMBER}/events"
+            )
+
+    assert delivered_response.status_code == 201
+    assert stale_response.status_code == 201
+    assert history_response.status_code == 200
+
+    history = history_response.json()
+    assert [item["partner_event_id"] for item in history] == [
+        STALE_EVENT_ID,
+        DELIVERED_EVENT_ID,
+    ]
+    assert [item["status"] for item in history] == [
+        "out_for_delivery",
+        "delivered",
+    ]
+    assert [item["state_applied"] for item in history] == [False, True]
+    assert history[0]["state_rejection_reason"] == "stale_event"
+    assert history[1]["state_rejection_reason"] is None
+
+    with session_factory() as session:
+        shipment = session.get(Shipment, OUT_OF_ORDER_TRACKING_NUMBER)
+        events = tuple(
+            session.scalars(
+                select(Event)
+                .where(Event.tracking_number == OUT_OF_ORDER_TRACKING_NUMBER)
+                .order_by(Event.occurred_at.asc())
+            )
+        )
+
+        assert shipment is not None
+        assert shipment.current_status is ShipmentStatus.DELIVERED
+        assert shipment.current_status_occurred_at == datetime(
+            2026,
+            8,
+            13,
+            3,
+            3,
+            tzinfo=UTC,
+        )
+        assert len(events) == 2
+        assert [event.state_applied for event in events] == [False, True]
+
+    downstream_events = event_store.all()
+    assert [event.partner_event_id for event in downstream_events] == [
+        DELIVERED_EVENT_ID,
+        STALE_EVENT_ID,
+    ]

@@ -226,10 +226,10 @@ Goal: late events remain auditable but cannot move a shipment backward.
 
 ### Step 4.4 — Add an out-of-order scenario
 
-- [ ] Receive `DELIVERED` at 10:03, followed by `OUT_FOR_DELIVERY` at 10:01.
-- [ ] Verify both events are retained and the shipment remains delivered.
+- [x] Receive `DELIVERED` at 10:03, followed by `OUT_FOR_DELIVERY` at 10:01.
+- [x] Verify both events are retained and the shipment remains delivered.
 
-**Milestone:** `legacy-ordering-v1`.
+**Milestone achieved:** `legacy-ordering-v1`.
 
 ## Phase 5 — Controlled downstream failures
 

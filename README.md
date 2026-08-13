@@ -204,10 +204,10 @@ TrackRelay will be built in very small, observable steps. Each step should:
 4. Leave the repository in a runnable state.
 5. Produce a result that can be inspected before moving on.
 
-The first vertical slice supports one Courier Alpha event from HTTP request through database persistence, shipment update, and downstream delivery. It also treats retries idempotently. Ordering rules, failure modes, more couriers, reconciliation, performance testing, and AWS will be added afterward.
+The first vertical slice supports Courier Alpha events from HTTP request through database persistence, shipment updates, and downstream delivery. It treats retries idempotently and retains out-of-order events without reversing shipment state. Failure modes, more couriers, reconciliation, performance testing, and AWS will be added afterward.
 
 See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-step roadmap.
 
 ## Current status
 
-The `local-foundation-v1`, `legacy-happy-path-v1`, and `legacy-idempotency-v1` milestones are complete. A PostgreSQL-backed scenario sends the same Courier Alpha event ten times and proves the result is ten accounted requests, one logical event, one shipment transition, one downstream receipt, and nine duplicates. Phase 4 now applies monotonic transition rules, retains stale events without reversing shipment state, and exposes complete shipment history through HTTP.
+The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, and `legacy-ordering-v1` milestones are complete. PostgreSQL-backed scenarios prove retry idempotency and show that `DELIVERED` at 10:03 followed by `OUT_FOR_DELIVERY` at 10:01 retains both events while the shipment remains delivered.

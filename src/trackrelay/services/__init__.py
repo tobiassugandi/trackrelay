@@ -8,10 +8,12 @@ from trackrelay.services.event_persistence import (
     EventPersistenceResult,
     persist_normalized_event,
 )
+from trackrelay.services.shipment_history import list_shipment_events
 
 __all__ = [
     "DeliveryResult",
     "EventPersistenceResult",
     "deliver_normalized_event",
+    "list_shipment_events",
     "persist_normalized_event",
 ]

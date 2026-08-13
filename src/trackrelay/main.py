@@ -6,19 +6,20 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Response, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, JsonValue
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from trackrelay.config import Settings
 from trackrelay.database import check_database_connection, get_session
-from trackrelay.domain import NormalizedEvent
-from trackrelay.models import Partner
+from trackrelay.domain import EventProcessingStatus, NormalizedEvent, ShipmentStatus
+from trackrelay.models import Event, Partner
 from trackrelay.partners import CourierAlphaAdapter, CourierAlphaPayload
 from trackrelay.services import (
     DeliveryResult,
     EventPersistenceResult,
     deliver_normalized_event,
+    list_shipment_events,
     persist_normalized_event,
 )
 
@@ -50,6 +51,25 @@ class DuplicateEventResponse(BaseModel):
 
 
 IngestionResponse = CreatedEventResponse | DuplicateEventResponse
+
+
+class ShipmentHistoryEventResponse(BaseModel):
+    """One applied or rejected event in a shipment's audit history."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    partner_id: str
+    partner_event_id: str
+    tracking_number: str
+    status: ShipmentStatus
+    occurred_at: datetime
+    received_at: datetime
+    raw_payload: dict[str, JsonValue]
+    processing_status: EventProcessingStatus
+    state_applied: bool
+    state_rejection_reason: str | None
+    created_at: datetime
 
 
 def get_event_persister() -> EventPersister:
@@ -95,6 +115,25 @@ def readiness(
             detail="Database unavailable",
         )
     return {"status": "ready"}
+
+
+@app.get(
+    "/api/v1/shipments/{tracking_number}/events",
+    response_model=list[ShipmentHistoryEventResponse],
+    tags=["shipments"],
+)
+def shipment_history(
+    tracking_number: str,
+    session: Annotated[Session, Depends(get_session)],
+) -> tuple[Event, ...]:
+    """Return applied and rejected events in deterministic business-time order."""
+    events = list_shipment_events(tracking_number, session=session)
+    if events is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Shipment not found",
+        )
+    return events
 
 
 @app.post(

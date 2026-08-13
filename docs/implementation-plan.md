@@ -221,8 +221,8 @@ Goal: late events remain auditable but cannot move a shipment backward.
 
 ### Step 4.3 — Add shipment history
 
-- [ ] Add `GET /api/v1/shipments/{tracking_number}/events`.
-- [ ] Return applied and rejected events in a documented order.
+- [x] Add `GET /api/v1/shipments/{tracking_number}/events`.
+- [x] Return applied and rejected events in a documented order.
 
 ### Step 4.4 — Add an out-of-order scenario
 

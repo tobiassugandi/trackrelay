@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from threading import Barrier
 
+from fastapi.testclient import TestClient
 from pytest import fixture, mark
 from sqlalchemy import delete, func, select
 
@@ -14,6 +15,7 @@ from trackrelay.domain import (
     ShipmentStatus,
     TransitionRejectionReason,
 )
+from trackrelay.main import app
 from trackrelay.models import Event, Partner, Shipment
 from trackrelay.services import EventPersistenceResult, persist_normalized_event
 
@@ -176,3 +178,15 @@ def test_stale_event_is_retained_without_reversing_the_shipment(
         assert session.scalar(
             select(func.count()).select_from(Event).where(Event.partner_id == PARTNER_ID)
         ) == 2
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/v1/shipments/{TRACKING_NUMBER}/events")
+
+    assert response.status_code == 200
+    history = response.json()
+    assert [item["partner_event_id"] for item in history] == [
+        STALE_PARTNER_EVENT_ID,
+        PARTNER_EVENT_ID,
+    ]
+    assert [item["state_applied"] for item in history] == [False, True]
+    assert history[0]["state_rejection_reason"] == "stale_event"

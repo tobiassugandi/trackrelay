@@ -204,6 +204,8 @@ A downstream HTTP error or non-timeout transport error returns HTTP `502` with `
 
 The Phase 5 outage scenario sends three distinct events while the simulator is `UNAVAILABLE`. All three API calls return `502`, yet PostgreSQL retains three processed events, three shipment updates, and three HTTP-error attempts with downstream status `503`; the simulator receives no events. Retrying the same payloads returns the existing event IDs with HTTP `200` and `skipped_duplicate`, without creating more attempts. This prevents duplicate side effects but does not recover the missed deliveries—a deliberate measurement of the legacy synchronous design.
 
+Inspect a shipment's latest accepted state with `GET /api/v1/shipments/{tracking_number}`. A found response includes its tracking number, current normalized status, the business timestamp of that status, and creation/update timestamps. An unknown tracking number returns HTTP `404` with `{"detail":"Shipment not found"}`. Append `/events` to retrieve the shipment's complete applied and rejected event history.
+
 The equivalent application shortcuts are `make sync`, `make test`, `make lint`, and `make run`. Activating `.venv` manually or setting `PYTHONPATH` is not required because TrackRelay is installed as a project package.
 
 ## Development approach
@@ -222,4 +224,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, and `legacy-failure-behavior-v1` milestones are complete. PostgreSQL-backed scenarios prove retry idempotency, safe out-of-order handling, durable state across downstream failures, and the missed-delivery limitation of duplicate retries after an outage. Phase 6 adds inspection APIs and a second courier adapter.
+The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, and `legacy-failure-behavior-v1` milestones are complete. PostgreSQL-backed scenarios prove retry idempotency, safe out-of-order handling, durable state across downstream failures, and the missed-delivery limitation of duplicate retries after an outage. Phase 6 now exposes shipment state; the next step adds event-level delivery diagnostics.

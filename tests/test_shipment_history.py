@@ -107,3 +107,36 @@ def test_history_returns_not_found_for_an_unknown_shipment(
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Shipment not found"}
+
+
+def test_get_shipment_returns_its_latest_accepted_state(
+    client: TestClient,
+) -> None:
+    response = client.get(f"/api/v1/shipments/{TRACKING_NUMBER}")
+
+    assert response.status_code == 200
+    shipment = response.json()
+    assert set(shipment) == {
+        "tracking_number",
+        "current_status",
+        "current_status_occurred_at",
+        "created_at",
+        "updated_at",
+    }
+    assert shipment["tracking_number"] == TRACKING_NUMBER
+    assert shipment["current_status"] == "delivered"
+    assert datetime.fromisoformat(shipment["current_status_occurred_at"]) == (
+        BASE_TIME + timedelta(minutes=3)
+    ).replace(tzinfo=None)
+    created_at = datetime.fromisoformat(shipment["created_at"])
+    updated_at = datetime.fromisoformat(shipment["updated_at"])
+    assert created_at <= updated_at
+
+
+def test_get_shipment_returns_not_found_for_an_unknown_tracking_number(
+    client: TestClient,
+) -> None:
+    response = client.get("/api/v1/shipments/UNKNOWN")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Shipment not found"}

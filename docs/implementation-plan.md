@@ -268,8 +268,8 @@ Goal: inspect the system through its API and prove the adapter design works.
 
 ### Step 6.1 — Retrieve a shipment
 
-- [ ] Add `GET /api/v1/shipments/{tracking_number}`.
-- [ ] Test found and not-found responses.
+- [x] Add `GET /api/v1/shipments/{tracking_number}`.
+- [x] Test found and not-found responses.
 
 ### Step 6.2 — Retrieve an event
 

@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from trackrelay.config import Settings
 from trackrelay.database import check_database_connection, get_session
 from trackrelay.domain import EventProcessingStatus, NormalizedEvent, ShipmentStatus
-from trackrelay.models import Event, Partner
+from trackrelay.models import Event, Partner, Shipment
 from trackrelay.partners import CourierAlphaAdapter, CourierAlphaPayload
 from trackrelay.services import (
     DeliveryResult,
@@ -73,6 +73,18 @@ class ShipmentHistoryEventResponse(BaseModel):
     created_at: datetime
 
 
+class ShipmentResponse(BaseModel):
+    """The latest accepted state for one tracked shipment."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    tracking_number: str
+    current_status: ShipmentStatus
+    current_status_occurred_at: datetime
+    created_at: datetime
+    updated_at: datetime
+
+
 def get_event_persister() -> EventPersister:
     """Provide the application service used to persist normalized events."""
     return persist_normalized_event
@@ -117,6 +129,25 @@ def readiness(
             detail="Database unavailable",
         )
     return {"status": "ready"}
+
+
+@app.get(
+    "/api/v1/shipments/{tracking_number}",
+    response_model=ShipmentResponse,
+    tags=["shipments"],
+)
+def get_shipment(
+    tracking_number: str,
+    session: Annotated[Session, Depends(get_session)],
+) -> Shipment:
+    """Return the latest accepted state for one shipment."""
+    shipment = session.get(Shipment, tracking_number)
+    if shipment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Shipment not found",
+        )
+    return shipment
 
 
 @app.get(

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, JsonValue
 from sqlalchemy.exc import SQLAlchemyError
@@ -141,6 +142,14 @@ def shipment_history(
     "/api/v1/partners/{partner_id}/events",
     status_code=status.HTTP_201_CREATED,
     response_model=IngestionResponse,
+    responses={
+        status.HTTP_502_BAD_GATEWAY: {
+            "description": "Event persisted, but downstream delivery failed."
+        },
+        status.HTTP_504_GATEWAY_TIMEOUT: {
+            "description": "Event persisted, but downstream delivery timed out."
+        },
+    },
     tags=["events"],
 )
 def ingest_partner_event(
@@ -184,7 +193,19 @@ def ingest_partner_event(
             downstream_status_code=None,
         )
 
-    delivery = deliver_event(normalized_event, persistence.event_id)
+    try:
+        delivery = deliver_event(normalized_event, persistence.event_id)
+    except httpx.TimeoutException as error:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Downstream delivery timed out; event remains persisted",
+        ) from error
+    except (httpx.HTTPStatusError, httpx.TransportError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Downstream delivery failed; event remains persisted",
+        ) from error
+
     return CreatedEventResponse(
         event_id=persistence.event_id,
         processing_status="processed",

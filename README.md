@@ -196,6 +196,12 @@ The simulator starts in `HEALTHY` mode. Change behavior with `PUT /control/mode`
 
 TrackRelay stores every actual downstream call in `delivery_attempts`, separate from the logical `events` row. Each attempt records its per-event attempt number, result (`delivered`, `http_error`, or `transport_error`), optional HTTP response code, latency in milliseconds, optional error text, and start/completion timestamps. Duplicate ingestion requests do not make downstream calls and therefore do not create delivery attempts.
 
+### Downstream-failure transaction boundary
+
+Event persistence and downstream delivery do not share a transaction. Once normalization succeeds, TrackRelay commits the logical event and any shipment-state change before attempting delivery. The delivery-attempt record then commits independently, so both records remain inspectable even when the HTTP request reports a downstream failure. TrackRelay does not automatically retry delivery inside the ingestion request.
+
+A downstream HTTP error or non-timeout transport error returns HTTP `502` with `{"detail":"Downstream delivery failed; event remains persisted"}`. A downstream timeout returns HTTP `504` with `{"detail":"Downstream delivery timed out; event remains persisted"}`. These responses describe delivery failure, not persistence failure: the event, shipment state, and failed attempt remain stored.
+
 The equivalent application shortcuts are `make sync`, `make test`, `make lint`, and `make run`. Activating `.venv` manually or setting `PYTHONPATH` is not required because TrackRelay is installed as a project package.
 
 ## Development approach
@@ -214,4 +220,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, and `legacy-ordering-v1` milestones are complete. PostgreSQL-backed scenarios prove retry idempotency and safe out-of-order handling. Phase 5 now provides deterministic downstream failure modes and durable delivery-attempt records; the next step defines what the ingestion API promises when those attempts fail.
+The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, and `legacy-ordering-v1` milestones are complete. PostgreSQL-backed scenarios prove retry idempotency, safe out-of-order handling, and durable state across downstream server errors and timeouts. Phase 5 now has an explicit synchronous-failure transaction boundary; the next step exercises a small outage and safe duplicate retry scenario.

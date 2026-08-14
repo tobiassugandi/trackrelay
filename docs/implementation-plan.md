@@ -252,8 +252,8 @@ Goal: reproduce and measure the weaknesses of synchronous coupling.
 
 ### Step 5.4 — Define transaction boundaries
 
-- [ ] Make it explicit what remains stored when downstream delivery fails.
-- [ ] Test timeout and server-error behavior.
+- [x] Make it explicit what remains stored when downstream delivery fails.
+- [x] Test timeout and server-error behavior.
 
 ### Step 5.5 — Add a small outage scenario
 

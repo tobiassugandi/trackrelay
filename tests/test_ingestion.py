@@ -4,6 +4,7 @@ from collections.abc import Callable, Iterator
 from typing import Any
 from uuid import UUID, uuid4
 
+import httpx
 from fastapi.testclient import TestClient
 from pytest import fixture
 
@@ -148,6 +149,67 @@ def test_ingestion_skips_delivery_and_returns_the_original_duplicate(
         "downstream_status_code": None,
     }
     assert delivered == []
+
+
+def test_ingestion_reports_a_downstream_server_error_after_persistence(
+    client: TestClient,
+    valid_payload: dict[str, str],
+) -> None:
+    persisted: list[NormalizedEvent] = []
+
+    def persist_event(event: NormalizedEvent) -> EventPersistenceResult:
+        persisted.append(event)
+        return EventPersistenceResult(event_id=uuid4(), duplicate=False)
+
+    def fail_delivery(event: NormalizedEvent, event_id: UUID) -> DeliveryResult:
+        request = httpx.Request("POST", "http://downstream.test/events")
+        response = httpx.Response(500, request=request)
+        raise httpx.HTTPStatusError(
+            "simulated downstream failure",
+            request=request,
+            response=response,
+        )
+
+    configure_dependencies(alpha_partner(), persist_event, fail_delivery)
+
+    response = client.post(
+        "/api/v1/partners/courier-alpha/events",
+        json=valid_payload,
+    )
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "detail": "Downstream delivery failed; event remains persisted"
+    }
+    assert len(persisted) == 1
+
+
+def test_ingestion_reports_a_downstream_timeout_after_persistence(
+    client: TestClient,
+    valid_payload: dict[str, str],
+) -> None:
+    persisted: list[NormalizedEvent] = []
+
+    def persist_event(event: NormalizedEvent) -> EventPersistenceResult:
+        persisted.append(event)
+        return EventPersistenceResult(event_id=uuid4(), duplicate=False)
+
+    def time_out(event: NormalizedEvent, event_id: UUID) -> DeliveryResult:
+        request = httpx.Request("POST", "http://downstream.test/events")
+        raise httpx.ReadTimeout("simulated timeout", request=request)
+
+    configure_dependencies(alpha_partner(), persist_event, time_out)
+
+    response = client.post(
+        "/api/v1/partners/courier-alpha/events",
+        json=valid_payload,
+    )
+
+    assert response.status_code == 504
+    assert response.json() == {
+        "detail": "Downstream delivery timed out; event remains persisted"
+    }
+    assert len(persisted) == 1
 
 
 def test_ingestion_rejects_an_unknown_partner(

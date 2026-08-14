@@ -4,12 +4,18 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from uuid import UUID
 
+import httpx
 from fastapi.testclient import TestClient
 from pytest import fixture, mark
 from sqlalchemy import delete, func, select
 
 from trackrelay.database import engine, session_factory
-from trackrelay.domain import EventProcessingStatus, NormalizedEvent, ShipmentStatus
+from trackrelay.domain import (
+    DeliveryAttemptResult,
+    EventProcessingStatus,
+    NormalizedEvent,
+    ShipmentStatus,
+)
 from trackrelay.downstream.main import app as downstream_app
 from trackrelay.downstream.main import event_store
 from trackrelay.main import app as trackrelay_app
@@ -23,6 +29,16 @@ TRACKING_NUMBER = "E2E-TRK-PICKUP-001"
 OUT_OF_ORDER_TRACKING_NUMBER = "E2E-TRK-OUT-OF-ORDER-001"
 DELIVERED_EVENT_ID = "E2E-ALPHA-DELIVERED-001"
 STALE_EVENT_ID = "E2E-ALPHA-STALE-OFD-001"
+SERVER_ERROR_EVENT_ID = "E2E-ALPHA-SERVER-ERROR-001"
+SERVER_ERROR_TRACKING_NUMBER = "E2E-TRK-SERVER-ERROR-001"
+TIMEOUT_EVENT_ID = "E2E-ALPHA-TIMEOUT-001"
+TIMEOUT_TRACKING_NUMBER = "E2E-TRK-TIMEOUT-001"
+SCENARIO_TRACKING_NUMBERS = (
+    TRACKING_NUMBER,
+    OUT_OF_ORDER_TRACKING_NUMBER,
+    SERVER_ERROR_TRACKING_NUMBER,
+    TIMEOUT_TRACKING_NUMBER,
+)
 
 
 def cleanup_event_and_shipment() -> None:
@@ -30,9 +46,7 @@ def cleanup_event_and_shipment() -> None:
     with session_factory.begin() as session:
         scenario_event_ids = select(Event.id).where(
             Event.partner_id == PARTNER_ID,
-            Event.tracking_number.in_(
-                [TRACKING_NUMBER, OUT_OF_ORDER_TRACKING_NUMBER]
-            ),
+            Event.tracking_number.in_(SCENARIO_TRACKING_NUMBERS),
         )
         session.execute(
             delete(DeliveryAttempt).where(
@@ -42,16 +56,12 @@ def cleanup_event_and_shipment() -> None:
         session.execute(
             delete(Event).where(
                 Event.partner_id == PARTNER_ID,
-                Event.tracking_number.in_(
-                    [TRACKING_NUMBER, OUT_OF_ORDER_TRACKING_NUMBER]
-                ),
+                Event.tracking_number.in_(SCENARIO_TRACKING_NUMBERS),
             )
         )
         session.execute(
             delete(Shipment).where(
-                Shipment.tracking_number.in_(
-                    [TRACKING_NUMBER, OUT_OF_ORDER_TRACKING_NUMBER]
-                )
+                Shipment.tracking_number.in_(SCENARIO_TRACKING_NUMBERS)
             )
         )
 
@@ -259,6 +269,107 @@ def test_ten_retries_have_one_logical_event_and_one_downstream_effect(
     downstream_events = event_store.all()
     assert len(downstream_events) == 1
     assert downstream_events[0].partner_event_id == PARTNER_EVENT_ID
+
+
+@mark.integration
+@mark.parametrize(
+    (
+        "partner_event_id",
+        "tracking_number",
+        "downstream_response_code",
+        "expected_api_status",
+        "expected_detail",
+        "expected_result",
+    ),
+    [
+        (
+            SERVER_ERROR_EVENT_ID,
+            SERVER_ERROR_TRACKING_NUMBER,
+            500,
+            502,
+            "Downstream delivery failed; event remains persisted",
+            DeliveryAttemptResult.HTTP_ERROR,
+        ),
+        (
+            TIMEOUT_EVENT_ID,
+            TIMEOUT_TRACKING_NUMBER,
+            None,
+            504,
+            "Downstream delivery timed out; event remains persisted",
+            DeliveryAttemptResult.TRANSPORT_ERROR,
+        ),
+    ],
+)
+def test_delivery_failure_keeps_event_shipment_and_attempt_committed(
+    configured_alpha_partner: None,
+    partner_event_id: str,
+    tracking_number: str,
+    downstream_response_code: int | None,
+    expected_api_status: int,
+    expected_detail: str,
+    expected_result: DeliveryAttemptResult,
+) -> None:
+    def downstream_response(request: httpx.Request) -> httpx.Response:
+        if downstream_response_code is None:
+            raise httpx.ReadTimeout("simulated timeout", request=request)
+        return httpx.Response(downstream_response_code)
+
+    with httpx.Client(transport=httpx.MockTransport(downstream_response)) as client:
+
+        def deliver_to_downstream(
+            event: NormalizedEvent,
+            event_id: UUID,
+        ) -> DeliveryResult:
+            return deliver_and_record_normalized_event(
+                event,
+                event_id=event_id,
+                downstream_url="http://downstream.test",
+                client=client,
+            )
+
+        trackrelay_app.dependency_overrides[get_event_deliverer] = (
+            lambda: deliver_to_downstream
+        )
+
+        with TestClient(trackrelay_app) as trackrelay_client:
+            response = trackrelay_client.post(
+                f"/api/v1/partners/{PARTNER_ID}/events",
+                json={
+                    "event_id": partner_event_id,
+                    "tracking_number": tracking_number,
+                    "status": "PICKUP",
+                    "event_time": "2026-08-14T10:00:00+07:00",
+                },
+            )
+
+    assert response.status_code == expected_api_status
+    assert response.json() == {"detail": expected_detail}
+
+    with session_factory() as session:
+        persisted_event = session.scalar(
+            select(Event).where(
+                Event.partner_id == PARTNER_ID,
+                Event.partner_event_id == partner_event_id,
+            )
+        )
+        shipment = session.get(Shipment, tracking_number)
+
+        assert persisted_event is not None
+        assert persisted_event.processing_status is EventProcessingStatus.PROCESSED
+        assert persisted_event.state_applied is True
+        assert shipment is not None
+        assert shipment.current_status is ShipmentStatus.PICKED_UP
+
+        attempt = session.scalar(
+            select(DeliveryAttempt).where(
+                DeliveryAttempt.event_id == persisted_event.id
+            )
+        )
+        assert attempt is not None
+        assert attempt.attempt_number == 1
+        assert attempt.result is expected_result
+        assert attempt.response_code == downstream_response_code
+        assert attempt.error is not None
 
 
 @mark.integration

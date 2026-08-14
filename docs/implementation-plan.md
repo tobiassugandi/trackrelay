@@ -273,8 +273,8 @@ Goal: inspect the system through its API and prove the adapter design works.
 
 ### Step 6.2 — Retrieve an event
 
-- [ ] Add `GET /api/v1/events/{event_id}`.
-- [ ] Include processing and delivery information useful for diagnosis.
+- [x] Add `GET /api/v1/events/{event_id}`.
+- [x] Include processing and delivery information useful for diagnosis.
 
 ### Step 6.3 — Define the adapter contract
 

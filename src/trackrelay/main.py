@@ -8,13 +8,19 @@ from uuid import UUID
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, JsonValue
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from trackrelay.config import Settings
 from trackrelay.database import check_database_connection, get_session
-from trackrelay.domain import EventProcessingStatus, NormalizedEvent, ShipmentStatus
-from trackrelay.models import Event, Partner, Shipment
+from trackrelay.domain import (
+    DeliveryAttemptResult,
+    EventProcessingStatus,
+    NormalizedEvent,
+    ShipmentStatus,
+)
+from trackrelay.models import DeliveryAttempt, Event, Partner, Shipment
 from trackrelay.partners import CourierAlphaAdapter, CourierAlphaPayload
 from trackrelay.services import (
     DeliveryResult,
@@ -83,6 +89,27 @@ class ShipmentResponse(BaseModel):
     current_status_occurred_at: datetime
     created_at: datetime
     updated_at: datetime
+
+
+class DeliveryAttemptResponse(BaseModel):
+    """One observable downstream delivery attempt."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    attempt_number: int
+    result: DeliveryAttemptResult
+    response_code: int | None
+    latency_ms: int
+    error: str | None
+    started_at: datetime
+    completed_at: datetime
+
+
+class EventInspectionResponse(ShipmentHistoryEventResponse):
+    """A persisted event with its downstream delivery diagnostics."""
+
+    delivery_attempts: list[DeliveryAttemptResponse]
 
 
 def get_event_persister() -> EventPersister:
@@ -167,6 +194,47 @@ def shipment_history(
             detail="Shipment not found",
         )
     return events
+
+
+@app.get(
+    "/api/v1/events/{event_id}",
+    response_model=EventInspectionResponse,
+    tags=["events"],
+)
+def get_event(
+    event_id: UUID,
+    session: Annotated[Session, Depends(get_session)],
+) -> EventInspectionResponse:
+    """Return one persisted event and its ordered delivery attempts."""
+    event = session.get(Event, event_id)
+    if event is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Event not found",
+        )
+
+    attempts = list(
+        session.scalars(
+            select(DeliveryAttempt)
+            .where(DeliveryAttempt.event_id == event_id)
+            .order_by(DeliveryAttempt.attempt_number.asc())
+        )
+    )
+    return EventInspectionResponse(
+        id=event.id,
+        partner_id=event.partner_id,
+        partner_event_id=event.partner_event_id,
+        tracking_number=event.tracking_number,
+        status=event.status,
+        occurred_at=event.occurred_at,
+        received_at=event.received_at,
+        raw_payload=event.raw_payload,
+        processing_status=event.processing_status,
+        state_applied=event.state_applied,
+        state_rejection_reason=event.state_rejection_reason,
+        created_at=event.created_at,
+        delivery_attempts=attempts,
+    )
 
 
 @app.post(

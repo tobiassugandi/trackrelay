@@ -206,6 +206,8 @@ The Phase 5 outage scenario sends three distinct events while the simulator is `
 
 Inspect a shipment's latest accepted state with `GET /api/v1/shipments/{tracking_number}`. A found response includes its tracking number, current normalized status, the business timestamp of that status, and creation/update timestamps. An unknown tracking number returns HTTP `404` with `{"detail":"Shipment not found"}`. Append `/events` to retrieve the shipment's complete applied and rejected event history.
 
+Inspect one logical event with `GET /api/v1/events/{event_id}`. The response combines its normalized payload, processing status, shipment-state application decision, and every delivery attempt ordered by attempt number. Attempt diagnostics include result, downstream response code, latency, error text, and start/completion timestamps. An unknown UUID returns HTTP `404` with `{"detail":"Event not found"}`.
+
 The equivalent application shortcuts are `make sync`, `make test`, `make lint`, and `make run`. Activating `.venv` manually or setting `PYTHONPATH` is not required because TrackRelay is installed as a project package.
 
 ## Development approach
@@ -224,4 +226,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, and `legacy-failure-behavior-v1` milestones are complete. PostgreSQL-backed scenarios prove retry idempotency, safe out-of-order handling, durable state across downstream failures, and the missed-delivery limitation of duplicate retries after an outage. Phase 6 now exposes shipment state; the next step adds event-level delivery diagnostics.
+The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, and `legacy-failure-behavior-v1` milestones are complete. PostgreSQL-backed scenarios prove retry idempotency, safe out-of-order handling, durable state across downstream failures, and the missed-delivery limitation of duplicate retries after an outage. Phase 6 now exposes shipment state and event-level diagnostics; the next step defines the shared courier-adapter contract.

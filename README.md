@@ -202,6 +202,8 @@ Event persistence and downstream delivery do not share a transaction. Once norma
 
 A downstream HTTP error or non-timeout transport error returns HTTP `502` with `{"detail":"Downstream delivery failed; event remains persisted"}`. A downstream timeout returns HTTP `504` with `{"detail":"Downstream delivery timed out; event remains persisted"}`. These responses describe delivery failure, not persistence failure: the event, shipment state, and failed attempt remain stored.
 
+The Phase 5 outage scenario sends three distinct events while the simulator is `UNAVAILABLE`. All three API calls return `502`, yet PostgreSQL retains three processed events, three shipment updates, and three HTTP-error attempts with downstream status `503`; the simulator receives no events. Retrying the same payloads returns the existing event IDs with HTTP `200` and `skipped_duplicate`, without creating more attempts. This prevents duplicate side effects but does not recover the missed deliveries—a deliberate measurement of the legacy synchronous design.
+
 The equivalent application shortcuts are `make sync`, `make test`, `make lint`, and `make run`. Activating `.venv` manually or setting `PYTHONPATH` is not required because TrackRelay is installed as a project package.
 
 ## Development approach
@@ -220,4 +222,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, and `legacy-ordering-v1` milestones are complete. PostgreSQL-backed scenarios prove retry idempotency, safe out-of-order handling, and durable state across downstream server errors and timeouts. Phase 5 now has an explicit synchronous-failure transaction boundary; the next step exercises a small outage and safe duplicate retry scenario.
+The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, and `legacy-failure-behavior-v1` milestones are complete. PostgreSQL-backed scenarios prove retry idempotency, safe out-of-order handling, durable state across downstream failures, and the missed-delivery limitation of duplicate retries after an outage. Phase 6 adds inspection APIs and a second courier adapter.

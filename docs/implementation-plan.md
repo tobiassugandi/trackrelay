@@ -257,10 +257,10 @@ Goal: reproduce and measure the weaknesses of synchronous coupling.
 
 ### Step 5.5 — Add a small outage scenario
 
-- [ ] Send a few requests while the simulator is unavailable.
-- [ ] Verify API failures, persisted data, recorded attempts, and safe duplicate retries.
+- [x] Send a few requests while the simulator is unavailable.
+- [x] Verify API failures, persisted data, recorded attempts, and safe duplicate retries.
 
-**Milestone:** `legacy-failure-behavior-v1`.
+**Milestone achieved:** `legacy-failure-behavior-v1`.
 
 ## Phase 6 — Inspection APIs and multiple couriers
 

@@ -17,7 +17,7 @@ from trackrelay.domain import (
     ShipmentStatus,
 )
 from trackrelay.downstream.main import app as downstream_app
-from trackrelay.downstream.main import event_store
+from trackrelay.downstream.main import event_store, simulator_control
 from trackrelay.main import app as trackrelay_app
 from trackrelay.main import get_event_deliverer
 from trackrelay.models import DeliveryAttempt, Event, Partner, Shipment
@@ -33,11 +33,17 @@ SERVER_ERROR_EVENT_ID = "E2E-ALPHA-SERVER-ERROR-001"
 SERVER_ERROR_TRACKING_NUMBER = "E2E-TRK-SERVER-ERROR-001"
 TIMEOUT_EVENT_ID = "E2E-ALPHA-TIMEOUT-001"
 TIMEOUT_TRACKING_NUMBER = "E2E-TRK-TIMEOUT-001"
+OUTAGE_CASES = (
+    ("E2E-ALPHA-OUTAGE-001", "E2E-TRK-OUTAGE-001"),
+    ("E2E-ALPHA-OUTAGE-002", "E2E-TRK-OUTAGE-002"),
+    ("E2E-ALPHA-OUTAGE-003", "E2E-TRK-OUTAGE-003"),
+)
 SCENARIO_TRACKING_NUMBERS = (
     TRACKING_NUMBER,
     OUT_OF_ORDER_TRACKING_NUMBER,
     SERVER_ERROR_TRACKING_NUMBER,
     TIMEOUT_TRACKING_NUMBER,
+    *(tracking_number for _, tracking_number in OUTAGE_CASES),
 )
 
 
@@ -72,6 +78,7 @@ def configured_alpha_partner() -> Iterator[None]:
     assert engine.dialect.name == "postgresql"
     cleanup_event_and_shipment()
     event_store.clear()
+    simulator_control.reset()
 
     with session_factory.begin() as session:
         partner = session.get(Partner, PARTNER_ID)
@@ -99,6 +106,7 @@ def configured_alpha_partner() -> Iterator[None]:
         trackrelay_app.dependency_overrides.clear()
         cleanup_event_and_shipment()
         event_store.clear()
+        simulator_control.reset()
 
         with session_factory.begin() as session:
             partner = session.get(Partner, PARTNER_ID)
@@ -370,6 +378,135 @@ def test_delivery_failure_keeps_event_shipment_and_attempt_committed(
         assert attempt.result is expected_result
         assert attempt.response_code == downstream_response_code
         assert attempt.error is not None
+
+
+@mark.integration
+def test_unavailable_outage_persists_events_and_duplicate_retries_stay_safe(
+    configured_alpha_partner: None,
+) -> None:
+    payloads = [
+        {
+            "event_id": partner_event_id,
+            "tracking_number": tracking_number,
+            "status": "PICKUP",
+            "event_time": "2026-08-14T11:00:00+07:00",
+        }
+        for partner_event_id, tracking_number in OUTAGE_CASES
+    ]
+
+    with TestClient(
+        downstream_app,
+        base_url="http://downstream.test",
+    ) as downstream_client:
+        mode_response = downstream_client.put(
+            "/control/mode",
+            json={"mode": "UNAVAILABLE"},
+        )
+        assert mode_response.status_code == 200
+
+        def deliver_to_simulator(
+            event: NormalizedEvent,
+            event_id: UUID,
+        ) -> DeliveryResult:
+            return deliver_and_record_normalized_event(
+                event,
+                event_id=event_id,
+                downstream_url="http://downstream.test",
+                client=downstream_client,
+            )
+
+        trackrelay_app.dependency_overrides[get_event_deliverer] = (
+            lambda: deliver_to_simulator
+        )
+
+        with TestClient(trackrelay_app) as trackrelay_client:
+            failed_responses = [
+                trackrelay_client.post(
+                    f"/api/v1/partners/{PARTNER_ID}/events",
+                    json=payload,
+                )
+                for payload in payloads
+            ]
+            retry_responses = [
+                trackrelay_client.post(
+                    f"/api/v1/partners/{PARTNER_ID}/events",
+                    json=payload,
+                )
+                for payload in payloads
+            ]
+
+    assert [response.status_code for response in failed_responses] == [502] * 3
+    assert all(
+        response.json()
+        == {"detail": "Downstream delivery failed; event remains persisted"}
+        for response in failed_responses
+    )
+    assert [response.status_code for response in retry_responses] == [200] * 3
+    assert all(
+        response.json()["duplicate"] is True
+        and response.json()["delivery_status"] == "skipped_duplicate"
+        and response.json()["downstream_status_code"] is None
+        for response in retry_responses
+    )
+
+    with session_factory() as session:
+        events = tuple(
+            session.scalars(
+                select(Event)
+                .where(
+                    Event.partner_id == PARTNER_ID,
+                    Event.partner_event_id.in_(
+                        [partner_event_id for partner_event_id, _ in OUTAGE_CASES]
+                    ),
+                )
+                .order_by(Event.partner_event_id)
+            )
+        )
+        shipments = tuple(
+            session.scalars(
+                select(Shipment).where(
+                    Shipment.tracking_number.in_(
+                        [tracking_number for _, tracking_number in OUTAGE_CASES]
+                    )
+                )
+            )
+        )
+        attempts = tuple(
+            session.scalars(
+                select(DeliveryAttempt)
+                .where(
+                    DeliveryAttempt.event_id.in_([event.id for event in events])
+                )
+                .order_by(DeliveryAttempt.event_id)
+            )
+        )
+
+        assert [event.partner_event_id for event in events] == [
+            partner_event_id for partner_event_id, _ in OUTAGE_CASES
+        ]
+        assert all(
+            event.processing_status is EventProcessingStatus.PROCESSED
+            and event.state_applied is True
+            for event in events
+        )
+        assert {response.json()["event_id"] for response in retry_responses} == {
+            str(event.id) for event in events
+        }
+        assert len(shipments) == 3
+        assert all(
+            shipment.current_status is ShipmentStatus.PICKED_UP
+            for shipment in shipments
+        )
+        assert len(attempts) == 3
+        assert all(
+            attempt.attempt_number == 1
+            and attempt.result is DeliveryAttemptResult.HTTP_ERROR
+            and attempt.response_code == 503
+            and attempt.error is not None
+            for attempt in attempts
+        )
+
+    assert event_store.all() == ()
 
 
 @mark.integration

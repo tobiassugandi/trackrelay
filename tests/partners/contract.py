@@ -15,6 +15,7 @@ class PartnerAdapterContract[PayloadT: BaseModel](ABC):
 
     adapter: PartnerAdapter[PayloadT]
     expected_adapter_type: str
+    expected_payload_model: type[PayloadT]
     expected_partner_id: str
     expected_partner_event_id: str
     expected_tracking_number: str
@@ -26,11 +27,9 @@ class PartnerAdapterContract[PayloadT: BaseModel](ABC):
         """Build one valid courier payload for a normalized status."""
 
     def test_adapter_implements_the_shared_protocol(self) -> None:
-        payload = self.make_payload(ShipmentStatus.CREATED)
-
         assert isinstance(self.adapter, PartnerAdapter)
         assert self.adapter.adapter_type == self.expected_adapter_type
-        assert isinstance(payload, self.adapter.payload_model)
+        assert self.adapter.payload_model is self.expected_payload_model
 
     def test_adapter_uses_the_supplied_business_partner_identity(self) -> None:
         payload = self.make_payload(ShipmentStatus.CREATED)

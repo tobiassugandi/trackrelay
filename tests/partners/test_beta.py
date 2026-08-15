@@ -86,6 +86,7 @@ class TestCourierBetaAdapterContract(PartnerAdapterContract[CourierBetaPayload])
 
     adapter = CourierBetaAdapter()
     expected_adapter_type = "courier-beta"
+    expected_payload_model = CourierBetaPayload
     expected_partner_id = "beta-indonesia"
     expected_partner_event_id = "beta-7741"
     expected_tracking_number = "BET987654321"
@@ -94,4 +95,4 @@ class TestCourierBetaAdapterContract(PartnerAdapterContract[CourierBetaPayload])
     def make_payload(self, status: ShipmentStatus) -> CourierBetaPayload:
         data = valid_beta_data()
         data["statusCode"] = BETA_STATUS_FOR[status].value
-        return self.adapter.payload_model.model_validate(data)
+        return self.expected_payload_model.model_validate(data)

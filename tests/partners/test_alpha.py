@@ -86,6 +86,7 @@ class TestCourierAlphaAdapterContract(
 
     adapter = CourierAlphaAdapter()
     expected_adapter_type = "courier-alpha"
+    expected_payload_model = CourierAlphaPayload
     expected_partner_id = "alpha-indonesia"
     expected_partner_event_id = "ALPHA-001842"
     expected_tracking_number = "ALP123456789"
@@ -94,4 +95,4 @@ class TestCourierAlphaAdapterContract(
     def make_payload(self, status: ShipmentStatus) -> CourierAlphaPayload:
         data = valid_alpha_data()
         data["status"] = ALPHA_STATUS_FOR[status].value
-        return self.adapter.payload_model.model_validate(data)
+        return self.expected_payload_model.model_validate(data)

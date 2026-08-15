@@ -14,13 +14,14 @@ PayloadT = TypeVar("PayloadT", bound=BaseModel)
 class PartnerAdapter(Protocol[PayloadT]):
     """Validate one courier contract and normalize it without performing I/O."""
 
-    partner_id: str
+    adapter_type: str
     payload_model: type[PayloadT]
 
     def normalize(
         self,
         payload: PayloadT,
         *,
+        partner_id: str,
         received_at: datetime,
     ) -> NormalizedEvent:
         """Translate one validated courier payload into the shared domain."""

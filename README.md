@@ -176,7 +176,7 @@ curl --include http://127.0.0.1:8000/health/ready
 
 Readiness returns HTTP `200` with `{"status":"ready"}` when PostgreSQL is available and HTTP `503` when it is unavailable.
 
-Courier Alpha can submit an event to `POST /api/v1/partners/courier-alpha/events`. TrackRelay validates the configured partner and Alpha payload, normalizes and persists the event with its shipment update, then synchronously posts the normalized event to the downstream simulator. A successful response includes the event ID, processing and delivery statuses, and the downstream HTTP status code.
+A configured business partner submits an event to `POST /api/v1/partners/{partner_id}/events`; for example, an `alpha-indonesia` partner using the `courier-alpha` adapter posts to `/api/v1/partners/alpha-indonesia/events`. TrackRelay loads that partner, selects its configured payload adapter, normalizes and persists the event with its shipment update, then synchronously posts the normalized event to the downstream simulator. A successful response includes the event ID, processing and delivery statuses, and the downstream HTTP status code.
 
 ### Duplicate-event contract
 
@@ -208,7 +208,7 @@ Inspect a shipment's latest accepted state with `GET /api/v1/shipments/{tracking
 
 Inspect one logical event with `GET /api/v1/events/{event_id}`. The response combines its normalized payload, processing status, shipment-state application decision, and every delivery attempt ordered by attempt number. Attempt diagnostics include result, downstream response code, latency, error text, and start/completion timestamps. An unknown UUID returns HTTP `404` with `{"detail":"Event not found"}`.
 
-Every courier adapter implements the shared `PartnerAdapter` protocol: it declares a stable `partner_id`, exposes its Pydantic `payload_model`, and normalizes a validated payload plus receipt time into a `NormalizedEvent` without I/O. A reusable contract-test suite verifies these declarations, shared identifiers and timestamps, raw-payload preservation, and all normalized shipment-status mappings. Courier Alpha is the first implementation tested through that suite.
+Every courier adapter implements the shared `PartnerAdapter` protocol: it declares a stable `adapter_type`, exposes its Pydantic `payload_model`, and normalizes a validated payload plus the configured business-partner ID and receipt time into a `NormalizedEvent` without I/O. The registry is keyed by adapter type, and ingestion selects it through `Partner.adapter_type`; `Partner.id` remains the event's business identity. This allows records such as `beta-indonesia` and `beta-singapore` to share the `courier-beta` payload adapter while retaining separate idempotency namespaces. A reusable contract-test suite verifies this separation, shared identifiers and timestamps, raw-payload preservation, and all normalized shipment-status mappings.
 
 Courier Beta uses its external field names `messageId`, `awb`, `statusCode`, and `timestamp`. Status codes `10`, `20`, `30`, `60`, and `72` map respectively to created, picked up, in transit, out for delivery, and delivered; `72` and the canonical sample come from the original project design, while the preceding monotonic codes are TrackRelay's documented local simulator contract. `timestamp` is a positive Unix timestamp in seconds. Both numeric fields are strict integers, and the adapter preserves the original external field names in `raw_payload`.
 

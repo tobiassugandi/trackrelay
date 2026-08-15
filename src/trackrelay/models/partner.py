@@ -7,7 +7,7 @@ from trackrelay.database import Base
 
 
 class Partner(Base):
-    """A configured courier partner and its adapter selection."""
+    """A business-partner identity and its reusable payload-adapter selection."""
 
     __tablename__ = "partners"
 

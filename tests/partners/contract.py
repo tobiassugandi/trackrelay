@@ -14,6 +14,7 @@ class PartnerAdapterContract[PayloadT: BaseModel](ABC):
     """Tests inherited by each concrete courier adapter test class."""
 
     adapter: PartnerAdapter[PayloadT]
+    expected_adapter_type: str
     expected_partner_id: str
     expected_partner_event_id: str
     expected_tracking_number: str
@@ -28,8 +29,20 @@ class PartnerAdapterContract[PayloadT: BaseModel](ABC):
         payload = self.make_payload(ShipmentStatus.CREATED)
 
         assert isinstance(self.adapter, PartnerAdapter)
-        assert self.adapter.partner_id == self.expected_partner_id
+        assert self.adapter.adapter_type == self.expected_adapter_type
         assert isinstance(payload, self.adapter.payload_model)
+
+    def test_adapter_uses_the_supplied_business_partner_identity(self) -> None:
+        payload = self.make_payload(ShipmentStatus.CREATED)
+        second_partner_id = f"{self.expected_partner_id}-secondary"
+
+        event = self.adapter.normalize(
+            payload,
+            partner_id=second_partner_id,
+            received_at=self.received_at,
+        )
+
+        assert event.partner_id == second_partner_id
 
     @mark.parametrize("normalized_status", list(ShipmentStatus))
     def test_adapter_normalizes_the_shared_event_contract(
@@ -38,7 +51,11 @@ class PartnerAdapterContract[PayloadT: BaseModel](ABC):
     ) -> None:
         payload = self.make_payload(normalized_status)
 
-        event = self.adapter.normalize(payload, received_at=self.received_at)
+        event = self.adapter.normalize(
+            payload,
+            partner_id=self.expected_partner_id,
+            received_at=self.received_at,
+        )
 
         assert event.partner_id == self.expected_partner_id
         assert event.partner_event_id == self.expected_partner_event_id

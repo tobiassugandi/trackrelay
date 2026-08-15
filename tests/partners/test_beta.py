@@ -85,7 +85,8 @@ class TestCourierBetaAdapterContract(PartnerAdapterContract[CourierBetaPayload])
     """Prove Courier Beta satisfies every shared adapter invariant."""
 
     adapter = CourierBetaAdapter()
-    expected_partner_id = "courier-beta"
+    expected_adapter_type = "courier-beta"
+    expected_partner_id = "beta-indonesia"
     expected_partner_event_id = "beta-7741"
     expected_tracking_number = "BET987654321"
     expected_occurred_at = datetime.fromtimestamp(1786000860, tz=UTC)

@@ -273,7 +273,7 @@ def ingest_partner_event(
             detail="Partner is inactive",
         )
     adapter = PARTNER_ADAPTERS.get(partner.adapter_type)
-    if adapter is None or adapter.partner_id != partner.id:
+    if adapter is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Partner adapter is not supported",
@@ -290,6 +290,7 @@ def ingest_partner_event(
 
     normalized_event = adapter.normalize(
         validated_payload,
+        partner_id=partner.id,
         received_at=datetime.now(UTC),
     )
     persistence = persist_event(normalized_event)

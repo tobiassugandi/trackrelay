@@ -47,18 +47,19 @@ ALPHA_STATUS_MAP: dict[AlphaStatusCode, ShipmentStatus] = {
 class CourierAlphaAdapter:
     """Translate Courier Alpha's contract into TrackRelay's domain contract."""
 
-    partner_id = "courier-alpha"
+    adapter_type = "courier-alpha"
     payload_model = CourierAlphaPayload
 
     def normalize(
         self,
         payload: CourierAlphaPayload,
         *,
+        partner_id: str,
         received_at: datetime,
     ) -> NormalizedEvent:
         """Return one normalized event without performing I/O."""
         return NormalizedEvent(
-            partner_id=self.partner_id,
+            partner_id=partner_id,
             partner_event_id=payload.event_id,
             tracking_number=payload.tracking_number,
             status=ALPHA_STATUS_MAP[payload.status],

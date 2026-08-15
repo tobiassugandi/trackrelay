@@ -85,7 +85,8 @@ class TestCourierAlphaAdapterContract(
     """Prove Courier Alpha satisfies every shared adapter invariant."""
 
     adapter = CourierAlphaAdapter()
-    expected_partner_id = "courier-alpha"
+    expected_adapter_type = "courier-alpha"
+    expected_partner_id = "alpha-indonesia"
     expected_partner_event_id = "ALPHA-001842"
     expected_tracking_number = "ALP123456789"
     expected_occurred_at = datetime.fromisoformat("2026-08-06T14:21:00+07:00")

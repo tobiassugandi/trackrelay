@@ -15,7 +15,7 @@ from trackrelay.partners.beta import (
 )
 
 PARTNER_ADAPTERS: dict[str, PartnerAdapter[BaseModel]] = {
-    adapter.partner_id: adapter
+    adapter.adapter_type: adapter
     for adapter in (CourierAlphaAdapter(), CourierBetaAdapter())
 }
 

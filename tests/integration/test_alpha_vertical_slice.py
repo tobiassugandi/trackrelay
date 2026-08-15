@@ -23,7 +23,7 @@ from trackrelay.main import get_event_deliverer
 from trackrelay.models import DeliveryAttempt, Event, Partner, Shipment
 from trackrelay.services import DeliveryResult, deliver_and_record_normalized_event
 
-PARTNER_ID = "courier-alpha"
+PARTNER_ID = "alpha-indonesia"
 PARTNER_EVENT_ID = "E2E-ALPHA-PICKUP-001"
 TRACKING_NUMBER = "E2E-TRK-PICKUP-001"
 OUT_OF_ORDER_TRACKING_NUMBER = "E2E-TRK-OUT-OF-ORDER-001"
@@ -187,6 +187,7 @@ def test_alpha_pickup_travels_through_the_complete_vertical_slice(
 
     downstream_events = event_store.all()
     assert len(downstream_events) == 1
+    assert downstream_events[0].partner_id == PARTNER_ID
     assert downstream_events[0].partner_event_id == PARTNER_EVENT_ID
     assert downstream_events[0].tracking_number == TRACKING_NUMBER
     assert downstream_events[0].status is ShipmentStatus.PICKED_UP

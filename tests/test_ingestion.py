@@ -63,7 +63,7 @@ def configure_dependencies(
     )
 
 
-def alpha_partner(**overrides: Any) -> Partner:
+def configured_partner(**overrides: Any) -> Partner:
     values = {
         "id": "courier-alpha",
         "name": "Courier Alpha",
@@ -93,7 +93,7 @@ def test_ingestion_normalizes_and_persists_an_alpha_event(
         delivered.append(event)
         return DeliveryResult(downstream_status_code=202)
 
-    configure_dependencies(alpha_partner(), persist_event, deliver_event)
+    configure_dependencies(configured_partner(), persist_event, deliver_event)
 
     response = client.post(
         "/api/v1/partners/courier-alpha/events",
@@ -134,7 +134,7 @@ def test_ingestion_skips_delivery_and_returns_the_original_duplicate(
         delivered.append(event)
         return DeliveryResult(downstream_status_code=202)
 
-    configure_dependencies(alpha_partner(), persist_duplicate, deliver_event)
+    configure_dependencies(configured_partner(), persist_duplicate, deliver_event)
 
     response = client.post(
         "/api/v1/partners/courier-alpha/events",
@@ -152,7 +152,7 @@ def test_ingestion_skips_delivery_and_returns_the_original_duplicate(
     assert delivered == []
 
 
-def test_ingestion_selects_courier_beta_and_normalizes_its_payload(
+def test_ingestion_separates_partner_identity_from_beta_adapter_type(
     client: TestClient,
 ) -> None:
     persisted_event_id = uuid4()
@@ -166,9 +166,9 @@ def test_ingestion_selects_courier_beta_and_normalizes_its_payload(
         )
 
     configure_dependencies(
-        alpha_partner(
-            id="courier-beta",
-            name="Courier Beta",
+        configured_partner(
+            id="beta-indonesia",
+            name="Beta Indonesia",
             adapter_type="courier-beta",
         ),
         persist_event,
@@ -181,14 +181,14 @@ def test_ingestion_selects_courier_beta_and_normalizes_its_payload(
         "timestamp": 1786000860,
     }
     response = client.post(
-        "/api/v1/partners/courier-beta/events",
+        "/api/v1/partners/beta-indonesia/events",
         json=beta_payload,
     )
 
     assert response.status_code == 201
     assert response.json()["event_id"] == str(persisted_event_id)
     assert len(persisted) == 1
-    assert persisted[0].partner_id == "courier-beta"
+    assert persisted[0].partner_id == "beta-indonesia"
     assert persisted[0].partner_event_id == "beta-7741"
     assert persisted[0].tracking_number == "BET987654321"
     assert persisted[0].status is ShipmentStatus.DELIVERED
@@ -215,7 +215,7 @@ def test_ingestion_reports_a_downstream_server_error_after_persistence(
             response=response,
         )
 
-    configure_dependencies(alpha_partner(), persist_event, fail_delivery)
+    configure_dependencies(configured_partner(), persist_event, fail_delivery)
 
     response = client.post(
         "/api/v1/partners/courier-alpha/events",
@@ -243,7 +243,7 @@ def test_ingestion_reports_a_downstream_timeout_after_persistence(
         request = httpx.Request("POST", "http://downstream.test/events")
         raise httpx.ReadTimeout("simulated timeout", request=request)
 
-    configure_dependencies(alpha_partner(), persist_event, time_out)
+    configure_dependencies(configured_partner(), persist_event, time_out)
 
     response = client.post(
         "/api/v1/partners/courier-alpha/events",
@@ -285,7 +285,7 @@ def test_ingestion_rejects_an_inactive_partner(
     valid_payload: dict[str, str],
 ) -> None:
     configure_dependencies(
-        alpha_partner(is_active=False),
+        configured_partner(is_active=False),
         lambda event: EventPersistenceResult(
             event_id=uuid4(),
             duplicate=False,
@@ -306,7 +306,7 @@ def test_ingestion_rejects_an_unsupported_partner_adapter(
     valid_payload: dict[str, str],
 ) -> None:
     configure_dependencies(
-        alpha_partner(adapter_type="courier-beta"),
+        configured_partner(adapter_type="unknown-adapter"),
         lambda event: EventPersistenceResult(
             event_id=uuid4(),
             duplicate=False,
@@ -327,7 +327,7 @@ def test_ingestion_rejects_an_invalid_alpha_payload(
     valid_payload: dict[str, str],
 ) -> None:
     configure_dependencies(
-        alpha_partner(),
+        configured_partner(),
         lambda event: EventPersistenceResult(
             event_id=uuid4(),
             duplicate=False,

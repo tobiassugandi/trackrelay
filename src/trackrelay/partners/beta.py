@@ -62,18 +62,19 @@ BETA_STATUS_MAP: dict[BetaStatusCode, ShipmentStatus] = {
 class CourierBetaAdapter:
     """Translate Courier Beta's contract into TrackRelay's domain contract."""
 
-    partner_id = "courier-beta"
+    adapter_type = "courier-beta"
     payload_model = CourierBetaPayload
 
     def normalize(
         self,
         payload: CourierBetaPayload,
         *,
+        partner_id: str,
         received_at: datetime,
     ) -> NormalizedEvent:
         """Return one normalized event without performing I/O."""
         return NormalizedEvent(
-            partner_id=self.partner_id,
+            partner_id=partner_id,
             partner_event_id=payload.message_id,
             tracking_number=payload.awb,
             status=BETA_STATUS_MAP[payload.status_code],

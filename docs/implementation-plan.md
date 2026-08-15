@@ -278,8 +278,8 @@ Goal: inspect the system through its API and prove the adapter design works.
 
 ### Step 6.3 — Define the adapter contract
 
-- [ ] Create one interface or protocol for all partner adapters.
-- [ ] Create a shared contract test suite.
+- [x] Create one interface or protocol for all partner adapters.
+- [x] Create a shared contract test suite.
 
 ### Step 6.4 — Add Courier Beta
 

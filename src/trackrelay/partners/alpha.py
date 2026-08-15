@@ -48,6 +48,7 @@ class CourierAlphaAdapter:
     """Translate Courier Alpha's contract into TrackRelay's domain contract."""
 
     partner_id = "courier-alpha"
+    payload_model = CourierAlphaPayload
 
     def normalize(
         self,

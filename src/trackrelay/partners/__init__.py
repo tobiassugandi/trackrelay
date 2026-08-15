@@ -5,5 +5,11 @@ from trackrelay.partners.alpha import (
     CourierAlphaAdapter,
     CourierAlphaPayload,
 )
+from trackrelay.partners.base import PartnerAdapter
 
-__all__ = ["AlphaStatusCode", "CourierAlphaAdapter", "CourierAlphaPayload"]
+__all__ = [
+    "AlphaStatusCode",
+    "CourierAlphaAdapter",
+    "CourierAlphaPayload",
+    "PartnerAdapter",
+]

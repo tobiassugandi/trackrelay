@@ -1,6 +1,6 @@
 """Tests for Courier Alpha's external contract and adapter."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from pydantic import ValidationError
 from pytest import mark, raises
@@ -11,6 +11,8 @@ from trackrelay.partners import (
     CourierAlphaAdapter,
     CourierAlphaPayload,
 )
+
+from .contract import PartnerAdapterContract
 
 
 def valid_alpha_data() -> dict[str, str]:
@@ -68,31 +70,27 @@ def test_courier_alpha_payload_rejects_unknown_fields() -> None:
         CourierAlphaPayload.model_validate(data)
 
 
-@mark.parametrize(
-    ("alpha_status", "normalized_status"),
-    [
-        (AlphaStatusCode.CREATED, ShipmentStatus.CREATED),
-        (AlphaStatusCode.PICKED_UP, ShipmentStatus.PICKED_UP),
-        (AlphaStatusCode.IN_TRANSIT, ShipmentStatus.IN_TRANSIT),
-        (AlphaStatusCode.OUT_FOR_DELIVERY, ShipmentStatus.OUT_FOR_DELIVERY),
-        (AlphaStatusCode.DELIVERED, ShipmentStatus.DELIVERED),
-    ],
-)
-def test_courier_alpha_adapter_normalizes_each_status(
-    alpha_status: AlphaStatusCode,
-    normalized_status: ShipmentStatus,
-) -> None:
-    data = valid_alpha_data()
-    data["status"] = alpha_status.value
-    payload = CourierAlphaPayload.model_validate(data)
-    received_at = datetime(2026, 8, 6, 7, 21, 2, tzinfo=UTC)
+ALPHA_STATUS_FOR = {
+    ShipmentStatus.CREATED: AlphaStatusCode.CREATED,
+    ShipmentStatus.PICKED_UP: AlphaStatusCode.PICKED_UP,
+    ShipmentStatus.IN_TRANSIT: AlphaStatusCode.IN_TRANSIT,
+    ShipmentStatus.OUT_FOR_DELIVERY: AlphaStatusCode.OUT_FOR_DELIVERY,
+    ShipmentStatus.DELIVERED: AlphaStatusCode.DELIVERED,
+}
 
-    event = CourierAlphaAdapter().normalize(payload, received_at=received_at)
 
-    assert event.partner_id == "courier-alpha"
-    assert event.partner_event_id == "ALPHA-001842"
-    assert event.tracking_number == "ALP123456789"
-    assert event.status is normalized_status
-    assert event.occurred_at == payload.event_time
-    assert event.received_at == received_at
-    assert event.raw_payload["status"] == alpha_status.value
+class TestCourierAlphaAdapterContract(
+    PartnerAdapterContract[CourierAlphaPayload]
+):
+    """Prove Courier Alpha satisfies every shared adapter invariant."""
+
+    adapter = CourierAlphaAdapter()
+    expected_partner_id = "courier-alpha"
+    expected_partner_event_id = "ALPHA-001842"
+    expected_tracking_number = "ALP123456789"
+    expected_occurred_at = datetime.fromisoformat("2026-08-06T14:21:00+07:00")
+
+    def make_payload(self, status: ShipmentStatus) -> CourierAlphaPayload:
+        data = valid_alpha_data()
+        data["status"] = ALPHA_STATUS_FOR[status].value
+        return self.adapter.payload_model.model_validate(data)

@@ -46,4 +46,4 @@ class PartnerAdapterContract[PayloadT: BaseModel](ABC):
         assert event.status is normalized_status
         assert event.occurred_at == self.expected_occurred_at
         assert event.received_at == self.received_at
-        assert event.raw_payload == payload.model_dump(mode="json")
+        assert event.raw_payload == payload.model_dump(mode="json", by_alias=True)

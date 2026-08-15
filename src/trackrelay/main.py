@@ -7,7 +7,8 @@ from uuid import UUID
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Response, status
-from pydantic import BaseModel, ConfigDict, JsonValue
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -21,7 +22,7 @@ from trackrelay.domain import (
     ShipmentStatus,
 )
 from trackrelay.models import DeliveryAttempt, Event, Partner, Shipment
-from trackrelay.partners import CourierAlphaAdapter, CourierAlphaPayload
+from trackrelay.partners import PARTNER_ADAPTERS
 from trackrelay.services import (
     DeliveryResult,
     EventPersistenceResult,
@@ -253,13 +254,13 @@ def get_event(
 )
 def ingest_partner_event(
     partner_id: str,
-    payload: CourierAlphaPayload,
+    payload: dict[str, JsonValue],
     response: Response,
     session: Annotated[Session, Depends(get_session)],
     persist_event: Annotated[EventPersister, Depends(get_event_persister)],
     deliver_event: Annotated[EventDeliverer, Depends(get_event_deliverer)],
 ) -> IngestionResponse:
-    """Validate, normalize, persist, and deliver one Courier Alpha event."""
+    """Validate, normalize, persist, and deliver one configured partner event."""
     partner = session.get(Partner, partner_id)
     if partner is None:
         raise HTTPException(
@@ -271,14 +272,24 @@ def ingest_partner_event(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Partner is inactive",
         )
-    if partner.adapter_type != CourierAlphaAdapter.partner_id:
+    adapter = PARTNER_ADAPTERS.get(partner.adapter_type)
+    if adapter is None or adapter.partner_id != partner.id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Partner adapter is not supported",
         )
 
-    normalized_event = CourierAlphaAdapter().normalize(
-        payload,
+    try:
+        validated_payload = adapter.payload_model.model_validate(payload)
+    except ValidationError as error:
+        errors = [
+            {**item, "loc": ("body", *item["loc"])}
+            for item in error.errors()
+        ]
+        raise RequestValidationError(errors) from error
+
+    normalized_event = adapter.normalize(
+        validated_payload,
         received_at=datetime.now(UTC),
     )
     persistence = persist_event(normalized_event)

@@ -64,5 +64,5 @@ class CourierAlphaAdapter:
             status=ALPHA_STATUS_MAP[payload.status],
             occurred_at=payload.event_time,
             received_at=received_at,
-            raw_payload=payload.model_dump(mode="json"),
+            raw_payload=payload.model_dump(mode="json", by_alias=True),
         )

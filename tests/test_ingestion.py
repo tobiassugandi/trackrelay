@@ -1,6 +1,7 @@
-"""Tests for the Courier Alpha ingestion endpoint."""
+"""Tests for partner-specific event ingestion."""
 
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -149,6 +150,50 @@ def test_ingestion_skips_delivery_and_returns_the_original_duplicate(
         "downstream_status_code": None,
     }
     assert delivered == []
+
+
+def test_ingestion_selects_courier_beta_and_normalizes_its_payload(
+    client: TestClient,
+) -> None:
+    persisted_event_id = uuid4()
+    persisted: list[NormalizedEvent] = []
+
+    def persist_event(event: NormalizedEvent) -> EventPersistenceResult:
+        persisted.append(event)
+        return EventPersistenceResult(
+            event_id=persisted_event_id,
+            duplicate=False,
+        )
+
+    configure_dependencies(
+        alpha_partner(
+            id="courier-beta",
+            name="Courier Beta",
+            adapter_type="courier-beta",
+        ),
+        persist_event,
+    )
+
+    beta_payload = {
+        "messageId": "beta-7741",
+        "awb": "BET987654321",
+        "statusCode": 72,
+        "timestamp": 1786000860,
+    }
+    response = client.post(
+        "/api/v1/partners/courier-beta/events",
+        json=beta_payload,
+    )
+
+    assert response.status_code == 201
+    assert response.json()["event_id"] == str(persisted_event_id)
+    assert len(persisted) == 1
+    assert persisted[0].partner_id == "courier-beta"
+    assert persisted[0].partner_event_id == "beta-7741"
+    assert persisted[0].tracking_number == "BET987654321"
+    assert persisted[0].status is ShipmentStatus.DELIVERED
+    assert persisted[0].occurred_at == datetime(2026, 8, 6, 7, 21, tzinfo=UTC)
+    assert persisted[0].raw_payload == beta_payload
 
 
 def test_ingestion_reports_a_downstream_server_error_after_persistence(

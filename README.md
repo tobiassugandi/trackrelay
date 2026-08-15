@@ -210,6 +210,8 @@ Inspect one logical event with `GET /api/v1/events/{event_id}`. The response com
 
 Every courier adapter implements the shared `PartnerAdapter` protocol: it declares a stable `partner_id`, exposes its Pydantic `payload_model`, and normalizes a validated payload plus receipt time into a `NormalizedEvent` without I/O. A reusable contract-test suite verifies these declarations, shared identifiers and timestamps, raw-payload preservation, and all normalized shipment-status mappings. Courier Alpha is the first implementation tested through that suite.
 
+Courier Beta uses its external field names `messageId`, `awb`, `statusCode`, and `timestamp`. Status codes `10`, `20`, `30`, `60`, and `72` map respectively to created, picked up, in transit, out for delivery, and delivered; `72` and the canonical sample come from the original project design, while the preceding monotonic codes are TrackRelay's documented local simulator contract. `timestamp` is a positive Unix timestamp in seconds. Both numeric fields are strict integers, and the adapter preserves the original external field names in `raw_payload`.
+
 The equivalent application shortcuts are `make sync`, `make test`, `make lint`, and `make run`. Activating `.venv` manually or setting `PYTHONPATH` is not required because TrackRelay is installed as a project package.
 
 ## Development approach
@@ -228,4 +230,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, and `legacy-failure-behavior-v1` milestones are complete. PostgreSQL-backed scenarios prove retry idempotency, safe out-of-order handling, durable state across downstream failures, and the missed-delivery limitation of duplicate retries after an outage. Phase 6 now has inspection APIs and a reusable courier-adapter contract; the next step adds Courier Beta.
+The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, and `legacy-failure-behavior-v1` milestones are complete. PostgreSQL-backed scenarios prove retry idempotency, safe out-of-order handling, durable state across downstream failures, and the missed-delivery limitation of duplicate retries after an outage. Phase 6 now accepts Courier Alpha and Beta through the shared adapter contract; the next step adds Courier Gamma's nested payload.

@@ -283,8 +283,8 @@ Goal: inspect the system through its API and prove the adapter design works.
 
 ### Step 6.4 — Add Courier Beta
 
-- [ ] Accept integer status codes, Unix timestamps, and Beta field names.
-- [ ] Reuse the shared contract tests.
+- [x] Accept integer status codes, Unix timestamps, and Beta field names.
+- [x] Reuse the shared contract tests.
 
 ### Step 6.5 — Add Courier Gamma
 

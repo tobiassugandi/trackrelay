@@ -299,8 +299,8 @@ Goal: explicitly account for every generated event.
 
 ### Step 7.1 — Add test runs
 
-- [ ] Create a test-runs table.
-- [ ] Attach `test_run_id` to synthetic events.
+- [x] Create a test-runs table.
+- [x] Attach `test_run_id` to synthetic events.
 
 ### Step 7.2 — Build a deterministic generator
 

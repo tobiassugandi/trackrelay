@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 from unittest.mock import patch
+from uuid import UUID
 
 from fastapi.testclient import TestClient
 from pytest import fixture, mark
@@ -43,6 +44,19 @@ def test_simulator_accepts_and_exposes_a_normalized_event(
     stored_events = client.get("/events")
     assert stored_events.status_code == 200
     assert stored_events.json() == [normalized_event_data()]
+
+
+def test_simulator_preserves_a_synthetic_events_test_run_id(
+    client: TestClient,
+) -> None:
+    test_run_id = UUID("00000000-0000-0000-0000-000000000701")
+    event = normalized_event_data()
+    event["test_run_id"] = str(test_run_id)
+
+    response = client.post("/events", json=event)
+
+    assert response.status_code == 202
+    assert client.get("/events").json()[0]["test_run_id"] == str(test_run_id)
 
 
 def test_simulator_rejects_an_invalid_event_without_recording_it(

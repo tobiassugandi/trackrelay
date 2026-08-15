@@ -79,6 +79,7 @@ def persist_normalized_event(
                 occurred_at=normalized_event.occurred_at,
                 received_at=normalized_event.received_at,
                 raw_payload=normalized_event.raw_payload,
+                test_run_id=normalized_event.test_run_id,
                 processing_status=EventProcessingStatus.PROCESSED,
                 state_applied=state_applied,
                 state_rejection_reason=state_rejection_reason,

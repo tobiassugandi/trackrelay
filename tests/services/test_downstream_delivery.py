@@ -2,6 +2,7 @@
 
 import json
 from datetime import UTC, datetime
+from uuid import UUID
 
 import httpx
 from pytest import raises
@@ -25,7 +26,10 @@ def normalized_event() -> NormalizedEvent:
 def test_delivery_posts_the_normalized_event_and_records_success() -> None:
     def accept(request: httpx.Request) -> httpx.Response:
         assert request.url == "http://downstream.test/events"
-        assert json.loads(request.content) == normalized_event().model_dump(mode="json")
+        assert json.loads(request.content) == normalized_event().model_dump(
+            mode="json",
+            exclude_none=True,
+        )
         return httpx.Response(202, json={"status": "accepted"})
 
     with httpx.Client(transport=httpx.MockTransport(accept)) as client:
@@ -36,6 +40,24 @@ def test_delivery_posts_the_normalized_event_and_records_success() -> None:
         )
 
     assert result.status == "delivered"
+    assert result.downstream_status_code == 202
+
+
+def test_delivery_includes_a_synthetic_events_test_run_id() -> None:
+    test_run_id = UUID("00000000-0000-0000-0000-000000000701")
+    event = normalized_event().model_copy(update={"test_run_id": test_run_id})
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content)["test_run_id"] == str(test_run_id)
+        return httpx.Response(202, json={"status": "accepted"})
+
+    with httpx.Client(transport=httpx.MockTransport(accept)) as client:
+        result = deliver_normalized_event(
+            event,
+            downstream_url="http://downstream.test",
+            client=client,
+        )
+
     assert result.downstream_status_code == 202
 
 

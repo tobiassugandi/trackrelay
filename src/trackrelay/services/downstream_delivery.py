@@ -67,7 +67,7 @@ def deliver_normalized_event(
 ) -> DeliveryResult:
     """POST one normalized event and return its successful delivery result."""
     endpoint = f"{downstream_url.rstrip('/')}/events"
-    body = normalized_event.model_dump(mode="json")
+    body = normalized_event.model_dump(mode="json", exclude_none=True)
 
     if client is not None:
         response = client.post(endpoint, json=body)

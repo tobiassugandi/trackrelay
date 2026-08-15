@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from threading import Barrier
+from uuid import UUID
 
 from fastapi.testclient import TestClient
 from pytest import fixture, mark
@@ -17,6 +18,7 @@ from trackrelay.domain import (
 )
 from trackrelay.main import app
 from trackrelay.models import Event, Partner, Shipment
+from trackrelay.models import TestRun as ExperimentRunModel
 from trackrelay.services import EventPersistenceResult, persist_normalized_event
 
 PARTNER_ID = "integration-courier-alpha"
@@ -25,6 +27,9 @@ PARTNER_EVENT_ID = "INTEGRATION-ALPHA-001"
 CONCURRENT_TRACKING_NUMBER = "INTEGRATION-TRK-CONCURRENT"
 CONCURRENT_PARTNER_EVENT_ID = "INTEGRATION-ALPHA-CONCURRENT"
 STALE_PARTNER_EVENT_ID = "INTEGRATION-ALPHA-STALE"
+SYNTHETIC_PARTNER_EVENT_ID = "INTEGRATION-ALPHA-SYNTHETIC"
+SYNTHETIC_TRACKING_NUMBER = "INTEGRATION-TRK-SYNTHETIC"
+TEST_RUN_ID = UUID("00000000-0000-0000-0000-000000000701")
 
 
 def cleanup_records() -> None:
@@ -33,11 +38,18 @@ def cleanup_records() -> None:
         session.execute(
             delete(Shipment).where(
                 Shipment.tracking_number.in_(
-                    [TRACKING_NUMBER, CONCURRENT_TRACKING_NUMBER]
+                    [
+                        TRACKING_NUMBER,
+                        CONCURRENT_TRACKING_NUMBER,
+                        SYNTHETIC_TRACKING_NUMBER,
+                    ]
                 )
             )
         )
         session.execute(delete(Partner).where(Partner.id == PARTNER_ID))
+        session.execute(
+            delete(ExperimentRunModel).where(ExperimentRunModel.id == TEST_RUN_ID)
+        )
 
 
 @fixture
@@ -64,6 +76,7 @@ def build_event(
     *,
     partner_event_id: str = PARTNER_EVENT_ID,
     tracking_number: str = TRACKING_NUMBER,
+    test_run_id: UUID | None = None,
 ) -> NormalizedEvent:
     return NormalizedEvent(
         partner_id=PARTNER_ID,
@@ -73,7 +86,39 @@ def build_event(
         occurred_at=occurred_at,
         received_at=occurred_at + timedelta(seconds=2),
         raw_payload={"status": status.value},
+        test_run_id=test_run_id,
     )
+
+
+@mark.integration
+def test_synthetic_event_references_its_postgres_test_run(
+    configured_partner: None,
+) -> None:
+    with session_factory.begin() as session:
+        session.add(
+            ExperimentRunModel(
+                id=TEST_RUN_ID,
+                scenario_name="normal",
+                random_seed=8675309,
+                configuration={"events": 1},
+                expected_event_count=1,
+            )
+        )
+
+    result = persist_normalized_event(
+        build_event(
+            ShipmentStatus.CREATED,
+            datetime(2026, 8, 15, 8, 0, tzinfo=UTC),
+            partner_event_id=SYNTHETIC_PARTNER_EVENT_ID,
+            tracking_number=SYNTHETIC_TRACKING_NUMBER,
+            test_run_id=TEST_RUN_ID,
+        )
+    )
+
+    with session_factory() as session:
+        event = session.get(Event, result.event_id)
+        assert event is not None
+        assert event.test_run_id == TEST_RUN_ID
 
 
 @mark.integration

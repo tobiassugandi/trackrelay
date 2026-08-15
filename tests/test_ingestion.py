@@ -117,6 +117,41 @@ def test_ingestion_normalizes_and_persists_an_alpha_event(
     assert delivered == persisted
 
 
+def test_ingestion_attaches_test_run_metadata_outside_the_partner_payload(
+    client: TestClient,
+    valid_payload: dict[str, str],
+) -> None:
+    persisted_event_id = uuid4()
+    test_run_id = uuid4()
+    persisted: list[NormalizedEvent] = []
+    delivered: list[NormalizedEvent] = []
+
+    def persist_event(event: NormalizedEvent) -> EventPersistenceResult:
+        persisted.append(event)
+        return EventPersistenceResult(
+            event_id=persisted_event_id,
+            duplicate=False,
+        )
+
+    def deliver_event(event: NormalizedEvent, event_id: UUID) -> DeliveryResult:
+        delivered.append(event)
+        return DeliveryResult(downstream_status_code=202)
+
+    configure_dependencies(configured_partner(), persist_event, deliver_event)
+
+    response = client.post(
+        "/api/v1/partners/courier-alpha/events",
+        headers={"X-Test-Run-ID": str(test_run_id)},
+        json=valid_payload,
+    )
+
+    assert response.status_code == 201
+    assert len(persisted) == 1
+    assert persisted[0].test_run_id == test_run_id
+    assert persisted[0].raw_payload == valid_payload
+    assert delivered == persisted
+
+
 def test_ingestion_skips_delivery_and_returns_the_original_duplicate(
     client: TestClient,
     valid_payload: dict[str, str],

@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Response, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 from sqlalchemy import select
@@ -74,6 +74,7 @@ class ShipmentHistoryEventResponse(BaseModel):
     occurred_at: datetime
     received_at: datetime
     raw_payload: dict[str, JsonValue]
+    test_run_id: UUID | None
     processing_status: EventProcessingStatus
     state_applied: bool
     state_rejection_reason: str | None
@@ -230,6 +231,7 @@ def get_event(
         occurred_at=event.occurred_at,
         received_at=event.received_at,
         raw_payload=event.raw_payload,
+        test_run_id=event.test_run_id,
         processing_status=event.processing_status,
         state_applied=event.state_applied,
         state_rejection_reason=event.state_rejection_reason,
@@ -259,6 +261,7 @@ def ingest_partner_event(
     session: Annotated[Session, Depends(get_session)],
     persist_event: Annotated[EventPersister, Depends(get_event_persister)],
     deliver_event: Annotated[EventDeliverer, Depends(get_event_deliverer)],
+    test_run_id: Annotated[UUID | None, Header(alias="X-Test-Run-ID")] = None,
 ) -> IngestionResponse:
     """Validate, normalize, persist, and deliver one configured partner event."""
     partner = session.get(Partner, partner_id)
@@ -293,6 +296,10 @@ def ingest_partner_event(
         partner_id=partner.id,
         received_at=datetime.now(UTC),
     )
+    if test_run_id is not None:
+        normalized_event = normalized_event.model_copy(
+            update={"test_run_id": test_run_id}
+        )
     persistence = persist_event(normalized_event)
     if persistence.duplicate:
         response.status_code = status.HTTP_200_OK

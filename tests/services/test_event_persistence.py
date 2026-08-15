@@ -1,12 +1,14 @@
 """Fast tests for transactional event persistence."""
 
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 from sqlalchemy import func, select
 
 from trackrelay.database import Base, create_database_engine, create_session_factory
 from trackrelay.domain import EventProcessingStatus, NormalizedEvent, ShipmentStatus
 from trackrelay.models import Event, Partner, Shipment
+from trackrelay.models import TestRun as ExperimentRunModel
 from trackrelay.services import persist_normalized_event
 
 
@@ -17,6 +19,7 @@ def build_event(
     *,
     partner_id: str = "courier-alpha",
     tracking_number: str = "TRK-001",
+    test_run_id: UUID | None = None,
 ) -> NormalizedEvent:
     return NormalizedEvent(
         partner_id=partner_id,
@@ -26,6 +29,7 @@ def build_event(
         occurred_at=occurred_at,
         received_at=occurred_at + timedelta(seconds=2),
         raw_payload={"status": status.value},
+        test_run_id=test_run_id,
     )
 
 
@@ -67,6 +71,49 @@ def test_persistence_creates_then_updates_a_shipment_atomically() -> None:
         assert first_result.duplicate is False
         assert second_result.duplicate is False
         assert first_result.event_id != second_result.event_id
+
+    engine.dispose()
+
+
+def test_persistence_attaches_a_synthetic_event_to_its_test_run() -> None:
+    engine = create_database_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    sessions = create_session_factory(engine)
+    test_run_id = UUID("00000000-0000-0000-0000-000000000701")
+    occurred_at = datetime(2026, 8, 15, 8, 0, tzinfo=UTC)
+
+    with sessions.begin() as session:
+        session.add(
+            Partner(
+                id="courier-alpha",
+                name="Courier Alpha",
+                adapter_type="courier-alpha",
+            )
+        )
+        session.add(
+            ExperimentRunModel(
+                id=test_run_id,
+                scenario_name="normal",
+                random_seed=8675309,
+                configuration={"events": 1},
+                expected_event_count=1,
+            )
+        )
+
+    result = persist_normalized_event(
+        build_event(
+            "ALPHA-SYNTHETIC-001",
+            ShipmentStatus.CREATED,
+            occurred_at,
+            test_run_id=test_run_id,
+        ),
+        sessions=sessions,
+    )
+
+    with sessions() as session:
+        event = session.get(Event, result.event_id)
+        assert event is not None
+        assert event.test_run_id == test_run_id
 
     engine.dispose()
 

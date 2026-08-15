@@ -1,6 +1,7 @@
 """Tests for the normalized event schema."""
 
 from datetime import UTC, datetime
+from uuid import UUID
 
 from pydantic import ValidationError
 from pytest import mark, raises
@@ -28,6 +29,17 @@ def test_normalized_event_keeps_occurrence_and_receipt_times_separate() -> None:
     assert event.received_at == datetime(2026, 8, 6, 10, 0, 2, tzinfo=UTC)
     assert event.received_at > event.occurred_at
     assert event.raw_payload == {"status": "PICKUP", "attempt": 1}
+    assert event.test_run_id is None
+
+
+def test_normalized_event_accepts_an_optional_test_run_id() -> None:
+    test_run_id = UUID("00000000-0000-0000-0000-000000000701")
+    data = valid_event_data()
+    data["test_run_id"] = test_run_id
+
+    event = NormalizedEvent.model_validate(data)
+
+    assert event.test_run_id == test_run_id
 
 
 @mark.parametrize("field_name", ["occurred_at", "received_at"])

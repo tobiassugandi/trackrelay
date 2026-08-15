@@ -178,6 +178,10 @@ Readiness returns HTTP `200` with `{"status":"ready"}` when PostgreSQL is availa
 
 A configured business partner submits an event to `POST /api/v1/partners/{partner_id}/events`; for example, an `alpha-indonesia` partner using the `courier-alpha` adapter posts to `/api/v1/partners/alpha-indonesia/events`. TrackRelay loads that partner, selects its configured payload adapter, normalizes and persists the event with its shipment update, then synchronously posts the normalized event to the downstream simulator. A successful response includes the event ID, processing and delivery statuses, and the downstream HTTP status code.
 
+Synthetic experiment traffic can include an `X-Test-Run-ID` request header containing a UUID. TrackRelay keeps this laboratory metadata outside the courier-specific JSON, attaches it to the normalized event, stores it as an optional foreign key, and forwards it downstream. Ordinary courier traffic omits the header and retains a null `test_run_id`.
+
+Each `test_runs` row records the scenario name, random seed, JSON configuration, expected event count, start time, and optional completion time. This is the reproducibility boundary that the deterministic generator will populate in Step 7.2.
+
 ### Duplicate-event contract
 
 A logical event is identified by `(partner_id, partner_event_id)`. Multiple HTTP requests carrying that identity are transport retries of the same logical event, not additional events. Likewise, a downstream HTTP delivery is a side effect of the logical event; retrying ingestion must not create another downstream delivery.
@@ -232,4 +236,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, `legacy-failure-behavior-v1`, and `legacy-multipartner-v1` milestones are complete. TrackRelay exposes shipment and event diagnostics and accepts Alpha, Beta, and Gamma formats through reusable adapters with independent business-partner identities. Phase 7 begins experiment tracking and reconciliation.
+The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, `legacy-failure-behavior-v1`, and `legacy-multipartner-v1` milestones are complete. TrackRelay exposes shipment and event diagnostics, accepts Alpha, Beta, and Gamma formats, and can correlate synthetic events with reproducible test-run definitions. The next step builds a deterministic event generator and input manifest.

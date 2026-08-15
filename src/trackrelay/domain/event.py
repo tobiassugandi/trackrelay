@@ -2,6 +2,7 @@
 
 from enum import StrEnum
 from typing import Annotated
+from uuid import UUID
 
 from pydantic import (
     AwareDatetime,
@@ -36,3 +37,4 @@ class NormalizedEvent(BaseModel):
     occurred_at: AwareDatetime
     received_at: AwareDatetime
     raw_payload: dict[str, JsonValue]
+    test_run_id: UUID | None = None

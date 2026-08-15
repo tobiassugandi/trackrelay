@@ -115,6 +115,7 @@ def test_get_event_returns_processing_and_ordered_delivery_diagnostics(
     assert event["state_applied"] is True
     assert event["state_rejection_reason"] is None
     assert event["raw_payload"] == {"status": "PICKUP"}
+    assert event["test_run_id"] is None
 
     attempts = event["delivery_attempts"]
     assert [attempt["attempt_number"] for attempt in attempts] == [1, 2]

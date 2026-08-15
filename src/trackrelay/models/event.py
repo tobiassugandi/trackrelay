@@ -88,6 +88,12 @@ class Event(Base):
         nullable=False,
     )
     raw_payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    test_run_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("test_runs.id", name="fk_events_test_run_id_test_runs"),
+        nullable=True,
+        index=True,
+    )
     processing_status: Mapped[EventProcessingStatus] = mapped_column(
         EVENT_PROCESSING_STATUS_TYPE,
         nullable=False,

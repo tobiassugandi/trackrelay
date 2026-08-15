@@ -77,7 +77,7 @@ def receive_event(event: NormalizedEvent) -> dict[str, object]:
     return {"status": "accepted", "received_count": received_count}
 
 
-@app.get("/events")
+@app.get("/events", response_model_exclude_none=True)
 def list_events() -> list[NormalizedEvent]:
     """Return every event received by this simulator process."""
     return list(event_store.all())

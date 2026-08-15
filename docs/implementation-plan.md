@@ -288,10 +288,10 @@ Goal: inspect the system through its API and prove the adapter design works.
 
 ### Step 6.5 — Add Courier Gamma
 
-- [ ] Accept a nested payload and UTC timestamp.
-- [ ] Reuse the shared contract tests.
+- [x] Accept a nested payload and UTC timestamp.
+- [x] Reuse the shared contract tests.
 
-**Milestone:** `legacy-multipartner-v1`.
+**Milestone achieved:** `legacy-multipartner-v1`.
 
 ## Phase 7 — Experiment tracking and reconciliation
 

@@ -13,10 +13,20 @@ from trackrelay.partners.beta import (
     CourierBetaAdapter,
     CourierBetaPayload,
 )
+from trackrelay.partners.gamma import (
+    CourierGammaAdapter,
+    CourierGammaPayload,
+    GammaNotification,
+    GammaStatusCode,
+)
 
 PARTNER_ADAPTERS: dict[str, PartnerAdapter[BaseModel]] = {
     adapter.adapter_type: adapter
-    for adapter in (CourierAlphaAdapter(), CourierBetaAdapter())
+    for adapter in (
+        CourierAlphaAdapter(),
+        CourierBetaAdapter(),
+        CourierGammaAdapter(),
+    )
 }
 
 __all__ = [
@@ -27,5 +37,9 @@ __all__ = [
     "CourierAlphaPayload",
     "CourierBetaAdapter",
     "CourierBetaPayload",
+    "CourierGammaAdapter",
+    "CourierGammaPayload",
+    "GammaNotification",
+    "GammaStatusCode",
     "PartnerAdapter",
 ]

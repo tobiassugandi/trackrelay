@@ -212,6 +212,8 @@ Every courier adapter implements the shared `PartnerAdapter` protocol: it declar
 
 Courier Beta uses its external field names `messageId`, `awb`, `statusCode`, and `timestamp`. Status codes `10`, `20`, `30`, `60`, and `72` map respectively to created, picked up, in transit, out for delivery, and delivered; `72` and the canonical sample come from the original project design, while the preceding monotonic codes are TrackRelay's documented local simulator contract. `timestamp` is a positive Unix timestamp in seconds. Both numeric fields are strict integers, and the adapter preserves the original external field names in `raw_payload`.
 
+Courier Gamma nests its external contract under `notification`: `reference`, `trackingNumber`, `status`, and `occurredAt`. The timestamp must be an aware ISO 8601 value with a zero UTC offset, such as `2026-08-06T07:21:00Z`; naive or non-UTC offsets are rejected. Gamma uses the five normalized status names as its external codes and preserves the complete nested object in `raw_payload`.
+
 The equivalent application shortcuts are `make sync`, `make test`, `make lint`, and `make run`. Activating `.venv` manually or setting `PYTHONPATH` is not required because TrackRelay is installed as a project package.
 
 ## Development approach
@@ -230,4 +232,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, and `legacy-failure-behavior-v1` milestones are complete. PostgreSQL-backed scenarios prove retry idempotency, safe out-of-order handling, durable state across downstream failures, and the missed-delivery limitation of duplicate retries after an outage. Phase 6 now accepts Courier Alpha and Beta through the shared adapter contract; the next step adds Courier Gamma's nested payload.
+The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, `legacy-failure-behavior-v1`, and `legacy-multipartner-v1` milestones are complete. TrackRelay exposes shipment and event diagnostics and accepts Alpha, Beta, and Gamma formats through reusable adapters with independent business-partner identities. Phase 7 begins experiment tracking and reconciliation.

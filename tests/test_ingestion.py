@@ -196,6 +196,52 @@ def test_ingestion_separates_partner_identity_from_beta_adapter_type(
     assert persisted[0].raw_payload == beta_payload
 
 
+def test_ingestion_selects_gamma_for_a_nested_utc_payload(
+    client: TestClient,
+) -> None:
+    persisted_event_id = uuid4()
+    persisted: list[NormalizedEvent] = []
+
+    def persist_event(event: NormalizedEvent) -> EventPersistenceResult:
+        persisted.append(event)
+        return EventPersistenceResult(
+            event_id=persisted_event_id,
+            duplicate=False,
+        )
+
+    configure_dependencies(
+        configured_partner(
+            id="gamma-indonesia",
+            name="Gamma Indonesia",
+            adapter_type="courier-gamma",
+        ),
+        persist_event,
+    )
+
+    gamma_payload = {
+        "notification": {
+            "reference": "gamma-9012",
+            "trackingNumber": "GAM246813579",
+            "status": "DELIVERED",
+            "occurredAt": "2026-08-06T07:21:00Z",
+        }
+    }
+    response = client.post(
+        "/api/v1/partners/gamma-indonesia/events",
+        json=gamma_payload,
+    )
+
+    assert response.status_code == 201
+    assert response.json()["event_id"] == str(persisted_event_id)
+    assert len(persisted) == 1
+    assert persisted[0].partner_id == "gamma-indonesia"
+    assert persisted[0].partner_event_id == "gamma-9012"
+    assert persisted[0].tracking_number == "GAM246813579"
+    assert persisted[0].status is ShipmentStatus.DELIVERED
+    assert persisted[0].occurred_at == datetime(2026, 8, 6, 7, 21, tzinfo=UTC)
+    assert persisted[0].raw_payload == gamma_payload
+
+
 def test_ingestion_reports_a_downstream_server_error_after_persistence(
     client: TestClient,
     valid_payload: dict[str, str],

@@ -1,7 +1,10 @@
 UV := uv
 COMPOSE := docker compose
+SEED ?= 20260806
+SHIPMENTS ?= 3
+OUTPUT ?= results/input-manifest.json
 
-.PHONY: sync test test-integration lint run run-downstream db-up db-status db-check db-down migrate migration-status
+.PHONY: sync test test-integration lint run run-downstream generate db-up db-status db-check db-down migrate migration-status
 
 sync:
 	$(UV) sync --locked --python 3.12
@@ -20,6 +23,9 @@ run:
 
 run-downstream:
 	$(UV) run --locked uvicorn trackrelay.downstream.main:app --reload --host 127.0.0.1 --port 8001
+
+generate:
+	$(UV) run --locked trackrelay-generate --seed $(SEED) --shipments $(SHIPMENTS) --output $(OUTPUT)
 
 db-up:
 	$(COMPOSE) up -d --wait postgres

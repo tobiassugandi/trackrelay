@@ -304,8 +304,8 @@ Goal: explicitly account for every generated event.
 
 ### Step 7.2 — Build a deterministic generator
 
-- [ ] Generate the same dataset from the same seed.
-- [ ] Produce an input manifest containing expected events and final shipment states.
+- [x] Generate the same dataset from the same seed.
+- [x] Produce an input manifest containing expected events and final shipment states.
 
 ### Step 7.3 — Build basic reconciliation
 

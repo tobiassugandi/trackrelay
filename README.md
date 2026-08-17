@@ -180,7 +180,21 @@ A configured business partner submits an event to `POST /api/v1/partners/{partne
 
 Synthetic experiment traffic can include an `X-Test-Run-ID` request header containing a UUID. TrackRelay keeps this laboratory metadata outside the courier-specific JSON, attaches it to the normalized event, stores it as an optional foreign key, and forwards it downstream. Ordinary courier traffic omits the header and retains a null `test_run_id`.
 
-Each `test_runs` row records the scenario name, random seed, JSON configuration, expected event count, start time, and optional completion time. This is the reproducibility boundary that the deterministic generator will populate in Step 7.2.
+Each `test_runs` row records the scenario name, random seed, JSON configuration, expected event count, start time, and optional completion time. A scenario executor can populate this reproducibility boundary directly from the deterministic input manifest.
+
+### Deterministic input manifests
+
+Generate a small normal Courier Alpha dataset without sending any traffic:
+
+```bash
+make generate SEED=20260806 SHIPMENTS=3 OUTPUT=results/input-manifest.json
+```
+
+The same seed, partner, shipment count, and start time produce the same test-run UUID and byte-identical manifest. Pass `--test-run-id` directly to `uv run trackrelay-generate` when a fresh experiment needs a distinct namespace while retaining the same history shape.
+
+The manifest contains every sendable partner payload together with its `test_run_id`, sequence number, partner event ID, tracking number, expected normalized status, and occurrence time. It also records the expected unique-event count and final state of every shipment. Generated partner event and tracking identifiers include the run UUID, so experiments given distinct run IDs use separate identity namespaces.
+
+Generation is intentionally offline in this step: it writes the experiment inputs and expectations but does not alter PostgreSQL or call TrackRelay. Later scenario execution will persist the matching `test_runs` definition and send each payload with the `X-Test-Run-ID` header.
 
 ### Duplicate-event contract
 
@@ -236,4 +250,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, `legacy-failure-behavior-v1`, and `legacy-multipartner-v1` milestones are complete. TrackRelay exposes shipment and event diagnostics, accepts Alpha, Beta, and Gamma formats, and can correlate synthetic events with reproducible test-run definitions. The next step builds a deterministic event generator and input manifest.
+The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, `legacy-failure-behavior-v1`, and `legacy-multipartner-v1` milestones are complete. TrackRelay exposes shipment and event diagnostics, accepts Alpha, Beta, and Gamma formats, and can generate reproducible synthetic inputs with explicit expected outcomes. The next step compares an input manifest with TrackRelay's database.

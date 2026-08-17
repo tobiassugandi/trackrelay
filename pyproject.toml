@@ -14,6 +14,9 @@ dependencies = [
     "uvicorn[standard]>=0.35,<1",
 ]
 
+[project.scripts]
+trackrelay-generate = "trackrelay.experiments.generator:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8.4,<10",

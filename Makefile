@@ -3,8 +3,10 @@ COMPOSE := docker compose
 SEED ?= 20260806
 SHIPMENTS ?= 3
 OUTPUT ?= results/input-manifest.json
+MANIFEST ?= results/input-manifest.json
+REPORT ?= results/reconciliation.json
 
-.PHONY: sync test test-integration lint run run-downstream generate db-up db-status db-check db-down migrate migration-status
+.PHONY: sync test test-integration lint run run-downstream generate reconcile db-up db-status db-check db-down migrate migration-status
 
 sync:
 	$(UV) sync --locked --python 3.12
@@ -26,6 +28,9 @@ run-downstream:
 
 generate:
 	$(UV) run --locked trackrelay-generate --seed $(SEED) --shipments $(SHIPMENTS) --output $(OUTPUT)
+
+reconcile:
+	$(UV) run --locked trackrelay-reconcile --manifest $(MANIFEST) --output $(REPORT)
 
 db-up:
 	$(COMPOSE) up -d --wait postgres

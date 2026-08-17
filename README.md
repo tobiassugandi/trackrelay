@@ -196,6 +196,20 @@ The manifest contains every sendable partner payload together with its `test_run
 
 Generation is intentionally offline in this step: it writes the experiment inputs and expectations but does not alter PostgreSQL or call TrackRelay. Later scenario execution will persist the matching `test_runs` definition and send each payload with the `X-Test-Run-ID` header.
 
+### Basic reconciliation
+
+After every request in a manifest has been attempted and the matching `test_runs` definition exists, compare the manifest with TrackRelay's configured database:
+
+```bash
+make reconcile \
+  MANIFEST=results/input-manifest.json \
+  REPORT=results/reconciliation.json
+```
+
+The JSON report counts generated and accepted requests, rejected requests without a matching persisted identity, unique persisted events, and unique events in the `processed`, `failed`, or pending `received` states. For this database-only stage, the command assumes every manifest request was attempted before reconciliation.
+
+`unaccounted` identifies persisted run events that have no manifest identity or whose tracking number, normalized status, occurrence time, or raw payload disagrees with the manifest. The report validates `generated = accepted + rejected` and `unique = processed + failed + pending`. Downstream receipts, final shipment-state checks, and duplicate business effects remain Step 7.4.
+
 ### Duplicate-event contract
 
 A logical event is identified by `(partner_id, partner_event_id)`. Multiple HTTP requests carrying that identity are transport retries of the same logical event, not additional events. Likewise, a downstream HTTP delivery is a side effect of the logical event; retrying ingestion must not create another downstream delivery.
@@ -250,4 +264,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, `legacy-failure-behavior-v1`, and `legacy-multipartner-v1` milestones are complete. TrackRelay exposes shipment and event diagnostics, accepts Alpha, Beta, and Gamma formats, and can generate reproducible synthetic inputs with explicit expected outcomes. The next step compares an input manifest with TrackRelay's database.
+The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, `legacy-failure-behavior-v1`, and `legacy-multipartner-v1` milestones are complete. TrackRelay exposes shipment and event diagnostics, accepts Alpha, Beta, and Gamma formats, and can reconcile reproducible synthetic inputs with its persisted event lifecycle. The next step adds downstream receipts and duplicate-business-effect checks.

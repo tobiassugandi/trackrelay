@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 trackrelay-generate = "trackrelay.experiments.generator:main"
+trackrelay-reconcile = "trackrelay.experiments.reconciliation:main"
 
 [dependency-groups]
 dev = [

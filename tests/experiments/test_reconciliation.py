@@ -1,0 +1,256 @@
+"""Tests for basic manifest-to-database reconciliation."""
+
+from datetime import timedelta
+from pathlib import Path
+from uuid import UUID
+
+from pydantic import ValidationError
+from pytest import raises
+
+from trackrelay.database import Base, create_database_engine, create_session_factory
+from trackrelay.domain import EventProcessingStatus, ShipmentStatus
+from trackrelay.experiments.generator import (
+    GeneratorConfiguration,
+    InputManifest,
+    generate_input_manifest,
+    write_input_manifest,
+)
+from trackrelay.experiments.reconciliation import (
+    ReconciliationReport,
+    load_input_manifest,
+    reconcile_manifest,
+    write_reconciliation_report,
+)
+from trackrelay.experiments.reconciliation import (
+    TestRunDefinitionMismatchError as RunDefinitionMismatchError,
+)
+from trackrelay.experiments.reconciliation import (
+    TestRunNotFoundError as RunNotFoundError,
+)
+from trackrelay.models import Event, Partner, Shipment
+from trackrelay.models import TestRun as ExperimentRunModel
+
+TEST_RUN_ID = UUID("00000000-0000-0000-0000-000000000703")
+
+
+def build_manifest() -> InputManifest:
+    return generate_input_manifest(
+        seed=20260817,
+        configuration=GeneratorConfiguration(
+            partner_id="alpha-indonesia",
+            shipment_count=1,
+        ),
+        test_run_id=TEST_RUN_ID,
+    )
+
+
+def create_test_database(manifest: InputManifest):
+    engine = create_database_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    sessions = create_session_factory(engine)
+    tracking_number = next(iter(manifest.expected_final_shipments))
+
+    with sessions.begin() as session:
+        session.add(
+            ExperimentRunModel(
+                id=manifest.test_run_id,
+                scenario_name=manifest.scenario_name,
+                random_seed=manifest.seed,
+                configuration=manifest.configuration.model_dump(mode="json"),
+                expected_event_count=manifest.events_generated,
+            )
+        )
+        session.add(
+            Partner(
+                id=manifest.configuration.partner_id,
+                name="Alpha Indonesia",
+                adapter_type="courier-alpha",
+            )
+        )
+        session.add(
+            Shipment(
+                tracking_number=tracking_number,
+                current_status=ShipmentStatus.DELIVERED,
+                current_status_occurred_at=manifest.expected_events[-1]
+                .expected_occurred_at,
+            )
+        )
+
+    return engine, sessions
+
+
+def add_expected_event(
+    expected,
+    *,
+    processing_status: EventProcessingStatus,
+    sessions,
+    raw_payload: dict[str, object] | None = None,
+) -> None:
+    with sessions.begin() as session:
+        session.add(
+            Event(
+                partner_id=expected.partner_id,
+                partner_event_id=expected.partner_event_id,
+                tracking_number=expected.tracking_number,
+                status=expected.expected_status,
+                occurred_at=expected.expected_occurred_at,
+                received_at=expected.expected_occurred_at + timedelta(seconds=1),
+                raw_payload=(
+                    expected.payload if raw_payload is None else raw_payload
+                ),
+                test_run_id=expected.test_run_id,
+                processing_status=processing_status,
+                state_applied=True,
+            )
+        )
+
+
+def test_reconciliation_reports_request_and_processing_counts() -> None:
+    manifest = build_manifest()
+    engine, sessions = create_test_database(manifest)
+    processing_statuses = (
+        EventProcessingStatus.PROCESSED,
+        EventProcessingStatus.PROCESSED,
+        EventProcessingStatus.FAILED,
+        EventProcessingStatus.RECEIVED,
+    )
+    for expected, processing_status in zip(
+        manifest.expected_events,
+        processing_statuses,
+        strict=False,
+    ):
+        add_expected_event(
+            expected,
+            processing_status=processing_status,
+            sessions=sessions,
+        )
+
+    with sessions() as session:
+        report = reconcile_manifest(manifest, session=session)
+
+    assert report == ReconciliationReport(
+        test_run_id=manifest.test_run_id,
+        generated=5,
+        accepted=4,
+        rejected=1,
+        unique=4,
+        processed=2,
+        failed=1,
+        pending=1,
+        unaccounted=0,
+    )
+    engine.dispose()
+
+
+def test_reconciliation_marks_mismatched_and_unexpected_rows_unaccounted() -> None:
+    manifest = build_manifest()
+    engine, sessions = create_test_database(manifest)
+    for expected in manifest.expected_events:
+        add_expected_event(
+            expected,
+            processing_status=EventProcessingStatus.PROCESSED,
+            sessions=sessions,
+            raw_payload=(
+                {"unexpected": "payload"}
+                if expected.sequence_number == 1
+                else None
+            ),
+        )
+
+    first = manifest.expected_events[0]
+    with sessions.begin() as session:
+        session.add(
+            Event(
+                partner_id=first.partner_id,
+                partner_event_id="UNEXPECTED-RUN-EVENT",
+                tracking_number=first.tracking_number,
+                status=ShipmentStatus.CREATED,
+                occurred_at=first.expected_occurred_at,
+                received_at=first.expected_occurred_at + timedelta(seconds=2),
+                raw_payload={"event_id": "UNEXPECTED-RUN-EVENT"},
+                test_run_id=manifest.test_run_id,
+                processing_status=EventProcessingStatus.PROCESSED,
+                state_applied=False,
+            )
+        )
+
+    with sessions() as session:
+        report = reconcile_manifest(manifest, session=session)
+
+    assert report.accepted == 5
+    assert report.rejected == 0
+    assert report.unique == 5
+    assert report.processed == 5
+    assert report.unaccounted == 2
+    engine.dispose()
+
+
+def test_reconciliation_requires_the_manifest_test_run() -> None:
+    manifest = build_manifest()
+    engine = create_database_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    sessions = create_session_factory(engine)
+
+    with sessions() as session, raises(RunNotFoundError, match=str(TEST_RUN_ID)):
+        reconcile_manifest(manifest, session=session)
+
+    engine.dispose()
+
+
+def test_reconciliation_rejects_mismatched_test_run_metadata() -> None:
+    manifest = build_manifest()
+    engine, sessions = create_test_database(manifest)
+    with sessions.begin() as session:
+        test_run = session.get(ExperimentRunModel, manifest.test_run_id)
+        assert test_run is not None
+        test_run.random_seed += 1
+
+    with sessions() as session, raises(
+        RunDefinitionMismatchError,
+        match="random_seed",
+    ):
+        reconcile_manifest(manifest, session=session)
+
+    engine.dispose()
+
+
+def test_manifest_and_report_files_round_trip_through_their_schemas(
+    tmp_path: Path,
+) -> None:
+    manifest = build_manifest()
+    manifest_path = tmp_path / "input-manifest.json"
+    report_path = tmp_path / "reconciliation.json"
+    report = ReconciliationReport(
+        test_run_id=manifest.test_run_id,
+        generated=5,
+        accepted=5,
+        rejected=0,
+        unique=5,
+        processed=5,
+        failed=0,
+        pending=0,
+        unaccounted=0,
+    )
+
+    write_input_manifest(manifest, manifest_path)
+    write_reconciliation_report(report, report_path)
+
+    assert load_input_manifest(manifest_path) == manifest
+    assert ReconciliationReport.model_validate_json(
+        report_path.read_text(encoding="utf-8")
+    ) == report
+
+
+def test_report_rejects_inconsistent_accounting() -> None:
+    with raises(ValidationError, match="generated"):
+        ReconciliationReport(
+            test_run_id=TEST_RUN_ID,
+            generated=5,
+            accepted=4,
+            rejected=0,
+            unique=4,
+            processed=4,
+            failed=0,
+            pending=0,
+            unaccounted=0,
+        )

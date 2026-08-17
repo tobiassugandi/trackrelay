@@ -309,8 +309,8 @@ Goal: explicitly account for every generated event.
 
 ### Step 7.3 — Build basic reconciliation
 
-- [ ] Compare the input manifest with TrackRelay's database.
-- [ ] Report accepted, rejected, unique, processed, failed, pending, and unaccounted events.
+- [x] Compare the input manifest with TrackRelay's database.
+- [x] Report accepted, rejected, unique, processed, failed, pending, and unaccounted events.
 
 ### Step 7.4 — Reconcile downstream effects
 

@@ -110,6 +110,19 @@ class InputManifest(BaseModel):
             raise ValueError(
                 "expected final shipments must match generated tracking numbers"
             )
+        if any(
+            not any(
+                event.tracking_number == tracking_number
+                and event.expected_status is expected_status
+                for event in self.expected_events
+            )
+            for tracking_number, expected_status in (
+                self.expected_final_shipments.items()
+            )
+        ):
+            raise ValueError(
+                "every expected final state must appear in its shipment history"
+            )
         return self
 
 

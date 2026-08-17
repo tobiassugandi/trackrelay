@@ -198,7 +198,7 @@ Generation is intentionally offline in this step: it writes the experiment input
 
 ### Basic reconciliation
 
-After every request in a manifest has been attempted and the matching `test_runs` definition exists, compare the manifest with TrackRelay's configured database:
+After every request in a manifest has been attempted, the matching `test_runs` definition exists, and the same downstream simulator process still holds its receipts, compare the manifest with TrackRelay's configured database and simulator:
 
 ```bash
 make reconcile \
@@ -206,9 +206,17 @@ make reconcile \
   REPORT=results/reconciliation.json
 ```
 
-The JSON report counts generated and accepted requests, rejected requests without a matching persisted identity, unique persisted events, and unique events in the `processed`, `failed`, or pending `received` states. For this database-only stage, the command assumes every manifest request was attempted before reconciliation.
+The JSON report counts generated and accepted requests, rejected requests without a matching persisted identity, unique persisted events, and unique events in the `processed`, `failed`, or pending `received` states. It also reports simulator receipts, unique downstream events, duplicate business effects, and incorrect final shipment states. The command assumes every manifest request was attempted before reconciliation.
 
-`unaccounted` identifies persisted run events that have no manifest identity or whose tracking number, normalized status, occurrence time, or raw payload disagrees with the manifest. The report validates `generated = accepted + rejected` and `unique = processed + failed + pending`. Downstream receipts, final shipment-state checks, and duplicate business effects remain Step 7.4.
+`unaccounted` identifies persisted run events that have no manifest identity, whose stored or received content disagrees with the manifest, or whose durable delivery attempts do not agree with simulator receipts. A failed delivery attempt with no receipt remains explicitly accounted for; a successful attempt without a receipt, or a receipt without a successful attempt, does not.
+
+`invariants_passed` is true only when all three reconciliation invariants hold:
+
+```text
+unique = processed + failed + pending
+unaccounted = 0
+duplicate business effects = 0
+```
 
 ### Duplicate-event contract
 
@@ -264,4 +272,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, `legacy-failure-behavior-v1`, and `legacy-multipartner-v1` milestones are complete. TrackRelay exposes shipment and event diagnostics, accepts Alpha, Beta, and Gamma formats, and can reconcile reproducible synthetic inputs with its persisted event lifecycle. The next step adds downstream receipts and duplicate-business-effect checks.
+The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, `legacy-failure-behavior-v1`, and `legacy-multipartner-v1` milestones are complete. TrackRelay exposes shipment and event diagnostics, accepts Alpha, Beta, and Gamma formats, and reconciles reproducible inputs across persistence, shipment state, delivery attempts, and downstream receipts. The next step exposes a test-run summary endpoint.

@@ -314,8 +314,8 @@ Goal: explicitly account for every generated event.
 
 ### Step 7.4 — Reconcile downstream effects
 
-- [ ] Include simulator receipts and duplicate business effects.
-- [ ] Enforce these invariants:
+- [x] Include simulator receipts and duplicate business effects.
+- [x] Enforce these invariants:
 
 ```text
 unique accepted events = processed + explicitly failed + pending

@@ -86,6 +86,7 @@ class ReconciliationReport(BaseModel):
             self.unique == self.processed + self.failed + self.pending
             and self.unaccounted == 0
             and self.duplicate_business_effects == 0
+            and self.incorrect_final_shipment_states == 0
         )
         if self.invariants_passed is not invariants_implied_by_counts:
             raise ValueError("invariants_passed disagrees with report counts")
@@ -530,6 +531,7 @@ def reconcile_manifest(
     invariants_passed = (
         unaccounted_count == 0
         and downstream_delivery_comparison.duplicate_business_effect_count == 0
+        and final_shipment_comparison.incorrect_database_shipment_count == 0
     )
 
     return ReconciliationReport(

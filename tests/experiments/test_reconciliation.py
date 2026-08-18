@@ -155,6 +155,27 @@ def simulator_receipt_for(manifest_event: ManifestEvent) -> NormalizedEvent:
     )
 
 
+def add_complete_delivery_evidence(
+    manifest: InputManifest,
+    *,
+    sessions,
+) -> list[NormalizedEvent]:
+    simulator_receipts = []
+    for manifest_event in manifest.expected_events:
+        database_event_id = add_manifest_event_to_database(
+            manifest_event,
+            processing_status=EventProcessingStatus.PROCESSED,
+            sessions=sessions,
+        )
+        add_delivery_attempt(
+            database_event_id,
+            result=DeliveryAttemptResult.DELIVERED,
+            sessions=sessions,
+        )
+        simulator_receipts.append(simulator_receipt_for(manifest_event))
+    return simulator_receipts
+
+
 def test_reconciliation_reports_request_and_processing_counts() -> None:
     manifest = build_manifest()
     engine, sessions = create_test_database(manifest)
@@ -272,19 +293,10 @@ def test_reconciliation_marks_mismatched_and_unexpected_rows_unaccounted() -> No
 def test_reconciliation_detects_duplicate_effects_and_wrong_final_state() -> None:
     manifest = build_manifest()
     engine, sessions = create_test_database(manifest)
-    simulator_receipts = []
-    for manifest_event in manifest.expected_events:
-        database_event_id = add_manifest_event_to_database(
-            manifest_event,
-            processing_status=EventProcessingStatus.PROCESSED,
-            sessions=sessions,
-        )
-        add_delivery_attempt(
-            database_event_id,
-            result=DeliveryAttemptResult.DELIVERED,
-            sessions=sessions,
-        )
-        simulator_receipts.append(simulator_receipt_for(manifest_event))
+    simulator_receipts = add_complete_delivery_evidence(
+        manifest,
+        sessions=sessions,
+    )
     simulator_receipts.append(simulator_receipt_for(manifest.expected_events[0]))
 
     tracking_number = next(iter(manifest.expected_final_shipments))
@@ -305,6 +317,34 @@ def test_reconciliation_detects_duplicate_effects_and_wrong_final_state() -> Non
     assert report.duplicate_business_effects == 1
     assert report.incorrect_final_shipment_states == 1
     assert report.unaccounted == 1
+    assert report.invariants_passed is False
+    engine.dispose()
+
+
+def test_wrong_final_shipment_state_alone_fails_reconciliation() -> None:
+    manifest = build_manifest()
+    engine, sessions = create_test_database(manifest)
+    simulator_receipts = add_complete_delivery_evidence(
+        manifest,
+        sessions=sessions,
+    )
+
+    tracking_number = next(iter(manifest.expected_final_shipments))
+    with sessions.begin() as session:
+        database_shipment = session.get(Shipment, tracking_number)
+        assert database_shipment is not None
+        database_shipment.current_status = ShipmentStatus.OUT_FOR_DELIVERY
+
+    with sessions() as session:
+        report = reconcile_manifest(
+            manifest,
+            session=session,
+            simulator_receipts=simulator_receipts,
+        )
+
+    assert report.unaccounted == 0
+    assert report.duplicate_business_effects == 0
+    assert report.incorrect_final_shipment_states == 1
     assert report.invariants_passed is False
     engine.dispose()
 

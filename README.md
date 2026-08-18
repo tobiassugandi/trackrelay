@@ -218,12 +218,13 @@ The `test_run_id` selects one experiment. Inside that experiment, `(partner_id, 
 
 `unaccounted` identifies persisted run events that have no manifest identity, whose stored or received content disagrees with the manifest, or whose durable delivery attempts do not agree with simulator receipts. A failed delivery attempt with no receipt remains explicitly accounted for; a successful attempt without a receipt, or a receipt without a successful attempt, does not.
 
-`invariants_passed` is true only when all three reconciliation invariants hold:
+`invariants_passed` is true only when all four reconciliation invariants hold:
 
 ```text
 unique = processed + failed + pending
 unaccounted = 0
 duplicate business effects = 0
+incorrect final shipment states = 0
 ```
 
 ### Duplicate-event contract

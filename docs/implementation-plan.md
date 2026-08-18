@@ -321,6 +321,7 @@ Goal: explicitly account for every generated event.
 unique accepted events = processed + explicitly failed + pending
 unaccounted events = 0
 unexpected duplicate business effects = 0
+incorrect final shipment states = 0
 ```
 
 ### Step 7.5 — Add a test-run summary endpoint

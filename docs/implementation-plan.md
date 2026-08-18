@@ -326,8 +326,8 @@ incorrect final shipment states = 0
 
 ### Step 7.5 — Add a test-run summary endpoint
 
-- [ ] Add `GET /api/v1/test-runs/{test_run_id}/summary`.
-- [ ] Make the machine-readable report easy to save.
+- [x] Add `GET /api/v1/test-runs/{test_run_id}/summary`.
+- [x] Make the machine-readable report easy to save.
 
 **Milestone:** `legacy-reconciliation-v1`.
 

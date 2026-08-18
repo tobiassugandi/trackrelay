@@ -5,8 +5,11 @@ SHIPMENTS ?= 3
 OUTPUT ?= results/input-manifest.json
 MANIFEST ?= results/input-manifest.json
 REPORT ?= results/reconciliation.json
+API_URL ?= http://127.0.0.1:8000
+TEST_RUN_ID ?=
+SUMMARY ?= results/test-run-summary.json
 
-.PHONY: sync test test-integration lint run run-downstream generate reconcile db-up db-status db-check db-down migrate migration-status
+.PHONY: sync test test-integration lint run run-downstream generate reconcile summary db-up db-status db-check db-down migrate migration-status
 
 sync:
 	$(UV) sync --locked --python 3.12
@@ -31,6 +34,11 @@ generate:
 
 reconcile:
 	$(UV) run --locked trackrelay-reconcile --manifest $(MANIFEST) --output $(REPORT)
+
+summary:
+	test -n "$(TEST_RUN_ID)"
+	mkdir -p "$(dir $(SUMMARY))"
+	curl --fail --silent --show-error "$(API_URL)/api/v1/test-runs/$(TEST_RUN_ID)/summary" --output "$(SUMMARY)"
 
 db-up:
 	$(COMPOSE) up -d --wait postgres

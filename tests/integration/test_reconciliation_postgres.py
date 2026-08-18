@@ -18,6 +18,7 @@ from trackrelay.experiments.generator import (
     generate_input_manifest,
 )
 from trackrelay.experiments.reconciliation import reconcile_manifest
+from trackrelay.main import get_test_run_summary
 from trackrelay.models import DeliveryAttempt, Event, Partner, Shipment
 from trackrelay.models import TestRun as ExperimentRunModel
 
@@ -139,6 +140,7 @@ def test_postgres_reconciliation_accounts_for_a_complete_manifest() -> None:
                 session=session,
                 simulator_receipts=simulator_receipts,
             )
+            summary = get_test_run_summary(TEST_RUN_ID, session)
 
         assert report.generated == 5
         assert report.accepted == 5
@@ -153,5 +155,10 @@ def test_postgres_reconciliation_accounts_for_a_complete_manifest() -> None:
         assert report.duplicate_business_effects == 0
         assert report.incorrect_final_shipment_states == 0
         assert report.invariants_passed is True
+        assert summary.declared_event_count == 5
+        assert summary.database_events.persisted == 5
+        assert summary.database_events.processed == 5
+        assert summary.database_delivery_attempts.total == 5
+        assert summary.database_delivery_attempts.delivered == 5
     finally:
         cleanup_records()

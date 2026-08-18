@@ -8,8 +8,8 @@ from uuid import UUID
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
 from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
-from sqlalchemy import select
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
+from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,7 @@ from trackrelay.domain import (
     ShipmentStatus,
 )
 from trackrelay.models import DeliveryAttempt, Event, Partner, Shipment
+from trackrelay.models import TestRun as ExperimentRunModel
 from trackrelay.partners import PARTNER_ADAPTERS
 from trackrelay.services import (
     DeliveryResult,
@@ -36,6 +37,7 @@ app = FastAPI(title=settings.app_name, debug=settings.debug)
 
 EventPersister = Callable[[NormalizedEvent], EventPersistenceResult]
 EventDeliverer = Callable[[NormalizedEvent, UUID], DeliveryResult]
+NonNegativeCount = Annotated[int, Field(ge=0)]
 
 
 class CreatedEventResponse(BaseModel):
@@ -114,6 +116,39 @@ class EventInspectionResponse(ShipmentHistoryEventResponse):
     delivery_attempts: list[DeliveryAttemptResponse]
 
 
+class DatabaseEventSummary(BaseModel):
+    """Persisted event counts for one test run."""
+
+    persisted: NonNegativeCount
+    processed: NonNegativeCount
+    failed: NonNegativeCount
+    pending: NonNegativeCount
+
+
+class DatabaseDeliveryAttemptSummary(BaseModel):
+    """Persisted downstream-attempt counts for one test run."""
+
+    total: NonNegativeCount
+    delivered: NonNegativeCount
+    http_error: NonNegativeCount
+    transport_error: NonNegativeCount
+
+
+class TestRunSummaryResponse(BaseModel):
+    """Database-backed, machine-readable summary of one test run."""
+
+    schema_version: Literal[1] = 1
+    test_run_id: UUID
+    scenario_name: str
+    random_seed: int
+    configuration: dict[str, JsonValue]
+    declared_event_count: NonNegativeCount
+    started_at: datetime
+    completed_at: datetime | None
+    database_events: DatabaseEventSummary
+    database_delivery_attempts: DatabaseDeliveryAttemptSummary
+
+
 def get_event_persister() -> EventPersister:
     """Provide the application service used to persist normalized events."""
     return persist_normalized_event
@@ -158,6 +193,82 @@ def readiness(
             detail="Database unavailable",
         )
     return {"status": "ready"}
+
+
+@app.get(
+    "/api/v1/test-runs/{test_run_id}/summary",
+    response_model=TestRunSummaryResponse,
+    tags=["test runs"],
+)
+def get_test_run_summary(
+    test_run_id: UUID,
+    session: Annotated[Session, Depends(get_session)],
+) -> TestRunSummaryResponse:
+    """Summarize one run using evidence persisted in TrackRelay's database."""
+    database_test_run = session.get(ExperimentRunModel, test_run_id)
+    if database_test_run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Test run not found",
+        )
+
+    database_event_count_by_status = {
+        processing_status: event_count
+        for processing_status, event_count in session.execute(
+            select(Event.processing_status, func.count(Event.id))
+            .where(Event.test_run_id == test_run_id)
+            .group_by(Event.processing_status)
+        ).tuples()
+    }
+    database_delivery_attempt_count_by_result = {
+        attempt_result: attempt_count
+        for attempt_result, attempt_count in session.execute(
+            select(DeliveryAttempt.result, func.count(DeliveryAttempt.id))
+            .join(Event, DeliveryAttempt.event_id == Event.id)
+            .where(Event.test_run_id == test_run_id)
+            .group_by(DeliveryAttempt.result)
+        ).tuples()
+    }
+
+    return TestRunSummaryResponse(
+        test_run_id=database_test_run.id,
+        scenario_name=database_test_run.scenario_name,
+        random_seed=database_test_run.random_seed,
+        configuration=database_test_run.configuration,
+        declared_event_count=database_test_run.expected_event_count,
+        started_at=database_test_run.started_at,
+        completed_at=database_test_run.completed_at,
+        database_events=DatabaseEventSummary(
+            persisted=sum(database_event_count_by_status.values()),
+            processed=database_event_count_by_status.get(
+                EventProcessingStatus.PROCESSED,
+                0,
+            ),
+            failed=database_event_count_by_status.get(
+                EventProcessingStatus.FAILED,
+                0,
+            ),
+            pending=database_event_count_by_status.get(
+                EventProcessingStatus.RECEIVED,
+                0,
+            ),
+        ),
+        database_delivery_attempts=DatabaseDeliveryAttemptSummary(
+            total=sum(database_delivery_attempt_count_by_result.values()),
+            delivered=database_delivery_attempt_count_by_result.get(
+                DeliveryAttemptResult.DELIVERED,
+                0,
+            ),
+            http_error=database_delivery_attempt_count_by_result.get(
+                DeliveryAttemptResult.HTTP_ERROR,
+                0,
+            ),
+            transport_error=database_delivery_attempt_count_by_result.get(
+                DeliveryAttemptResult.TRANSPORT_ERROR,
+                0,
+            ),
+        ),
+    )
 
 
 @app.get(

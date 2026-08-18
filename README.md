@@ -227,6 +227,20 @@ duplicate business effects = 0
 incorrect final shipment states = 0
 ```
 
+### Test-run database summaries
+
+With the TrackRelay API running, save its persisted view of one experiment as versioned JSON:
+
+```bash
+make summary \
+  TEST_RUN_ID=00000000-0000-0000-0000-000000000705 \
+  SUMMARY=results/test-run-summary.json
+```
+
+This calls `GET /api/v1/test-runs/{test_run_id}/summary`. The response contains the run definition and timestamps, declared event count, database event counts by processing state, and database delivery-attempt counts by result. A known run with no events returns zero counts; an unknown run returns HTTP `404`.
+
+The endpoint deliberately summarizes only evidence persisted by TrackRelay. Use the reconciliation command when the manifest, simulator receipts, duplicate effects, and final shipment correctness must also be compared.
+
 ### Duplicate-event contract
 
 A logical event is identified by `(partner_id, partner_event_id)`. Multiple HTTP requests carrying that identity are transport retries of the same logical event, not additional events. Likewise, a downstream HTTP delivery is a side effect of the logical event; retrying ingestion must not create another downstream delivery.
@@ -275,10 +289,10 @@ TrackRelay will be built in very small, observable steps. Each step should:
 4. Leave the repository in a runnable state.
 5. Produce a result that can be inspected before moving on.
 
-The first vertical slice supports Courier Alpha events from HTTP request through database persistence, shipment updates, and downstream delivery. It treats retries idempotently and retains out-of-order events without reversing shipment state. Failure modes, more couriers, reconciliation, performance testing, and AWS will be added afterward.
+The first vertical slice supports Courier Alpha events from HTTP request through database persistence, shipment updates, and downstream delivery. It treats retries idempotently and retains out-of-order events without reversing shipment state. Performance testing and AWS will be added afterward.
 
 See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-step roadmap.
 
 ## Current status
 
-The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, `legacy-failure-behavior-v1`, and `legacy-multipartner-v1` milestones are complete. TrackRelay exposes shipment and event diagnostics, accepts Alpha, Beta, and Gamma formats, and reconciles reproducible inputs across persistence, shipment state, delivery attempts, and downstream receipts. The next step exposes a test-run summary endpoint.
+The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, `legacy-failure-behavior-v1`, `legacy-multipartner-v1`, and `legacy-reconciliation-v1` milestones are complete. TrackRelay exposes shipment, event, and test-run diagnostics; accepts Alpha, Beta, and Gamma formats; and reconciles reproducible inputs across persistence, shipment state, delivery attempts, and downstream receipts. The next step turns the correctness scenarios into repeatable commands.

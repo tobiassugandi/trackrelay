@@ -18,5 +18,8 @@ wheels/
 .pytest_cache/
 .ruff_cache/
 
+# Generated experiment evidence
+results/
+
 # Operating-system metadata
 .DS_Store

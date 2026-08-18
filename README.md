@@ -241,6 +241,30 @@ This calls `GET /api/v1/test-runs/{test_run_id}/summary`. The response contains 
 
 The endpoint deliberately summarizes only evidence persisted by TrackRelay. Use the reconciliation command when the manifest, simulator receipts, duplicate effects, and final shipment correctness must also be compared.
 
+### Repeatable correctness scenarios
+
+Start PostgreSQL, apply migrations, and run the TrackRelay API and downstream simulator in separate terminals. Then execute any correctness scenario as a command:
+
+```bash
+make scenario-normal
+make scenario-duplicate
+make scenario-out-of-order
+make scenario-downstream-outage
+```
+
+Each command creates a fresh test-run UUID, ensures the configured Courier Alpha partner exists, sends deterministic traffic, and stores its evidence under `results/correctness/<scenario>/<test_run_id>/`:
+
+```text
+input-manifest.json
+request-observations.json
+database-summary.json
+reconciliation.json
+```
+
+The duplicate scenario sends each business identity twice and expects only the first request to create a database event or downstream effect. The out-of-order scenario sends every shipment history in reverse while expecting the final shipment state to remain delivered. The outage scenario switches the simulator to `UNAVAILABLE`, expects persisted events with HTTP-error delivery attempts, and restores the simulator to `HEALTHY` afterward.
+
+Every command runs reconciliation before it succeeds. It exits unsuccessfully after saving the evidence if the observed HTTP statuses disagree with the scenario or any reconciliation invariant fails. Override `SEED`, `SHIPMENTS`, `API_URL`, or `CORRECTNESS_OUTPUT` through Make variables when needed.
+
 ### Duplicate-event contract
 
 A logical event is identified by `(partner_id, partner_event_id)`. Multiple HTTP requests carrying that identity are transport retries of the same logical event, not additional events. Likewise, a downstream HTTP delivery is a side effect of the logical event; retrying ingestion must not create another downstream delivery.
@@ -295,4 +319,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, `legacy-failure-behavior-v1`, `legacy-multipartner-v1`, and `legacy-reconciliation-v1` milestones are complete. TrackRelay exposes shipment, event, and test-run diagnostics; accepts Alpha, Beta, and Gamma formats; and reconciles reproducible inputs across persistence, shipment state, delivery attempts, and downstream receipts. The next step turns the correctness scenarios into repeatable commands.
+The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, `legacy-failure-behavior-v1`, `legacy-multipartner-v1`, and `legacy-reconciliation-v1` milestones are complete. TrackRelay exposes shipment, event, and test-run diagnostics; accepts Alpha, Beta, and Gamma formats; and runs reconciled normal, duplicate, out-of-order, and downstream-outage experiments from repeatable commands. The next step adds a tiny k6 smoke test.

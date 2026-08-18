@@ -337,8 +337,8 @@ Goal: establish an evidence-based baseline for the synchronous architecture.
 
 ### Step 8.1 — Turn correctness scenarios into commands
 
-- [ ] Add normal, duplicate, out-of-order, and downstream-outage commands.
-- [ ] Reconcile every run.
+- [x] Add normal, duplicate, out-of-order, and downstream-outage commands.
+- [x] Reconcile every run.
 
 ### Step 8.2 — Add a k6 smoke test
 

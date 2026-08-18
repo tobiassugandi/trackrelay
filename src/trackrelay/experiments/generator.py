@@ -33,6 +33,12 @@ ManifestIdentifier = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1),
 ]
+ScenarioName = Literal[
+    "normal",
+    "duplicate",
+    "out-of-order",
+    "downstream-outage",
+]
 
 
 class GeneratorConfiguration(BaseModel):
@@ -67,7 +73,7 @@ class InputManifest(BaseModel):
 
     schema_version: Literal[1] = 1
     test_run_id: UUID
-    scenario_name: Literal["normal"] = "normal"
+    scenario_name: ScenarioName = "normal"
     seed: int
     configuration: GeneratorConfiguration
     events_generated: Annotated[int, Field(ge=0)]

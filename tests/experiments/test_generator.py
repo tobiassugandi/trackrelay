@@ -125,6 +125,24 @@ def test_manifest_rejects_a_summary_that_does_not_match_its_events() -> None:
         InputManifest.model_validate(invalid)
 
 
+def test_manifest_rejects_a_final_state_missing_from_shipment_history() -> None:
+    configuration = GeneratorConfiguration(
+        partner_id="alpha-indonesia",
+        shipment_count=1,
+    )
+    manifest = generate_input_manifest(
+        seed=20260806,
+        configuration=configuration,
+    )
+    invalid = json.loads(manifest.model_dump_json())
+    invalid["expected_events"] = invalid["expected_events"][:-1]
+    invalid["events_generated"] = 4
+    invalid["expected_unique_events"] = 4
+
+    with raises(ValidationError, match="final states missing"):
+        InputManifest.model_validate(invalid)
+
+
 def test_generator_advances_each_shipment_through_the_five_statuses() -> None:
     one_shipment = GeneratorConfiguration(
         partner_id="alpha-indonesia",

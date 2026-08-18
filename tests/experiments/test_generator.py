@@ -60,17 +60,17 @@ def test_manifest_contains_sendable_events_and_final_shipment_states() -> None:
         for event in manifest.expected_events
     )
 
-    for expected in manifest.expected_events:
-        payload = CourierAlphaPayload.model_validate(expected.payload)
+    for manifest_event in manifest.expected_events:
+        payload = CourierAlphaPayload.model_validate(manifest_event.payload)
         normalized = adapter.normalize(
             payload,
-            partner_id=expected.partner_id,
+            partner_id=manifest_event.partner_id,
             received_at=RECEIVED_AT,
         )
-        assert normalized.partner_event_id == expected.partner_event_id
-        assert normalized.tracking_number == expected.tracking_number
-        assert normalized.status is expected.expected_status
-        assert normalized.occurred_at == expected.expected_occurred_at
+        assert normalized.partner_event_id == manifest_event.partner_event_id
+        assert normalized.tracking_number == manifest_event.tracking_number
+        assert normalized.status is manifest_event.expected_status
+        assert normalized.occurred_at == manifest_event.expected_occurred_at
 
     assert set(manifest.expected_final_shipments) == {
         event.tracking_number for event in manifest.expected_events

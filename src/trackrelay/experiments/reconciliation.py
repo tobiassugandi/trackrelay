@@ -1,8 +1,15 @@
-"""Compare one generated input manifest with TrackRelay's database."""
+"""Reconcile manifest, database, and downstream evidence for one test run.
+
+The test-run ID scopes an experiment. Within that run, the partner ID plus
+partner event ID is the shared business identity used to match manifest events,
+database events, delivery attempts, and simulator receipts. Tracking numbers
+group those events into shipment histories for the final-state comparison.
+"""
 
 from argparse import ArgumentParser
 from collections import Counter
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
@@ -27,11 +34,11 @@ from trackrelay.domain import (
     EventProcessingStatus,
     NormalizedEvent,
 )
-from trackrelay.experiments.generator import ExpectedEvent, InputManifest
+from trackrelay.experiments.generator import InputManifest, ManifestEvent
 from trackrelay.models import DeliveryAttempt, Event, Shipment
 from trackrelay.models import TestRun as ExperimentRunModel
 
-EventIdentity = tuple[str, str]
+BusinessEventIdentity = tuple[str, str]
 Count = Annotated[int, Field(ge=0)]
 
 
@@ -75,14 +82,52 @@ class ReconciliationReport(BaseModel):
             )
         if self.unique > self.accepted:
             raise ValueError("unique events cannot exceed accepted requests")
-        expected_invariants_passed = (
+        invariants_implied_by_counts = (
             self.unique == self.processed + self.failed + self.pending
             and self.unaccounted == 0
             and self.duplicate_business_effects == 0
         )
-        if self.invariants_passed is not expected_invariants_passed:
+        if self.invariants_passed is not invariants_implied_by_counts:
             raise ValueError("invariants_passed disagrees with report counts")
         return self
+
+
+@dataclass(frozen=True)
+class DatabaseEventComparison:
+    """Result of comparing manifest events with persisted database events."""
+
+    accepted_manifest_request_count: int
+    rejected_manifest_request_count: int
+    database_event_by_business_identity: dict[BusinessEventIdentity, Event]
+    database_event_matching_manifest_by_identity: dict[
+        BusinessEventIdentity,
+        Event,
+    ]
+    database_processing_status_count: Counter[EventProcessingStatus]
+    database_content_mismatch_identities: set[BusinessEventIdentity]
+    unexpected_database_event_identities: set[BusinessEventIdentity]
+
+
+@dataclass(frozen=True)
+class DownstreamDeliveryComparison:
+    """Result of comparing delivery attempts with simulator receipts."""
+
+    simulator_receipt_count: int
+    simulator_unique_event_count: int
+    duplicate_business_effect_count: int
+    simulator_content_mismatch_identities: set[BusinessEventIdentity]
+    unexpected_simulator_receipt_identities: set[BusinessEventIdentity]
+    processed_without_delivery_attempt_identities: set[
+        BusinessEventIdentity
+    ]
+    delivery_evidence_mismatch_identities: set[BusinessEventIdentity]
+
+
+@dataclass(frozen=True)
+class FinalShipmentComparison:
+    """Result of comparing manifest final states with database shipments."""
+
+    incorrect_database_shipment_count: int
 
 
 def load_input_manifest(manifest_path: Path) -> InputManifest:
@@ -121,9 +166,9 @@ def fetch_simulator_receipts(
     return tuple(TypeAdapter(list[NormalizedEvent]).validate_json(response.content))
 
 
-def _event_identity(
-    event: ExpectedEvent | Event | NormalizedEvent,
-) -> EventIdentity:
+def _business_event_identity(
+    event: ManifestEvent | Event | NormalizedEvent,
+) -> BusinessEventIdentity:
     return event.partner_id, event.partner_event_id
 
 
@@ -134,213 +179,389 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-def _event_matches_expectation(actual: Event, expected: ExpectedEvent) -> bool:
-    return (
-        actual.tracking_number == expected.tracking_number
-        and actual.status is expected.expected_status
-        and _as_utc(actual.occurred_at) == _as_utc(expected.expected_occurred_at)
-        and actual.raw_payload == expected.payload
-    )
-
-
-def _receipt_matches_expectation(
-    receipt: NormalizedEvent,
-    expected: ExpectedEvent,
+def _database_event_matches_manifest_event(
+    database_event: Event,
+    manifest_event: ManifestEvent,
 ) -> bool:
     return (
-        receipt.tracking_number == expected.tracking_number
-        and receipt.status is expected.expected_status
-        and _as_utc(receipt.occurred_at)
-        == _as_utc(expected.expected_occurred_at)
-        and receipt.raw_payload == expected.payload
+        database_event.tracking_number == manifest_event.tracking_number
+        and database_event.status is manifest_event.expected_status
+        and _as_utc(database_event.occurred_at)
+        == _as_utc(manifest_event.expected_occurred_at)
+        and database_event.raw_payload == manifest_event.payload
     )
 
 
-def _require_matching_test_run(
+def _simulator_receipt_matches_manifest_event(
+    simulator_receipt: NormalizedEvent,
+    manifest_event: ManifestEvent,
+) -> bool:
+    return (
+        simulator_receipt.tracking_number == manifest_event.tracking_number
+        and simulator_receipt.status is manifest_event.expected_status
+        and _as_utc(simulator_receipt.occurred_at)
+        == _as_utc(manifest_event.expected_occurred_at)
+        and simulator_receipt.raw_payload == manifest_event.payload
+    )
+
+
+def _require_database_test_run_matches_manifest(
     manifest: InputManifest,
     session: Session,
 ) -> None:
-    test_run = session.get(ExperimentRunModel, manifest.test_run_id)
-    if test_run is None:
+    database_test_run = session.get(ExperimentRunModel, manifest.test_run_id)
+    if database_test_run is None:
         raise TestRunNotFoundError(
             f"Test run {manifest.test_run_id} is not present in the database"
         )
 
-    expected_configuration = manifest.configuration.model_dump(mode="json")
-    mismatched_fields = []
-    if test_run.scenario_name != manifest.scenario_name:
-        mismatched_fields.append("scenario_name")
-    if test_run.random_seed != manifest.seed:
-        mismatched_fields.append("random_seed")
-    if test_run.configuration != expected_configuration:
-        mismatched_fields.append("configuration")
-    if test_run.expected_event_count != manifest.events_generated:
-        mismatched_fields.append("expected_event_count")
+    manifest_configuration = manifest.configuration.model_dump(mode="json")
+    definition_mismatch_fields = []
+    if database_test_run.scenario_name != manifest.scenario_name:
+        definition_mismatch_fields.append("scenario_name")
+    if database_test_run.random_seed != manifest.seed:
+        definition_mismatch_fields.append("random_seed")
+    if database_test_run.configuration != manifest_configuration:
+        definition_mismatch_fields.append("configuration")
+    if database_test_run.expected_event_count != manifest.events_generated:
+        definition_mismatch_fields.append("expected_event_count")
 
-    if mismatched_fields:
-        fields = ", ".join(mismatched_fields)
+    if definition_mismatch_fields:
+        mismatch_field_names = ", ".join(definition_mismatch_fields)
         raise TestRunDefinitionMismatchError(
-            f"Test run definition disagrees with manifest: {fields}"
+            "Test run definition disagrees with manifest: "
+            f"{mismatch_field_names}"
         )
+
+
+def _compare_manifest_with_database_events(
+    manifest: InputManifest,
+    *,
+    database_events: Sequence[Event],
+) -> DatabaseEventComparison:
+    manifest_event_by_identity = {
+        _business_event_identity(manifest_event): manifest_event
+        for manifest_event in manifest.expected_events
+    }
+    database_event_by_identity = {
+        _business_event_identity(database_event): database_event
+        for database_event in database_events
+    }
+
+    manifest_event_identities = set(manifest_event_by_identity)
+    database_event_matching_manifest_by_identity = {
+        identity: database_event
+        for identity, database_event in database_event_by_identity.items()
+        if identity in manifest_event_identities
+    }
+    accepted_manifest_request_count = sum(
+        _business_event_identity(manifest_event) in database_event_by_identity
+        for manifest_event in manifest.expected_events
+    )
+
+    database_content_mismatch_identities: set[BusinessEventIdentity] = set()
+    for identity, manifest_event in manifest_event_by_identity.items():
+        database_event = database_event_by_identity.get(identity)
+        if database_event is None:
+            continue
+        if not _database_event_matches_manifest_event(
+            database_event,
+            manifest_event,
+        ):
+            database_content_mismatch_identities.add(identity)
+    unexpected_database_event_identities = (
+        set(database_event_by_identity) - manifest_event_identities
+    )
+
+    return DatabaseEventComparison(
+        accepted_manifest_request_count=accepted_manifest_request_count,
+        rejected_manifest_request_count=(
+            manifest.events_generated - accepted_manifest_request_count
+        ),
+        database_event_by_business_identity=database_event_by_identity,
+        database_event_matching_manifest_by_identity=(
+            database_event_matching_manifest_by_identity
+        ),
+        database_processing_status_count=Counter(
+            database_event.processing_status
+            for database_event in (
+                database_event_matching_manifest_by_identity.values()
+            )
+        ),
+        database_content_mismatch_identities=(
+            database_content_mismatch_identities
+        ),
+        unexpected_database_event_identities=(
+            unexpected_database_event_identities
+        ),
+    )
+
+
+def _compare_delivery_attempts_with_simulator_receipts(
+    manifest: InputManifest,
+    *,
+    database_event_by_business_identity: dict[BusinessEventIdentity, Event],
+    database_event_matching_manifest_by_identity: dict[
+        BusinessEventIdentity,
+        Event,
+    ],
+    database_delivery_attempts: Sequence[DeliveryAttempt],
+    simulator_receipts_for_run: Sequence[NormalizedEvent],
+) -> DownstreamDeliveryComparison:
+    manifest_event_by_identity = {
+        _business_event_identity(manifest_event): manifest_event
+        for manifest_event in manifest.expected_events
+    }
+    business_identity_by_database_event_id = {
+        database_event.id: identity
+        for identity, database_event in (
+            database_event_by_business_identity.items()
+        )
+    }
+
+    delivery_attempt_count_by_identity: Counter[BusinessEventIdentity] = Counter()
+    successful_attempt_count_by_identity: Counter[BusinessEventIdentity] = Counter()
+    for database_delivery_attempt in database_delivery_attempts:
+        identity = business_identity_by_database_event_id[
+            database_delivery_attempt.event_id
+        ]
+        delivery_attempt_count_by_identity[identity] += 1
+        if database_delivery_attempt.result is DeliveryAttemptResult.DELIVERED:
+            successful_attempt_count_by_identity[identity] += 1
+
+    simulator_receipt_count_by_identity = Counter(
+        _business_event_identity(simulator_receipt)
+        for simulator_receipt in simulator_receipts_for_run
+    )
+    simulator_content_mismatch_identities: set[BusinessEventIdentity] = set()
+    for simulator_receipt in simulator_receipts_for_run:
+        identity = _business_event_identity(simulator_receipt)
+        manifest_event = manifest_event_by_identity.get(identity)
+        if manifest_event is None:
+            continue
+        if not _simulator_receipt_matches_manifest_event(
+            simulator_receipt,
+            manifest_event,
+        ):
+            simulator_content_mismatch_identities.add(identity)
+    unexpected_simulator_receipt_identities = set(
+        simulator_receipt_count_by_identity
+    ) - set(database_event_matching_manifest_by_identity)
+
+    processed_without_delivery_attempt_identities: set[
+        BusinessEventIdentity
+    ] = set()
+    delivery_evidence_mismatch_identities: set[BusinessEventIdentity] = set()
+    database_events_matching_manifest = (
+        database_event_matching_manifest_by_identity.items()
+    )
+    for identity, database_event in database_events_matching_manifest:
+        delivery_attempt_count = delivery_attempt_count_by_identity[identity]
+        successful_attempt_count = successful_attempt_count_by_identity[identity]
+        simulator_receipt_count = simulator_receipt_count_by_identity[identity]
+
+        if database_event.processing_status is EventProcessingStatus.PROCESSED:
+            if delivery_attempt_count == 0:
+                processed_without_delivery_attempt_identities.add(identity)
+            if simulator_receipt_count != successful_attempt_count:
+                delivery_evidence_mismatch_identities.add(identity)
+        elif simulator_receipt_count or successful_attempt_count:
+            delivery_evidence_mismatch_identities.add(identity)
+
+    duplicate_business_effect_count = sum(
+        max(0, simulator_receipt_count - 1)
+        for simulator_receipt_count in (
+            simulator_receipt_count_by_identity.values()
+        )
+    )
+    return DownstreamDeliveryComparison(
+        simulator_receipt_count=len(simulator_receipts_for_run),
+        simulator_unique_event_count=len(simulator_receipt_count_by_identity),
+        duplicate_business_effect_count=duplicate_business_effect_count,
+        simulator_content_mismatch_identities=(
+            simulator_content_mismatch_identities
+        ),
+        unexpected_simulator_receipt_identities=(
+            unexpected_simulator_receipt_identities
+        ),
+        processed_without_delivery_attempt_identities=(
+            processed_without_delivery_attempt_identities
+        ),
+        delivery_evidence_mismatch_identities=(
+            delivery_evidence_mismatch_identities
+        ),
+    )
+
+
+def _compare_manifest_with_database_shipments(
+    manifest: InputManifest,
+    *,
+    database_shipments: Sequence[Shipment],
+) -> FinalShipmentComparison:
+    database_shipment_by_tracking_number = {
+        database_shipment.tracking_number: database_shipment
+        for database_shipment in database_shipments
+    }
+    manifest_final_event_by_tracking_number = {
+        tracking_number: max(
+            (
+                manifest_event
+                for manifest_event in manifest.expected_events
+                if manifest_event.tracking_number == tracking_number
+                and manifest_event.expected_status is manifest_final_status
+            ),
+            key=lambda manifest_event: (
+                _as_utc(manifest_event.expected_occurred_at),
+                manifest_event.sequence_number,
+            ),
+        )
+        for tracking_number, manifest_final_status in (
+            manifest.expected_final_shipments.items()
+        )
+    }
+
+    incorrect_database_shipment_count = 0
+    for tracking_number, manifest_final_status in (
+        manifest.expected_final_shipments.items()
+    ):
+        database_shipment = database_shipment_by_tracking_number.get(
+            tracking_number
+        )
+        manifest_final_event = manifest_final_event_by_tracking_number[
+            tracking_number
+        ]
+        if (
+            database_shipment is None
+            or database_shipment.current_status is not manifest_final_status
+            or _as_utc(database_shipment.current_status_occurred_at)
+            != _as_utc(manifest_final_event.expected_occurred_at)
+        ):
+            incorrect_database_shipment_count += 1
+
+    return FinalShipmentComparison(
+        incorrect_database_shipment_count=incorrect_database_shipment_count
+    )
 
 
 def reconcile_manifest(
     manifest: InputManifest,
     *,
     session: Session,
-    downstream_receipts: Sequence[NormalizedEvent] = (),
+    simulator_receipts: Sequence[NormalizedEvent] = (),
 ) -> ReconciliationReport:
-    """Account for manifest inputs, persistence, and downstream effects."""
-    _require_matching_test_run(manifest, session)
+    """Tell the reconciliation story one evidence-source boundary at a time."""
+    _require_database_test_run_matches_manifest(manifest, session)
+
     database_events = tuple(
         session.scalars(
             select(Event).where(Event.test_run_id == manifest.test_run_id)
         )
     )
-    actual_by_identity = {
-        _event_identity(event): event for event in database_events
-    }
-    expected_identities = {
-        _event_identity(event) for event in manifest.expected_events
-    }
-
-    accepted = sum(
-        _event_identity(expected) in actual_by_identity
-        for expected in manifest.expected_events
-    )
-    rejected = manifest.events_generated - accepted
-    matched_actual = {
-        identity: event
-        for identity, event in actual_by_identity.items()
-        if identity in expected_identities
-    }
-    processing_counts = Counter(
-        event.processing_status for event in matched_actual.values()
+    database_event_comparison = _compare_manifest_with_database_events(
+        manifest,
+        database_events=database_events,
     )
 
-    mismatched_identities: set[EventIdentity] = set()
-    for expected in manifest.expected_events:
-        identity = _event_identity(expected)
-        actual = actual_by_identity.get(identity)
-        if actual is not None and not _event_matches_expectation(actual, expected):
-            mismatched_identities.add(identity)
-
-    unexpected_identities = set(actual_by_identity) - expected_identities
-    unaccounted_identities = mismatched_identities | unexpected_identities
-
-    attempts = tuple(
+    database_delivery_attempts = tuple(
         session.scalars(
             select(DeliveryAttempt)
             .join(Event, DeliveryAttempt.event_id == Event.id)
             .where(Event.test_run_id == manifest.test_run_id)
         )
     )
-    identity_by_event_id = {
-        event.id: identity for identity, event in actual_by_identity.items()
-    }
-    attempt_counts: Counter[EventIdentity] = Counter()
-    delivered_attempt_counts: Counter[EventIdentity] = Counter()
-    for attempt in attempts:
-        identity = identity_by_event_id[attempt.event_id]
-        attempt_counts[identity] += 1
-        if attempt.result is DeliveryAttemptResult.DELIVERED:
-            delivered_attempt_counts[identity] += 1
-
-    run_receipts = tuple(
-        receipt
-        for receipt in downstream_receipts
-        if receipt.test_run_id == manifest.test_run_id
+    simulator_receipts_for_run = tuple(
+        simulator_receipt
+        for simulator_receipt in simulator_receipts
+        if simulator_receipt.test_run_id == manifest.test_run_id
     )
-    receipt_counts = Counter(_event_identity(receipt) for receipt in run_receipts)
-    expected_by_identity = {
-        _event_identity(event): event for event in manifest.expected_events
-    }
-    for receipt in run_receipts:
-        identity = _event_identity(receipt)
-        expected = expected_by_identity.get(identity)
-        if expected is not None and not _receipt_matches_expectation(
-            receipt,
-            expected,
-        ):
-            unaccounted_identities.add(identity)
-
-    for identity, event in matched_actual.items():
-        receipt_count = receipt_counts[identity]
-        delivered_attempt_count = delivered_attempt_counts[identity]
-        if event.processing_status is EventProcessingStatus.PROCESSED:
-            if (
-                attempt_counts[identity] == 0
-                or receipt_count != delivered_attempt_count
-            ):
-                unaccounted_identities.add(identity)
-        elif receipt_count or delivered_attempt_count:
-            unaccounted_identities.add(identity)
-
-    receipt_identities = set(receipt_counts)
-    unaccounted_identities.update(receipt_identities - set(matched_actual))
-    duplicate_business_effects = sum(
-        max(0, receipt_count - 1)
-        for receipt_count in receipt_counts.values()
+    downstream_delivery_comparison = _compare_delivery_attempts_with_simulator_receipts(
+        manifest,
+        database_event_by_business_identity=(
+            database_event_comparison.database_event_by_business_identity
+        ),
+        database_event_matching_manifest_by_identity=(
+            database_event_comparison.database_event_matching_manifest_by_identity
+        ),
+        database_delivery_attempts=database_delivery_attempts,
+        simulator_receipts_for_run=simulator_receipts_for_run,
     )
 
-    shipments = {
-        shipment.tracking_number: shipment
-        for shipment in session.scalars(
+    database_shipments = tuple(
+        session.scalars(
             select(Shipment).where(
                 Shipment.tracking_number.in_(
                     tuple(manifest.expected_final_shipments)
                 )
             )
         )
-    }
-    final_expected_event = {
-        tracking_number: max(
-            (
-                event
-                for event in manifest.expected_events
-                if event.tracking_number == tracking_number
-                and event.expected_status is expected_status
-            ),
-            key=lambda event: (
-                _as_utc(event.expected_occurred_at),
-                event.sequence_number,
-            ),
-        )
-        for tracking_number, expected_status in (
-            manifest.expected_final_shipments.items()
-        )
-    }
-    incorrect_final_shipment_states = 0
-    for tracking_number, expected_status in (
-        manifest.expected_final_shipments.items()
-    ):
-        shipment = shipments.get(tracking_number)
-        expected_event = final_expected_event[tracking_number]
-        if (
-            shipment is None
-            or shipment.current_status is not expected_status
-            or _as_utc(shipment.current_status_occurred_at)
-            != _as_utc(expected_event.expected_occurred_at)
-        ):
-            incorrect_final_shipment_states += 1
+    )
+    final_shipment_comparison = _compare_manifest_with_database_shipments(
+        manifest,
+        database_shipments=database_shipments,
+    )
 
-    unaccounted = len(unaccounted_identities)
-    invariants_passed = unaccounted == 0 and duplicate_business_effects == 0
+    database_content_mismatches = (
+        database_event_comparison.database_content_mismatch_identities
+    )
+    unexpected_database_events = (
+        database_event_comparison.unexpected_database_event_identities
+    )
+    simulator_content_mismatches = (
+        downstream_delivery_comparison.simulator_content_mismatch_identities
+    )
+    unexpected_simulator_receipts = (
+        downstream_delivery_comparison.unexpected_simulator_receipt_identities
+    )
+    processed_without_delivery_attempts = (
+        downstream_delivery_comparison.processed_without_delivery_attempt_identities
+    )
+    delivery_evidence_mismatches = (
+        downstream_delivery_comparison.delivery_evidence_mismatch_identities
+    )
+    unaccounted_business_identities = (
+        database_content_mismatches
+        | unexpected_database_events
+        | simulator_content_mismatches
+        | unexpected_simulator_receipts
+        | processed_without_delivery_attempts
+        | delivery_evidence_mismatches
+    )
+    unaccounted_count = len(unaccounted_business_identities)
+    invariants_passed = (
+        unaccounted_count == 0
+        and downstream_delivery_comparison.duplicate_business_effect_count == 0
+    )
 
     return ReconciliationReport(
         test_run_id=manifest.test_run_id,
         generated=manifest.events_generated,
-        accepted=accepted,
-        rejected=rejected,
-        unique=len(matched_actual),
-        processed=processing_counts[EventProcessingStatus.PROCESSED],
-        failed=processing_counts[EventProcessingStatus.FAILED],
-        pending=processing_counts[EventProcessingStatus.RECEIVED],
-        unaccounted=unaccounted,
-        simulator_receipts=len(run_receipts),
-        simulator_unique_events=len(receipt_counts),
-        duplicate_business_effects=duplicate_business_effects,
-        incorrect_final_shipment_states=incorrect_final_shipment_states,
+        accepted=database_event_comparison.accepted_manifest_request_count,
+        rejected=database_event_comparison.rejected_manifest_request_count,
+        unique=len(
+            database_event_comparison.database_event_matching_manifest_by_identity
+        ),
+        processed=database_event_comparison.database_processing_status_count[
+            EventProcessingStatus.PROCESSED
+        ],
+        failed=database_event_comparison.database_processing_status_count[
+            EventProcessingStatus.FAILED
+        ],
+        pending=database_event_comparison.database_processing_status_count[
+            EventProcessingStatus.RECEIVED
+        ],
+        unaccounted=unaccounted_count,
+        simulator_receipts=(
+            downstream_delivery_comparison.simulator_receipt_count
+        ),
+        simulator_unique_events=(
+            downstream_delivery_comparison.simulator_unique_event_count
+        ),
+        duplicate_business_effects=(
+            downstream_delivery_comparison.duplicate_business_effect_count
+        ),
+        incorrect_final_shipment_states=(
+            final_shipment_comparison.incorrect_database_shipment_count
+        ),
         invariants_passed=invariants_passed,
     )
 
@@ -360,7 +581,7 @@ def main() -> None:
     arguments = parser.parse_args()
     manifest = load_input_manifest(arguments.manifest)
     try:
-        receipts = fetch_simulator_receipts(
+        simulator_receipts = fetch_simulator_receipts(
             arguments.downstream_url,
             timeout_seconds=Settings().downstream_timeout_seconds,
         )
@@ -368,7 +589,7 @@ def main() -> None:
             report = reconcile_manifest(
                 manifest,
                 session=session,
-                downstream_receipts=receipts,
+                simulator_receipts=simulator_receipts,
             )
     except (
         TestRunNotFoundError,

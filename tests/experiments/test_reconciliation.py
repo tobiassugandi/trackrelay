@@ -18,6 +18,7 @@ from trackrelay.domain import (
 from trackrelay.experiments.generator import (
     GeneratorConfiguration,
     InputManifest,
+    ManifestEvent,
     generate_input_manifest,
     write_input_manifest,
 )
@@ -86,33 +87,35 @@ def create_test_database(manifest: InputManifest):
     return engine, sessions
 
 
-def add_expected_event(
-    expected,
+def add_manifest_event_to_database(
+    manifest_event: ManifestEvent,
     *,
     processing_status: EventProcessingStatus,
     sessions,
     raw_payload: dict[str, object] | None = None,
 ) -> UUID:
     with sessions.begin() as session:
-        event = Event(
-            partner_id=expected.partner_id,
-            partner_event_id=expected.partner_event_id,
-            tracking_number=expected.tracking_number,
-            status=expected.expected_status,
-            occurred_at=expected.expected_occurred_at,
-            received_at=expected.expected_occurred_at + timedelta(seconds=1),
-            raw_payload=(expected.payload if raw_payload is None else raw_payload),
-            test_run_id=expected.test_run_id,
+        database_event = Event(
+            partner_id=manifest_event.partner_id,
+            partner_event_id=manifest_event.partner_event_id,
+            tracking_number=manifest_event.tracking_number,
+            status=manifest_event.expected_status,
+            occurred_at=manifest_event.expected_occurred_at,
+            received_at=(manifest_event.expected_occurred_at + timedelta(seconds=1)),
+            raw_payload=(
+                manifest_event.payload if raw_payload is None else raw_payload
+            ),
+            test_run_id=manifest_event.test_run_id,
             processing_status=processing_status,
             state_applied=True,
         )
-        session.add(event)
+        session.add(database_event)
         session.flush()
-        return event.id
+        return database_event.id
 
 
 def add_delivery_attempt(
-    event_id: UUID,
+    database_event_id: UUID,
     *,
     result: DeliveryAttemptResult,
     sessions,
@@ -121,7 +124,7 @@ def add_delivery_attempt(
     with sessions.begin() as session:
         session.add(
             DeliveryAttempt(
-                event_id=event_id,
+                event_id=database_event_id,
                 attempt_number=1,
                 result=result,
                 response_code=(
@@ -139,16 +142,16 @@ def add_delivery_attempt(
         )
 
 
-def receipt_for(expected) -> NormalizedEvent:
+def simulator_receipt_for(manifest_event: ManifestEvent) -> NormalizedEvent:
     return NormalizedEvent(
-        partner_id=expected.partner_id,
-        partner_event_id=expected.partner_event_id,
-        tracking_number=expected.tracking_number,
-        status=expected.expected_status,
-        occurred_at=expected.expected_occurred_at,
-        received_at=expected.expected_occurred_at + timedelta(seconds=1),
-        raw_payload=expected.payload,
-        test_run_id=expected.test_run_id,
+        partner_id=manifest_event.partner_id,
+        partner_event_id=manifest_event.partner_event_id,
+        tracking_number=manifest_event.tracking_number,
+        status=manifest_event.expected_status,
+        occurred_at=manifest_event.expected_occurred_at,
+        received_at=manifest_event.expected_occurred_at + timedelta(seconds=1),
+        raw_payload=manifest_event.payload,
+        test_run_id=manifest_event.test_run_id,
     )
 
 
@@ -161,27 +164,27 @@ def test_reconciliation_reports_request_and_processing_counts() -> None:
         EventProcessingStatus.FAILED,
         EventProcessingStatus.RECEIVED,
     )
-    receipts = []
-    for expected, processing_status in zip(
+    simulator_receipts = []
+    for manifest_event, processing_status in zip(
         manifest.expected_events,
         processing_statuses,
         strict=False,
     ):
-        event_id = add_expected_event(
-            expected,
+        database_event_id = add_manifest_event_to_database(
+            manifest_event,
             processing_status=processing_status,
             sessions=sessions,
         )
-        if expected.sequence_number == 1:
+        if manifest_event.sequence_number == 1:
             add_delivery_attempt(
-                event_id,
+                database_event_id,
                 result=DeliveryAttemptResult.DELIVERED,
                 sessions=sessions,
             )
-            receipts.append(receipt_for(expected))
-        elif expected.sequence_number == 2:
+            simulator_receipts.append(simulator_receipt_for(manifest_event))
+        elif manifest_event.sequence_number == 2:
             add_delivery_attempt(
-                event_id,
+                database_event_id,
                 result=DeliveryAttemptResult.HTTP_ERROR,
                 sessions=sessions,
             )
@@ -190,7 +193,7 @@ def test_reconciliation_reports_request_and_processing_counts() -> None:
         report = reconcile_manifest(
             manifest,
             session=session,
-            downstream_receipts=receipts,
+            simulator_receipts=simulator_receipts,
         )
 
     assert report == ReconciliationReport(
@@ -212,35 +215,37 @@ def test_reconciliation_reports_request_and_processing_counts() -> None:
 def test_reconciliation_marks_mismatched_and_unexpected_rows_unaccounted() -> None:
     manifest = build_manifest()
     engine, sessions = create_test_database(manifest)
-    receipts = []
-    for expected in manifest.expected_events:
-        event_id = add_expected_event(
-            expected,
+    simulator_receipts = []
+    for manifest_event in manifest.expected_events:
+        database_event_id = add_manifest_event_to_database(
+            manifest_event,
             processing_status=EventProcessingStatus.PROCESSED,
             sessions=sessions,
             raw_payload=(
                 {"unexpected": "payload"}
-                if expected.sequence_number == 1
+                if manifest_event.sequence_number == 1
                 else None
             ),
         )
         add_delivery_attempt(
-            event_id,
+            database_event_id,
             result=DeliveryAttemptResult.DELIVERED,
             sessions=sessions,
         )
-        receipts.append(receipt_for(expected))
+        simulator_receipts.append(simulator_receipt_for(manifest_event))
 
-    first = manifest.expected_events[0]
+    first_manifest_event = manifest.expected_events[0]
     with sessions.begin() as session:
         session.add(
             Event(
-                partner_id=first.partner_id,
+                partner_id=first_manifest_event.partner_id,
                 partner_event_id="UNEXPECTED-RUN-EVENT",
-                tracking_number=first.tracking_number,
+                tracking_number=first_manifest_event.tracking_number,
                 status=ShipmentStatus.CREATED,
-                occurred_at=first.expected_occurred_at,
-                received_at=first.expected_occurred_at + timedelta(seconds=2),
+                occurred_at=first_manifest_event.expected_occurred_at,
+                received_at=(
+                    first_manifest_event.expected_occurred_at + timedelta(seconds=2)
+                ),
                 raw_payload={"event_id": "UNEXPECTED-RUN-EVENT"},
                 test_run_id=manifest.test_run_id,
                 processing_status=EventProcessingStatus.PROCESSED,
@@ -252,7 +257,7 @@ def test_reconciliation_marks_mismatched_and_unexpected_rows_unaccounted() -> No
         report = reconcile_manifest(
             manifest,
             session=session,
-            downstream_receipts=receipts,
+            simulator_receipts=simulator_receipts,
         )
 
     assert report.accepted == 5
@@ -267,20 +272,20 @@ def test_reconciliation_marks_mismatched_and_unexpected_rows_unaccounted() -> No
 def test_reconciliation_detects_duplicate_effects_and_wrong_final_state() -> None:
     manifest = build_manifest()
     engine, sessions = create_test_database(manifest)
-    receipts = []
-    for expected in manifest.expected_events:
-        event_id = add_expected_event(
-            expected,
+    simulator_receipts = []
+    for manifest_event in manifest.expected_events:
+        database_event_id = add_manifest_event_to_database(
+            manifest_event,
             processing_status=EventProcessingStatus.PROCESSED,
             sessions=sessions,
         )
         add_delivery_attempt(
-            event_id,
+            database_event_id,
             result=DeliveryAttemptResult.DELIVERED,
             sessions=sessions,
         )
-        receipts.append(receipt_for(expected))
-    receipts.append(receipt_for(manifest.expected_events[0]))
+        simulator_receipts.append(simulator_receipt_for(manifest_event))
+    simulator_receipts.append(simulator_receipt_for(manifest.expected_events[0]))
 
     tracking_number = next(iter(manifest.expected_final_shipments))
     with sessions.begin() as session:
@@ -292,7 +297,7 @@ def test_reconciliation_detects_duplicate_effects_and_wrong_final_state() -> Non
         report = reconcile_manifest(
             manifest,
             session=session,
-            downstream_receipts=receipts,
+            simulator_receipts=simulator_receipts,
         )
 
     assert report.simulator_receipts == 6
@@ -305,22 +310,22 @@ def test_reconciliation_detects_duplicate_effects_and_wrong_final_state() -> Non
 
 
 def test_fetch_simulator_receipts_validates_normalized_events() -> None:
-    expected = build_manifest().expected_events[0]
-    receipt = receipt_for(expected)
+    manifest_event = build_manifest().expected_events[0]
+    simulator_receipt = simulator_receipt_for(manifest_event)
     transport = httpx.MockTransport(
         lambda request: httpx.Response(
             200,
-            json=[receipt.model_dump(mode="json")],
+            json=[simulator_receipt.model_dump(mode="json")],
         )
     )
 
     with httpx.Client(transport=transport) as client:
-        receipts = fetch_simulator_receipts(
+        fetched_simulator_receipts = fetch_simulator_receipts(
             "http://downstream.test/",
             client=client,
         )
 
-    assert receipts == (receipt,)
+    assert fetched_simulator_receipts == (simulator_receipt,)
 
 
 def test_reconciliation_requires_the_manifest_test_run() -> None:
@@ -339,9 +344,12 @@ def test_reconciliation_rejects_mismatched_test_run_metadata() -> None:
     manifest = build_manifest()
     engine, sessions = create_test_database(manifest)
     with sessions.begin() as session:
-        test_run = session.get(ExperimentRunModel, manifest.test_run_id)
-        assert test_run is not None
-        test_run.random_seed += 1
+        database_test_run = session.get(
+            ExperimentRunModel,
+            manifest.test_run_id,
+        )
+        assert database_test_run is not None
+        database_test_run.random_seed += 1
 
     with sessions() as session, raises(
         RunDefinitionMismatchError,

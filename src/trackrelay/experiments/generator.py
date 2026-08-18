@@ -45,8 +45,8 @@ class GeneratorConfiguration(BaseModel):
     start_at: AwareDatetime = DEFAULT_START_AT
 
 
-class ExpectedEvent(BaseModel):
-    """One sendable request and its independently expected normalized fields."""
+class ManifestEvent(BaseModel):
+    """One sendable request and its manifest-declared normalized fields."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -61,7 +61,7 @@ class ExpectedEvent(BaseModel):
 
 
 class InputManifest(BaseModel):
-    """The immutable inputs and expectations for one generated experiment."""
+    """The immutable inputs and declared outcomes for one experiment."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -72,7 +72,7 @@ class InputManifest(BaseModel):
     configuration: GeneratorConfiguration
     events_generated: Annotated[int, Field(ge=0)]
     expected_unique_events: Annotated[int, Field(ge=0)]
-    expected_events: tuple[ExpectedEvent, ...]
+    expected_events: tuple[ManifestEvent, ...]
     expected_final_shipments: dict[str, ShipmentStatus]
 
     @model_validator(mode="after")
@@ -90,11 +90,11 @@ class InputManifest(BaseModel):
                 "expected_unique_events must match unique partner event IDs"
             )
 
-        expected_sequence = tuple(range(1, self.events_generated + 1))
-        actual_sequence = tuple(
+        required_sequence = tuple(range(1, self.events_generated + 1))
+        manifest_sequence = tuple(
             event.sequence_number for event in self.expected_events
         )
-        if actual_sequence != expected_sequence:
+        if manifest_sequence != required_sequence:
             raise ValueError("expected event sequence must be contiguous")
 
         if any(
@@ -103,10 +103,10 @@ class InputManifest(BaseModel):
         ):
             raise ValueError("every expected event must use the manifest test run ID")
 
-        generated_shipments = {
+        manifest_tracking_numbers = {
             event.tracking_number for event in self.expected_events
         }
-        if generated_shipments != set(self.expected_final_shipments):
+        if manifest_tracking_numbers != set(self.expected_final_shipments):
             raise ValueError(
                 "expected final shipments must match generated tracking numbers"
             )
@@ -114,8 +114,8 @@ class InputManifest(BaseModel):
             (event.tracking_number, event.expected_status)
             for event in self.expected_events
         }
-        expected_final_states = set(self.expected_final_shipments.items())
-        missing_final_states = expected_final_states - historical_states
+        manifest_final_states = set(self.expected_final_shipments.items())
+        missing_final_states = manifest_final_states - historical_states
         if missing_final_states:
             raise ValueError(
                 "final states missing from shipment histories: "
@@ -151,8 +151,8 @@ def generate_input_manifest(
         configuration=configuration,
     )
     random = Random(seed)
-    expected_events: list[ExpectedEvent] = []
-    expected_final_shipments: dict[str, ShipmentStatus] = {}
+    manifest_events: list[ManifestEvent] = []
+    manifest_final_shipment_statuses: dict[str, ShipmentStatus] = {}
     sequence_number = 1
 
     for shipment_number in range(1, configuration.shipment_count + 1):
@@ -177,8 +177,8 @@ def generate_input_manifest(
                 status=ALPHA_STATUS_FOR[normalized_status],
                 event_time=occurred_at,
             ).model_dump(mode="json")
-            expected_events.append(
-                ExpectedEvent(
+            manifest_events.append(
+                ManifestEvent(
                     sequence_number=sequence_number,
                     test_run_id=resolved_test_run_id,
                     partner_id=configuration.partner_id,
@@ -191,17 +191,19 @@ def generate_input_manifest(
             )
             sequence_number += 1
 
-        expected_final_shipments[tracking_number] = ShipmentStatus.DELIVERED
+        manifest_final_shipment_statuses[tracking_number] = (
+            ShipmentStatus.DELIVERED
+        )
 
-    event_count = len(expected_events)
+    event_count = len(manifest_events)
     return InputManifest(
         test_run_id=resolved_test_run_id,
         seed=seed,
         configuration=configuration,
         events_generated=event_count,
         expected_unique_events=event_count,
-        expected_events=tuple(expected_events),
-        expected_final_shipments=expected_final_shipments,
+        expected_events=tuple(manifest_events),
+        expected_final_shipments=manifest_final_shipment_statuses,
     )
 
 

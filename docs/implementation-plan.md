@@ -305,16 +305,16 @@ Goal: explicitly account for every generated event.
 ### Step 7.2 — Build a deterministic generator
 
 - [x] Generate the same dataset from the same seed.
-- [x] Produce an input manifest containing expected events and final shipment states.
+- [x] Produce an input manifest containing its events and declared final shipment states.
 
 ### Step 7.3 — Build basic reconciliation
 
-- [x] Compare the input manifest with TrackRelay's database.
+- [x] Compare manifest events with TrackRelay's database events.
 - [x] Report accepted, rejected, unique, processed, failed, pending, and unaccounted events.
 
 ### Step 7.4 — Reconcile downstream effects
 
-- [x] Include simulator receipts and duplicate business effects.
+- [x] Compare database delivery attempts with simulator receipts and detect duplicate business effects.
 - [x] Enforce these invariants:
 
 ```text

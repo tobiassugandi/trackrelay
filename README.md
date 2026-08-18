@@ -208,6 +208,14 @@ make reconcile \
 
 The JSON report counts generated and accepted requests, rejected requests without a matching persisted identity, unique persisted events, and unique events in the `processed`, `failed`, or pending `received` states. It also reports simulator receipts, unique downstream events, duplicate business effects, and incorrect final shipment states. The command assumes every manifest request was attempted before reconciliation.
 
+The reconciliation code names evidence after its source. A `manifest_event` is the declared input, a `database_event` is the persisted record, a `database_delivery_attempt` records an attempted downstream call, a `simulator_receipt` is the downstream system's evidence, and a `database_shipment` holds TrackRelay's final materialized state. It compares those sources in three stages:
+
+1. Manifest events against database events.
+2. Database delivery attempts against simulator receipts.
+3. Manifest final shipment states against database shipments.
+
+The `test_run_id` selects one experiment. Inside that experiment, `(partner_id, partner_event_id)` matches the same business event across the manifest, database, and simulator; `Event.id` joins a database event to its delivery attempts; and `tracking_number` groups event history into a shipment. These names and identities are intentionally explicit because “expected” and “actual” are ambiguous when every evidence source can contain either.
+
 `unaccounted` identifies persisted run events that have no manifest identity, whose stored or received content disagrees with the manifest, or whose durable delivery attempts do not agree with simulator receipts. A failed delivery attempt with no receipt remains explicitly accounted for; a successful attempt without a receipt, or a receipt without a successful attempt, does not.
 
 `invariants_passed` is true only when all three reconciliation invariants hold:

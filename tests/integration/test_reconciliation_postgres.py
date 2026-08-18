@@ -89,56 +89,55 @@ def test_postgres_reconciliation_accounts_for_a_complete_manifest() -> None:
                 )
             )
             session.flush()
-            for expected in MANIFEST.expected_events:
-                event = Event(
-                    partner_id=expected.partner_id,
-                    partner_event_id=expected.partner_event_id,
-                    tracking_number=expected.tracking_number,
-                    status=expected.expected_status,
-                    occurred_at=expected.expected_occurred_at,
-                    received_at=expected.expected_occurred_at
+            for manifest_event in MANIFEST.expected_events:
+                database_event = Event(
+                    partner_id=manifest_event.partner_id,
+                    partner_event_id=manifest_event.partner_event_id,
+                    tracking_number=manifest_event.tracking_number,
+                    status=manifest_event.expected_status,
+                    occurred_at=manifest_event.expected_occurred_at,
+                    received_at=manifest_event.expected_occurred_at
                     + timedelta(seconds=1),
-                    raw_payload=expected.payload,
-                    test_run_id=expected.test_run_id,
+                    raw_payload=manifest_event.payload,
+                    test_run_id=manifest_event.test_run_id,
                     processing_status=EventProcessingStatus.PROCESSED,
                     state_applied=True,
                 )
-                session.add(event)
+                session.add(database_event)
                 session.flush()
                 session.add(
                     DeliveryAttempt(
-                        event_id=event.id,
+                        event_id=database_event.id,
                         attempt_number=1,
                         result=DeliveryAttemptResult.DELIVERED,
                         response_code=202,
                         latency_ms=10,
                         error=None,
-                        started_at=expected.expected_occurred_at,
-                        completed_at=expected.expected_occurred_at
+                        started_at=manifest_event.expected_occurred_at,
+                        completed_at=manifest_event.expected_occurred_at
                         + timedelta(milliseconds=10),
                     )
                 )
 
-        receipts = tuple(
+        simulator_receipts = tuple(
             NormalizedEvent(
-                partner_id=expected.partner_id,
-                partner_event_id=expected.partner_event_id,
-                tracking_number=expected.tracking_number,
-                status=expected.expected_status,
-                occurred_at=expected.expected_occurred_at,
-                received_at=expected.expected_occurred_at
-                + timedelta(seconds=1),
-                raw_payload=expected.payload,
-                test_run_id=expected.test_run_id,
+                partner_id=manifest_event.partner_id,
+                partner_event_id=manifest_event.partner_event_id,
+                tracking_number=manifest_event.tracking_number,
+                status=manifest_event.expected_status,
+                occurred_at=manifest_event.expected_occurred_at,
+                received_at=manifest_event.expected_occurred_at + timedelta(seconds=1),
+                raw_payload=manifest_event.payload,
+                test_run_id=manifest_event.test_run_id,
             )
-            for expected in MANIFEST.expected_events
+            for manifest_event in MANIFEST.expected_events
         )
 
         with session_factory() as session:
             report = reconcile_manifest(
                 MANIFEST,
                 session=session,
-                downstream_receipts=receipts,
+                simulator_receipts=simulator_receipts,
             )
 
         assert report.generated == 5

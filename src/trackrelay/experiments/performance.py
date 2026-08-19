@@ -1,13 +1,183 @@
-"""Prepare local database identities used by performance experiments."""
+"""Prepare and run repeatable local performance experiments."""
 
+import json
+import subprocess
 from argparse import ArgumentParser
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from enum import StrEnum
+from pathlib import Path
+from time import sleep
+from typing import Annotated, Literal
+from uuid import UUID, uuid4
 
+import httpx
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    computed_field,
+    model_validator,
+)
 from sqlalchemy.orm import Session, sessionmaker
 
+from trackrelay.config import Settings
 from trackrelay.database import session_factory as default_session_factory
+from trackrelay.domain import NormalizedEvent
+from trackrelay.downstream.control import SimulatorMode
+from trackrelay.experiments.generator import (
+    DEFAULT_START_AT,
+    GeneratorConfiguration,
+    InputManifest,
+    generate_input_manifest,
+    write_input_manifest,
+)
+from trackrelay.experiments.reconciliation import (
+    ReconciliationReport,
+    fetch_simulator_receipts,
+    reconcile_manifest,
+    write_reconciliation_report,
+)
+from trackrelay.experiments.scenarios import (
+    complete_database_run,
+    prepare_database_for_run,
+)
+from trackrelay.experiments.slo import (
+    BaselineSLOEvaluation,
+    evaluate_baseline_slo,
+)
 from trackrelay.models import Partner
+from trackrelay.runtime_metrics import RuntimeMetricsSnapshot
 
 LOAD_ADAPTER_TYPE = "courier-alpha"
+PositiveInteger = Annotated[int, Field(gt=0)]
+PositiveFloat = Annotated[float, Field(gt=0)]
+NonNegativeFloat = Annotated[float, Field(ge=0)]
+NonNegativeInteger = Annotated[int, Field(ge=0)]
+
+
+class LoadFailureScenario(StrEnum):
+    """Downstream conditions measured under a fixed request rate."""
+
+    SLOW = "slow"
+    OUTAGE = "outage"
+
+
+SCENARIO_MODE = {
+    LoadFailureScenario.SLOW: SimulatorMode.SLOW,
+    LoadFailureScenario.OUTAGE: SimulatorMode.UNAVAILABLE,
+}
+SCENARIO_HTTP_STATUS = {
+    LoadFailureScenario.SLOW: 201,
+    LoadFailureScenario.OUTAGE: 502,
+}
+SCENARIO_MANIFEST_NAME = {
+    LoadFailureScenario.SLOW: "slow-under-load",
+    LoadFailureScenario.OUTAGE: "outage-under-load",
+}
+
+
+class PerformanceExperimentConfiguration(BaseModel):
+    """Every input needed to repeat one downstream-under-load experiment."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    scenario: LoadFailureScenario
+    request_rate_per_second: PositiveInteger = 5
+    duration_seconds: PositiveInteger = 5
+    random_seed: int = 20260806
+    partner_id: str = "load-alpha"
+    start_at: AwareDatetime = DEFAULT_START_AT
+    resource_sample_interval_seconds: PositiveFloat = 0.25
+    k6_image: str = "grafana/k6:2.1.0"
+    trackrelay_api_url: str = "http://127.0.0.1:8000"
+    trackrelay_api_url_for_container: str = (
+        "http://host.docker.internal:8000"
+    )
+    downstream_url: str = "http://127.0.0.1:8001"
+
+    @computed_field
+    @property
+    def expected_request_count(self) -> int:
+        return self.request_rate_per_second * self.duration_seconds
+
+    @computed_field
+    @property
+    def simulator_mode(self) -> SimulatorMode:
+        return SCENARIO_MODE[self.scenario]
+
+    @computed_field
+    @property
+    def expected_http_status_code(self) -> int:
+        return SCENARIO_HTTP_STATUS[self.scenario]
+
+    @model_validator(mode="after")
+    def require_complete_shipment_histories(
+        self,
+    ) -> "PerformanceExperimentConfiguration":
+        if self.expected_request_count % 5:
+            raise ValueError(
+                "request rate times duration must be divisible by 5"
+            )
+        return self
+
+
+class RuntimeMetricsSamples(BaseModel):
+    """Raw API-process samples captured while k6 was active."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    test_run_id: UUID
+    samples: tuple[RuntimeMetricsSnapshot, ...]
+
+
+class PerformanceExperimentResult(BaseModel):
+    """Derived measurements and success interpretation for one load run."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    test_run_id: UUID
+    configuration: PerformanceExperimentConfiguration
+    k6_exit_code: int
+    observed_request_count: NonNegativeInteger
+    observed_request_rate_per_second: NonNegativeFloat
+    p95_response_latency_ms: NonNegativeFloat
+    request_error_rate: Annotated[float, Field(ge=0, le=1)]
+    process_cpu_seconds_used: NonNegativeFloat
+    process_max_rss_bytes_observed: NonNegativeInteger
+    maximum_database_connections_open: NonNegativeInteger
+    maximum_database_connections_checked_out: NonNegativeInteger
+    downstream_delivery_rate_per_second: NonNegativeFloat
+    downstream_delivery_receipts_per_accepted_event: NonNegativeFloat
+    reconciliation: ReconciliationReport
+    slo: BaselineSLOEvaluation
+
+    @computed_field
+    @property
+    def execution_valid(self) -> bool:
+        return (
+            self.k6_exit_code == 0
+            and self.observed_request_count
+            == self.configuration.expected_request_count
+        )
+
+    @computed_field
+    @property
+    def complete_experiment_passed(self) -> bool:
+        return self.execution_valid and self.slo.experiment_passed
+
+
+@dataclass(frozen=True)
+class PerformanceExperimentArtifacts:
+    """Paths and result produced by one performance experiment."""
+
+    run_directory: Path
+    result: PerformanceExperimentResult
 
 
 def prepare_load_partner(
@@ -41,7 +211,327 @@ def prepare_load_partner(
             )
 
 
-def build_parser() -> ArgumentParser:
+def build_performance_manifest(
+    configuration: PerformanceExperimentConfiguration,
+    *,
+    test_run_id: UUID,
+) -> InputManifest:
+    """Build complete Alpha histories for the exact scheduled request count."""
+    manifest = generate_input_manifest(
+        seed=configuration.random_seed,
+        configuration=GeneratorConfiguration(
+            partner_id=configuration.partner_id,
+            shipment_count=configuration.expected_request_count // 5,
+            start_at=configuration.start_at,
+        ),
+        test_run_id=test_run_id,
+    )
+    return InputManifest.model_validate(
+        {
+            **manifest.model_dump(),
+            "scenario_name": SCENARIO_MANIFEST_NAME[configuration.scenario],
+        }
+    )
+
+
+def _write_model(model: BaseModel, output_path: Path) -> None:
+    output_path.write_text(
+        f"{model.model_dump_json(indent=2)}\n",
+        encoding="utf-8",
+    )
+
+
+def _write_json(value: object, output_path: Path) -> None:
+    output_path.write_text(
+        f"{json.dumps(value, indent=2)}\n",
+        encoding="utf-8",
+    )
+
+
+def _runtime_snapshot(trackrelay_client: httpx.Client) -> RuntimeMetricsSnapshot:
+    response = trackrelay_client.get("/api/v1/experiments/runtime-metrics")
+    response.raise_for_status()
+    return RuntimeMetricsSnapshot.model_validate(response.json())
+
+
+def build_k6_command(
+    configuration: PerformanceExperimentConfiguration,
+    *,
+    manifest_path: Path,
+    run_directory: Path,
+) -> tuple[str, ...]:
+    """Build the pinned, shell-free Docker invocation for one load run."""
+    repository_root = Path(__file__).resolve().parents[3]
+    return (
+        "docker",
+        "run",
+        "--rm",
+        "--add-host",
+        "host.docker.internal:host-gateway",
+        "--env",
+        (
+            "TRACKRELAY_API_URL="
+            f"{configuration.trackrelay_api_url_for_container}"
+        ),
+        "--env",
+        f"LOAD_RATE={configuration.request_rate_per_second}",
+        "--env",
+        f"LOAD_DURATION_SECONDS={configuration.duration_seconds}",
+        "--env",
+        f"EXPECTED_HTTP_STATUS={configuration.expected_http_status_code}",
+        "--env",
+        "K6_MANIFEST_PATH=/input-manifest.json",
+        "--env",
+        "K6_SUMMARY_PATH=/results/k6-summary.json",
+        "--volume",
+        f"{repository_root / 'load'}:/scripts:ro",
+        "--volume",
+        f"{manifest_path.resolve()}:/input-manifest.json:ro",
+        "--volume",
+        f"{run_directory.resolve()}:/results",
+        configuration.k6_image,
+        "run",
+        "/scripts/failure-experiment.js",
+    )
+
+
+def _run_k6_with_resource_sampling(
+    command: Sequence[str],
+    *,
+    trackrelay_client: httpx.Client,
+    sample_interval_seconds: float,
+) -> tuple[int, tuple[RuntimeMetricsSnapshot, ...]]:
+    samples = [_runtime_snapshot(trackrelay_client)]
+    process = subprocess.Popen(command)
+    try:
+        while process.poll() is None:
+            sleep(sample_interval_seconds)
+            samples.append(_runtime_snapshot(trackrelay_client))
+    except BaseException:
+        if process.poll() is None:
+            process.terminate()
+            process.wait()
+        raise
+    samples.append(_runtime_snapshot(trackrelay_client))
+    return process.wait(), tuple(samples)
+
+
+def _k6_metric_value(
+    summary: dict[str, object],
+    metric_name: str,
+    value_name: str,
+) -> float:
+    try:
+        metrics = summary["metrics"]
+        if not isinstance(metrics, Mapping):
+            raise TypeError("metrics must be an object")
+        metric = metrics[metric_name]
+        if not isinstance(metric, Mapping):
+            raise TypeError(f"{metric_name} must be an object")
+        values = metric["values"]
+        if not isinstance(values, Mapping):
+            raise TypeError(f"{metric_name}.values must be an object")
+        observed_value = values[value_name]
+        if not isinstance(observed_value, int | float):
+            raise TypeError(
+                f"{metric_name}.{value_name} must be a number"
+            )
+        return float(observed_value)
+    except (KeyError, TypeError) as error:
+        raise ValueError(
+            f"k6 summary is missing {metric_name}.{value_name}"
+        ) from error
+
+
+def _maximum_checked_out_connections(
+    samples: Sequence[RuntimeMetricsSnapshot],
+) -> int:
+    return max(
+        (
+            sample.database_pool.checked_out
+            for sample in samples
+            if sample.database_pool.checked_out is not None
+        ),
+        default=0,
+    )
+
+
+def _maximum_open_connections(
+    samples: Sequence[RuntimeMetricsSnapshot],
+) -> int:
+    return max(
+        (
+            (sample.database_pool.checked_out or 0)
+            + (sample.database_pool.checked_in or 0)
+            for sample in samples
+        ),
+        default=0,
+    )
+
+
+def _receipts_for_run(
+    receipts: Sequence[NormalizedEvent],
+    test_run_id: UUID,
+) -> tuple[NormalizedEvent, ...]:
+    return tuple(
+        receipt for receipt in receipts if receipt.test_run_id == test_run_id
+    )
+
+
+def execute_performance_experiment(
+    configuration: PerformanceExperimentConfiguration,
+    *,
+    output_root: Path,
+    trackrelay_client: httpx.Client,
+    downstream_client: httpx.Client,
+    sessions: sessionmaker[Session] = default_session_factory,
+    test_run_id: UUID | None = None,
+) -> PerformanceExperimentArtifacts:
+    """Run k6 under one downstream condition and save all evidence."""
+    resolved_test_run_id = test_run_id or uuid4()
+    manifest = build_performance_manifest(
+        configuration,
+        test_run_id=resolved_test_run_id,
+    )
+    run_directory = (
+        output_root / configuration.scenario.value / str(resolved_test_run_id)
+    )
+    run_directory.mkdir(parents=True, exist_ok=False)
+    configuration_path = run_directory / "configuration.json"
+    manifest_path = run_directory / "input-manifest.json"
+    resource_samples_path = run_directory / "runtime-metrics-samples.json"
+    k6_summary_path = run_directory / "k6-summary.json"
+    simulator_receipts_path = run_directory / "simulator-receipts.json"
+    database_summary_path = run_directory / "database-summary.json"
+    reconciliation_path = run_directory / "reconciliation.json"
+    result_path = run_directory / "experiment-result.json"
+
+    _write_model(configuration, configuration_path)
+    write_input_manifest(manifest, manifest_path)
+    prepare_database_for_run(manifest, sessions=sessions)
+
+    mode_response = downstream_client.put(
+        "/control/mode",
+        json={"mode": configuration.simulator_mode.value},
+    )
+    mode_response.raise_for_status()
+    command = build_k6_command(
+        configuration,
+        manifest_path=manifest_path,
+        run_directory=run_directory,
+    )
+    try:
+        k6_exit_code, resource_samples = _run_k6_with_resource_sampling(
+            command,
+            trackrelay_client=trackrelay_client,
+            sample_interval_seconds=(
+                configuration.resource_sample_interval_seconds
+            ),
+        )
+    finally:
+        reset_response = downstream_client.put(
+            "/control/mode",
+            json={"mode": SimulatorMode.HEALTHY.value},
+        )
+        reset_response.raise_for_status()
+
+    complete_database_run(resolved_test_run_id, sessions=sessions)
+    runtime_samples = RuntimeMetricsSamples(
+        test_run_id=resolved_test_run_id,
+        samples=resource_samples,
+    )
+    _write_model(runtime_samples, resource_samples_path)
+
+    all_simulator_receipts = fetch_simulator_receipts(
+        configuration.downstream_url,
+        client=downstream_client,
+    )
+    simulator_receipts = _receipts_for_run(
+        all_simulator_receipts,
+        resolved_test_run_id,
+    )
+    _write_json(
+        [receipt.model_dump(mode="json") for receipt in simulator_receipts],
+        simulator_receipts_path,
+    )
+    with sessions() as session:
+        reconciliation = reconcile_manifest(
+            manifest,
+            session=session,
+            simulator_receipts=simulator_receipts,
+        )
+    write_reconciliation_report(reconciliation, reconciliation_path)
+
+    summary_response = trackrelay_client.get(
+        f"/api/v1/test-runs/{resolved_test_run_id}/summary"
+    )
+    summary_response.raise_for_status()
+    _write_json(summary_response.json(), database_summary_path)
+
+    k6_summary: dict[str, object] = json.loads(
+        k6_summary_path.read_text(encoding="utf-8")
+    )
+    p95_response_latency_ms = _k6_metric_value(
+        k6_summary,
+        "http_req_duration",
+        "p(95)",
+    )
+    request_error_rate = _k6_metric_value(
+        k6_summary,
+        "http_req_failed",
+        "rate",
+    )
+    slo_evaluation = evaluate_baseline_slo(
+        p95_response_latency_ms=p95_response_latency_ms,
+        request_error_rate=request_error_rate,
+        reconciliation_report=reconciliation,
+    )
+
+    cpu_start = resource_samples[0].process_cpu_seconds
+    cpu_end = resource_samples[-1].process_cpu_seconds
+    result = PerformanceExperimentResult(
+        test_run_id=resolved_test_run_id,
+        configuration=configuration,
+        k6_exit_code=k6_exit_code,
+        observed_request_count=int(
+            _k6_metric_value(k6_summary, "http_reqs", "count")
+        ),
+        observed_request_rate_per_second=_k6_metric_value(
+            k6_summary,
+            "http_reqs",
+            "rate",
+        ),
+        p95_response_latency_ms=p95_response_latency_ms,
+        request_error_rate=request_error_rate,
+        process_cpu_seconds_used=max(0, cpu_end - cpu_start),
+        process_max_rss_bytes_observed=max(
+            sample.process_max_rss_bytes for sample in resource_samples
+        ),
+        maximum_database_connections_open=(
+            _maximum_open_connections(resource_samples)
+        ),
+        maximum_database_connections_checked_out=(
+            _maximum_checked_out_connections(resource_samples)
+        ),
+        downstream_delivery_rate_per_second=(
+            len(simulator_receipts) / configuration.duration_seconds
+        ),
+        downstream_delivery_receipts_per_accepted_event=(
+            len(simulator_receipts) / reconciliation.accepted
+            if reconciliation.accepted
+            else 0
+        ),
+        reconciliation=reconciliation,
+        slo=slo_evaluation,
+    )
+    _write_model(result, result_path)
+    return PerformanceExperimentArtifacts(
+        run_directory=run_directory,
+        result=result,
+    )
+
+
+def build_prepare_parser() -> ArgumentParser:
     """Describe the local load-partner preparation command."""
     parser = ArgumentParser(description=__doc__)
     parser.add_argument("--partner-id", default="load-alpha")
@@ -49,14 +539,90 @@ def build_parser() -> ArgumentParser:
 
 
 def main() -> None:
-    """Prepare the configured partner before k6 sends ingestion traffic."""
-    parser = build_parser()
+    """Prepare the configured partner before the standalone ramp test."""
+    parser = build_prepare_parser()
     arguments = parser.parse_args()
     try:
         prepare_load_partner(arguments.partner_id)
     except ValueError as error:
         parser.error(str(error))
     print(f"Load partner ready: {arguments.partner_id}")
+
+
+def build_experiment_parser() -> ArgumentParser:
+    """Describe a repeatable downstream-under-load experiment command."""
+    settings = Settings()
+    parser = ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "scenario",
+        type=LoadFailureScenario,
+        choices=tuple(LoadFailureScenario),
+    )
+    parser.add_argument("--rate", type=int, default=5)
+    parser.add_argument("--duration-seconds", type=int, default=5)
+    parser.add_argument("--seed", type=int, default=20260806)
+    parser.add_argument("--partner-id", default="load-alpha")
+    parser.add_argument("--start-at", default=DEFAULT_START_AT.isoformat())
+    parser.add_argument("--api-url", default="http://127.0.0.1:8000")
+    parser.add_argument(
+        "--container-api-url",
+        default="http://host.docker.internal:8000",
+    )
+    parser.add_argument("--downstream-url", default=settings.downstream_url)
+    parser.add_argument("--k6-image", default="grafana/k6:2.1.0")
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=Path("results/performance"),
+    )
+    return parser
+
+
+def experiment_main() -> None:
+    """Run one load experiment and print its saved outcome."""
+    parser = build_experiment_parser()
+    arguments = parser.parse_args()
+    try:
+        configuration = PerformanceExperimentConfiguration(
+            scenario=arguments.scenario,
+            request_rate_per_second=arguments.rate,
+            duration_seconds=arguments.duration_seconds,
+            random_seed=arguments.seed,
+            partner_id=arguments.partner_id,
+            start_at=arguments.start_at,
+            k6_image=arguments.k6_image,
+            trackrelay_api_url=arguments.api_url,
+            trackrelay_api_url_for_container=arguments.container_api_url,
+            downstream_url=arguments.downstream_url,
+        )
+        with (
+            httpx.Client(
+                base_url=configuration.trackrelay_api_url,
+                timeout=10.0,
+            ) as api_client,
+            httpx.Client(
+                base_url=configuration.downstream_url,
+                timeout=10.0,
+            ) as downstream_client,
+        ):
+            artifacts = execute_performance_experiment(
+                configuration,
+                output_root=arguments.output_root,
+                trackrelay_client=api_client,
+                downstream_client=downstream_client,
+            )
+    except (httpx.HTTPError, OSError, ValueError, ValidationError) as error:
+        parser.error(str(error))
+
+    print(f"Performance experiment: {artifacts.run_directory}")
+    print(f"Execution valid: {artifacts.result.execution_valid}")
+    print(f"SLO passed: {artifacts.result.slo.slo_passed}")
+    print(
+        "Complete experiment passed: "
+        f"{artifacts.result.complete_experiment_passed}"
+    )
+    if not artifacts.result.execution_valid:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

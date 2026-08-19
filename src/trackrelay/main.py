@@ -24,6 +24,7 @@ from trackrelay.domain import (
 from trackrelay.models import DeliveryAttempt, Event, Partner, Shipment
 from trackrelay.models import TestRun as ExperimentRunModel
 from trackrelay.partners import PARTNER_ADAPTERS
+from trackrelay.runtime_metrics import RuntimeMetricsSnapshot, capture_runtime_metrics
 from trackrelay.services import (
     DeliveryResult,
     EventPersistenceResult,
@@ -193,6 +194,16 @@ def readiness(
             detail="Database unavailable",
         )
     return {"status": "ready"}
+
+
+@app.get(
+    "/api/v1/experiments/runtime-metrics",
+    response_model=RuntimeMetricsSnapshot,
+    tags=["experiments"],
+)
+def get_runtime_metrics() -> RuntimeMetricsSnapshot:
+    """Expose one read-only API-process sample for local experiments."""
+    return capture_runtime_metrics()
 
 
 @app.get(

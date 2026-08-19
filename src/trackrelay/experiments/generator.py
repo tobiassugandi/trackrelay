@@ -38,6 +38,8 @@ ScenarioName = Literal[
     "duplicate",
     "out-of-order",
     "downstream-outage",
+    "slow-under-load",
+    "outage-under-load",
 ]
 
 

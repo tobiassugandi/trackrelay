@@ -17,8 +17,11 @@ RAMP_RATES ?= 10,25,50,100,250,500
 RAMP_TIER_DURATION_SECONDS ?= 10
 RAMP_RUN_ID ?=
 K6_RAMP_OUTPUT ?= results/k6/ramp-summary.json
+LOAD_RATE ?= 5
+LOAD_DURATION_SECONDS ?= 5
+PERFORMANCE_OUTPUT ?= results/performance
 
-.PHONY: sync test test-integration lint run run-downstream generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp db-up db-status db-check db-down migrate migration-status
+.PHONY: sync test test-integration lint run run-downstream generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp load-slow load-outage db-up db-status db-check db-down migrate migration-status
 
 sync:
 	$(UV) sync --locked --python 3.12
@@ -91,6 +94,12 @@ load-ramp: load-prepare
 		--volume "$(CURDIR)/load:/scripts:ro" \
 		--volume "$(abspath $(dir $(K6_RAMP_OUTPUT))):/results" \
 		$(K6_IMAGE) run /scripts/ramp.js
+
+load-slow:
+	$(UV) run --locked trackrelay-load-experiment slow --rate $(LOAD_RATE) --duration-seconds $(LOAD_DURATION_SECONDS) --api-url $(API_URL) --k6-image $(K6_IMAGE) --output-root $(PERFORMANCE_OUTPUT)
+
+load-outage:
+	$(UV) run --locked trackrelay-load-experiment outage --rate $(LOAD_RATE) --duration-seconds $(LOAD_DURATION_SECONDS) --api-url $(API_URL) --k6-image $(K6_IMAGE) --output-root $(PERFORMANCE_OUTPUT)
 
 db-up:
 	$(COMPOSE) up -d --wait postgres

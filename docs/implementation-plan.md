@@ -357,8 +357,8 @@ Goal: establish an evidence-based baseline for the synchronous architecture.
 
 ### Step 8.5 — Run slow-downstream and outage-under-load tests
 
-- [ ] Capture latency, errors, throughput, CPU, memory, database connections, delivery rate, and reconciliation output.
-- [ ] Store raw results with the test configuration.
+- [x] Capture latency, errors, throughput, CPU, memory, database connections, delivery rate, and reconciliation output.
+- [x] Store raw results with the test configuration.
 
 **Milestone:** `legacy-local-baseline-v1` — the local synchronous implementation is complete and measured.
 

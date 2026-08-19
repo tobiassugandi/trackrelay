@@ -313,7 +313,44 @@ make load-ramp RAMP_TIER_DURATION_SECONDS=1 RAMP_RATES=1,2
 
 `RAMP_PARTNER_ID`, `RAMP_RUN_ID`, `K6_API_URL`, and `K6_RAMP_OUTPUT` are also configurable. When `RAMP_RUN_ID` is omitted, the command generates a UUID used only to keep synthetic event and tracking identities unique.
 
-This step evaluates the k6-observable latency and error targets. It does not call the ramp a complete successful experiment yet: Step 8.5 will add a run manifest, reconciliation, resource measurements, and the `experiment_passed` evaluation needed to prove the accounting and correctness side of the SLO.
+The standalone ramp evaluates the k6-observable latency and error targets. The experiments below add the run manifest, reconciliation, resource measurements, and `experiment_passed` evaluation needed to prove the accounting and correctness side of the SLO.
+
+### Downstream failure under load
+
+With the same local services running, execute the repeatable slow-downstream and outage experiments:
+
+```bash
+make load-slow
+make load-outage
+```
+
+Both commands default to 5 requests per second for 5 seconds. Override `LOAD_RATE`, `LOAD_DURATION_SECONDS`, or `PERFORMANCE_OUTPUT` as needed. Rate multiplied by duration must be divisible by five because the manifest retains one complete five-state history for every synthetic shipment. The runner also requires k6's observed HTTP-request count to equal that declared manifest count before it considers the execution valid.
+
+Each command performs the complete experiment lifecycle:
+
+1. Generate a fresh test-run UUID and immutable Courier Alpha manifest.
+2. Register the matching partner and test-run definition in PostgreSQL.
+3. Put the downstream simulator into `SLOW` or `UNAVAILABLE` mode.
+4. Run fixed-rate k6 traffic while sampling TrackRelay's read-only runtime metrics endpoint.
+5. Restore the simulator to `HEALTHY` even after a load-run error.
+6. Save database and simulator evidence, reconcile it, and evaluate the baseline SLO.
+
+Evidence is grouped under `results/performance/<scenario>/<test_run_id>/`:
+
+```text
+configuration.json
+input-manifest.json
+k6-summary.json
+runtime-metrics-samples.json
+database-summary.json
+simulator-receipts.json
+reconciliation.json
+experiment-result.json
+```
+
+The raw k6 summary supplies latency, errors, and observed throughput. Runtime samples record cumulative API-process CPU time, maximum resident memory, and SQLAlchemy pool connections. The final result derives CPU consumed during the run, observed memory, maximum open and checked-out connections, downstream deliveries per second, delivery receipts per accepted event, reconciliation, and the SLO interpretation.
+
+These are intentionally failure experiments. Slow delivery should normally cross the 500 ms latency target, while unavailability should produce an HTTP error rate far above 1%. A correctly functioning experiment can therefore have `execution_valid: true` and reconciled evidence while `complete_experiment_passed` is false. That distinction demonstrates the synchronous architecture's limitation without misclassifying accounted failures as lost events.
 
 ### Duplicate-event contract
 
@@ -369,4 +406,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, `legacy-failure-behavior-v1`, `legacy-multipartner-v1`, and `legacy-reconciliation-v1` milestones are complete. TrackRelay exposes shipment, event, and test-run diagnostics; accepts Alpha, Beta, and Gamma formats; runs reconciled correctness scenarios; and has a machine-checkable local SLO with a gradual k6 ingestion ramp. The next step captures failure-under-load evidence and completes the local baseline.
+The local synchronous baseline is complete through the `legacy-local-baseline-v1` milestone. TrackRelay exposes shipment, event, test-run, and local runtime diagnostics; accepts Alpha, Beta, and Gamma formats; runs reconciled correctness scenarios; applies a machine-checkable SLO to gradual k6 traffic; and saves complete slow-downstream and outage-under-load evidence. The next phase begins AWS modernization by rehosting the same synchronous application on EC2.

@@ -144,7 +144,7 @@ def build_correctness_manifest(
     )
 
 
-def _prepare_database_for_run(
+def prepare_database_for_run(
     manifest: InputManifest,
     *,
     sessions: sessionmaker[Session],
@@ -187,7 +187,7 @@ def _prepare_database_for_run(
         )
 
 
-def _complete_database_run(
+def complete_database_run(
     test_run_id: UUID,
     *,
     sessions: sessionmaker[Session],
@@ -261,7 +261,7 @@ def execute_correctness_scenario(
     summary_path = run_directory / "database-summary.json"
     reconciliation_path = run_directory / "reconciliation.json"
     write_input_manifest(manifest, manifest_path)
-    _prepare_database_for_run(manifest, sessions=sessions)
+    prepare_database_for_run(manifest, sessions=sessions)
 
     simulator_mode = (
         SimulatorMode.UNAVAILABLE
@@ -304,7 +304,7 @@ def execute_correctness_scenario(
         requests=tuple(request_observations),
     )
     _write_observations(observations, observations_path)
-    _complete_database_run(manifest.test_run_id, sessions=sessions)
+    complete_database_run(manifest.test_run_id, sessions=sessions)
 
     simulator_receipts = fetch_simulator_receipts(
         downstream_url,

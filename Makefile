@@ -9,8 +9,11 @@ API_URL ?= http://127.0.0.1:8000
 TEST_RUN_ID ?=
 SUMMARY ?= results/test-run-summary.json
 CORRECTNESS_OUTPUT ?= results/correctness
+K6_IMAGE ?= grafana/k6:2.1.0
+K6_API_URL ?= http://host.docker.internal:8000
+K6_OUTPUT ?= results/k6/smoke-summary.json
 
-.PHONY: sync test test-integration lint run run-downstream generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage db-up db-status db-check db-down migrate migration-status
+.PHONY: sync test test-integration lint run run-downstream generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke db-up db-status db-check db-down migrate migration-status
 
 sync:
 	$(UV) sync --locked --python 3.12
@@ -52,6 +55,16 @@ scenario-out-of-order:
 
 scenario-downstream-outage:
 	$(UV) run --locked trackrelay-scenario downstream-outage --seed $(SEED) --shipments $(SHIPMENTS) --api-url $(API_URL) --output-root $(CORRECTNESS_OUTPUT)
+
+load-smoke:
+	mkdir -p "$(dir $(K6_OUTPUT))"
+	docker run --rm \
+		--add-host host.docker.internal:host-gateway \
+		--env TRACKRELAY_API_URL="$(K6_API_URL)" \
+		--env K6_SUMMARY_PATH="/results/$(notdir $(K6_OUTPUT))" \
+		--volume "$(CURDIR)/load:/scripts:ro" \
+		--volume "$(abspath $(dir $(K6_OUTPUT))):/results" \
+		$(K6_IMAGE) run /scripts/smoke.js
 
 db-up:
 	$(COMPOSE) up -d --wait postgres

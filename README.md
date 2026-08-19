@@ -265,6 +265,18 @@ The duplicate scenario sends each business identity twice and expects only the f
 
 Every command runs reconciliation before it succeeds. It exits unsuccessfully after saving the evidence if the observed HTTP statuses disagree with the scenario or any reconciliation invariant fails. Override `SEED`, `SHIPMENTS`, `API_URL`, or `CORRECTNESS_OUTPUT` through Make variables when needed.
 
+### k6 smoke test
+
+With the TrackRelay API running, send five liveness requests from one virtual user and save k6's machine-readable end-of-test summary:
+
+```bash
+make load-smoke
+```
+
+The command runs the pinned `grafana/k6:2.1.0` container, so a host installation of k6 is not required. It writes the summary to `results/k6/smoke-summary.json`; override `K6_OUTPUT` to choose another local path. The container reaches the API through `http://host.docker.internal:8000`, which can be changed with `K6_API_URL`.
+
+This deliberately small test checks only that k6 can reach TrackRelay, all liveness checks pass, and result capture works. It does not yet define a latency or request-error SLO. The script uses k6's [`handleSummary()`](https://grafana.com/docs/k6/latest/results-output/end-of-test/custom-summary/) hook so the raw aggregate metrics remain available for later experiment steps.
+
 ### Duplicate-event contract
 
 A logical event is identified by `(partner_id, partner_event_id)`. Multiple HTTP requests carrying that identity are transport retries of the same logical event, not additional events. Likewise, a downstream HTTP delivery is a side effect of the logical event; retrying ingestion must not create another downstream delivery.
@@ -319,4 +331,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, `legacy-failure-behavior-v1`, `legacy-multipartner-v1`, and `legacy-reconciliation-v1` milestones are complete. TrackRelay exposes shipment, event, and test-run diagnostics; accepts Alpha, Beta, and Gamma formats; and runs reconciled normal, duplicate, out-of-order, and downstream-outage experiments from repeatable commands. The next step adds a tiny k6 smoke test.
+The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, `legacy-failure-behavior-v1`, `legacy-multipartner-v1`, and `legacy-reconciliation-v1` milestones are complete. TrackRelay exposes shipment, event, and test-run diagnostics; accepts Alpha, Beta, and Gamma formats; runs reconciled correctness scenarios; and captures a tiny k6 smoke-test summary. The next step defines the initial baseline SLO.

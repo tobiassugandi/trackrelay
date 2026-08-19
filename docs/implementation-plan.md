@@ -342,8 +342,8 @@ Goal: establish an evidence-based baseline for the synchronous architecture.
 
 ### Step 8.2 — Add a k6 smoke test
 
-- [ ] Send a tiny amount of traffic.
-- [ ] Confirm the load script and result capture work.
+- [x] Send a tiny amount of traffic.
+- [x] Confirm the load script and result capture work.
 
 ### Step 8.3 — Define the baseline SLO
 

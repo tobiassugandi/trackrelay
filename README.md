@@ -291,7 +291,29 @@ The comparisons are strict: exactly 500 ms or exactly 1% fails. These k6 metric 
 
 `INITIAL_BASELINE_SLO` in `trackrelay.experiments.slo` is the machine-readable definition. `evaluate_baseline_slo()` distinguishes `slo_passed`, meaning the three targets above passed, from `experiment_passed`, which also requires `reconciliation.invariants_passed`. Therefore duplicate business effects or incorrect final shipment states still make the complete experiment fail even when its latency, error rate, and unaccounted count meet the SLO.
 
-This is an initial local experiment definition for finding the synchronous architecture's limits. It is not a promised production target; later evidence and business requirements may justify revising it. Step 8.4 will apply it while gradually increasing ingestion traffic.
+This is an initial local experiment definition for finding the synchronous architecture's limits. It is not a promised production target; later evidence and business requirements may justify revising it. The gradual ramp below applies it while increasing ingestion traffic.
+
+### Gradual ingestion ramp
+
+With PostgreSQL migrated and both TrackRelay and the downstream simulator running, execute the standard arrival-rate ramp:
+
+```bash
+make load-ramp
+```
+
+The command first creates or validates an active `load-alpha` partner, then sends unique Courier Alpha events at 10, 25, 50, 100, 250, and 500 requests per second. Each tier lasts 10 seconds by default. The open-model k6 [arrival-rate executor](https://grafana.com/docs/k6/latest/using-k6/scenarios/executors/constant-arrival-rate/) starts requests independently of response completion, so the configured rate remains the input while TrackRelay's response time is the observation.
+
+Each tier has its own p95-latency and request-error thresholds from the initial SLO. A tier failure aborts the remaining higher rates; dropped iterations and non-`201` responses also fail the run. The machine-readable k6 summary is saved to `results/k6/ramp-summary.json`.
+
+Use shorter tiers for a wiring check, or override the rates when diagnosing a constrained machine:
+
+```bash
+make load-ramp RAMP_TIER_DURATION_SECONDS=1 RAMP_RATES=1,2
+```
+
+`RAMP_PARTNER_ID`, `RAMP_RUN_ID`, `K6_API_URL`, and `K6_RAMP_OUTPUT` are also configurable. When `RAMP_RUN_ID` is omitted, the command generates a UUID used only to keep synthetic event and tracking identities unique.
+
+This step evaluates the k6-observable latency and error targets. It does not call the ramp a complete successful experiment yet: Step 8.5 will add a run manifest, reconciliation, resource measurements, and the `experiment_passed` evaluation needed to prove the accounting and correctness side of the SLO.
 
 ### Duplicate-event contract
 
@@ -347,4 +369,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, `legacy-failure-behavior-v1`, `legacy-multipartner-v1`, and `legacy-reconciliation-v1` milestones are complete. TrackRelay exposes shipment, event, and test-run diagnostics; accepts Alpha, Beta, and Gamma formats; runs reconciled correctness scenarios; captures a tiny k6 smoke-test summary; and defines an initial machine-checkable local SLO. The next step adds a gradual ingestion-traffic ramp.
+The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, `legacy-failure-behavior-v1`, `legacy-multipartner-v1`, and `legacy-reconciliation-v1` milestones are complete. TrackRelay exposes shipment, event, and test-run diagnostics; accepts Alpha, Beta, and Gamma formats; runs reconciled correctness scenarios; and has a machine-checkable local SLO with a gradual k6 ingestion ramp. The next step captures failure-under-load evidence and completes the local baseline.

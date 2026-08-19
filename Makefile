@@ -12,8 +12,13 @@ CORRECTNESS_OUTPUT ?= results/correctness
 K6_IMAGE ?= grafana/k6:2.1.0
 K6_API_URL ?= http://host.docker.internal:8000
 K6_OUTPUT ?= results/k6/smoke-summary.json
+RAMP_PARTNER_ID ?= load-alpha
+RAMP_RATES ?= 10,25,50,100,250,500
+RAMP_TIER_DURATION_SECONDS ?= 10
+RAMP_RUN_ID ?=
+K6_RAMP_OUTPUT ?= results/k6/ramp-summary.json
 
-.PHONY: sync test test-integration lint run run-downstream generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke db-up db-status db-check db-down migrate migration-status
+.PHONY: sync test test-integration lint run run-downstream generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp db-up db-status db-check db-down migrate migration-status
 
 sync:
 	$(UV) sync --locked --python 3.12
@@ -65,6 +70,27 @@ load-smoke:
 		--volume "$(CURDIR)/load:/scripts:ro" \
 		--volume "$(abspath $(dir $(K6_OUTPUT))):/results" \
 		$(K6_IMAGE) run /scripts/smoke.js
+
+load-prepare:
+	$(UV) run --locked trackrelay-prepare-load --partner-id $(RAMP_PARTNER_ID)
+
+load-ramp: load-prepare
+	mkdir -p "$(dir $(K6_RAMP_OUTPUT))"
+	ramp_run_id="$(RAMP_RUN_ID)"; \
+	if [ -z "$$ramp_run_id" ]; then \
+		ramp_run_id="$$( $(UV) run --locked python -c 'from uuid import uuid4; print(uuid4())' )"; \
+	fi; \
+	docker run --rm \
+		--add-host host.docker.internal:host-gateway \
+		--env TRACKRELAY_API_URL="$(K6_API_URL)" \
+		--env RAMP_PARTNER_ID="$(RAMP_PARTNER_ID)" \
+		--env RAMP_RATES="$(RAMP_RATES)" \
+		--env RAMP_TIER_DURATION_SECONDS="$(RAMP_TIER_DURATION_SECONDS)" \
+		--env RAMP_RUN_ID="$$ramp_run_id" \
+		--env K6_SUMMARY_PATH="/results/$(notdir $(K6_RAMP_OUTPUT))" \
+		--volume "$(CURDIR)/load:/scripts:ro" \
+		--volume "$(abspath $(dir $(K6_RAMP_OUTPUT))):/results" \
+		$(K6_IMAGE) run /scripts/ramp.js
 
 db-up:
 	$(COMPOSE) up -d --wait postgres

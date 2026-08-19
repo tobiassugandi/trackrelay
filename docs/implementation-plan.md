@@ -352,8 +352,8 @@ Goal: establish an evidence-based baseline for the synchronous architecture.
 
 ### Step 8.4 — Add a gradual ramp test
 
-- [ ] Try 10, 25, 50, 100, 250, and 500 requests per second as the machine permits.
-- [ ] Stop treating higher throughput as success once the SLO is crossed.
+- [x] Try 10, 25, 50, 100, 250, and 500 requests per second as the machine permits.
+- [x] Stop treating higher throughput as success once the SLO is crossed.
 
 ### Step 8.5 — Run slow-downstream and outage-under-load tests
 

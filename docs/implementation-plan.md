@@ -347,8 +347,8 @@ Goal: establish an evidence-based baseline for the synchronous architecture.
 
 ### Step 8.3 — Define the baseline SLO
 
-- [ ] Start with p95 response latency below 500 ms, request errors below 1%, and zero unaccounted accepted events.
-- [ ] Treat these as an initial experiment definition, not a guaranteed production target.
+- [x] Start with p95 response latency below 500 ms, request errors below 1%, and zero unaccounted accepted events.
+- [x] Treat these as an initial experiment definition, not a guaranteed production target.
 
 ### Step 8.4 — Add a gradual ramp test
 

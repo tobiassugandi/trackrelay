@@ -277,6 +277,22 @@ The command runs the pinned `grafana/k6:2.1.0` container, so a host installation
 
 This deliberately small test checks only that k6 can reach TrackRelay, all liveness checks pass, and result capture works. It does not yet define a latency or request-error SLO. The script uses k6's [`handleSummary()`](https://grafana.com/docs/k6/latest/results-output/end-of-test/custom-summary/) hook so the raw aggregate metrics remain available for later experiment steps.
 
+### Initial local baseline SLO
+
+The first performance baseline uses three deliberately simple pass conditions:
+
+| Signal | Evidence | Pass condition |
+| --- | --- | --- |
+| Response latency | k6 `http_req_duration` | `p(95) < 500 ms` |
+| Request errors | k6 `http_req_failed` | `rate < 0.01` (below 1%) |
+| Accepted-event accounting | Reconciliation report | `unaccounted == 0` |
+
+The comparisons are strict: exactly 500 ms or exactly 1% fails. These k6 metric expressions follow its standard [threshold syntax](https://grafana.com/docs/k6/latest/using-k6/thresholds/). The accounting target comes from the matching test run's reconciliation report because k6 cannot determine whether an accepted request produced consistent database and downstream evidence.
+
+`INITIAL_BASELINE_SLO` in `trackrelay.experiments.slo` is the machine-readable definition. `evaluate_baseline_slo()` distinguishes `slo_passed`, meaning the three targets above passed, from `experiment_passed`, which also requires `reconciliation.invariants_passed`. Therefore duplicate business effects or incorrect final shipment states still make the complete experiment fail even when its latency, error rate, and unaccounted count meet the SLO.
+
+This is an initial local experiment definition for finding the synchronous architecture's limits. It is not a promised production target; later evidence and business requirements may justify revising it. Step 8.4 will apply it while gradually increasing ingestion traffic.
+
 ### Duplicate-event contract
 
 A logical event is identified by `(partner_id, partner_event_id)`. Multiple HTTP requests carrying that identity are transport retries of the same logical event, not additional events. Likewise, a downstream HTTP delivery is a side effect of the logical event; retrying ingestion must not create another downstream delivery.
@@ -331,4 +347,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, `legacy-failure-behavior-v1`, `legacy-multipartner-v1`, and `legacy-reconciliation-v1` milestones are complete. TrackRelay exposes shipment, event, and test-run diagnostics; accepts Alpha, Beta, and Gamma formats; runs reconciled correctness scenarios; and captures a tiny k6 smoke-test summary. The next step defines the initial baseline SLO.
+The `local-foundation-v1`, `legacy-happy-path-v1`, `legacy-idempotency-v1`, `legacy-ordering-v1`, `legacy-failure-behavior-v1`, `legacy-multipartner-v1`, and `legacy-reconciliation-v1` milestones are complete. TrackRelay exposes shipment, event, and test-run diagnostics; accepts Alpha, Beta, and Gamma formats; runs reconciled correctness scenarios; captures a tiny k6 smoke-test summary; and defines an initial machine-checkable local SLO. The next step adds a gradual ingestion-traffic ramp.

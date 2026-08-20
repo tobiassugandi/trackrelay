@@ -37,15 +37,19 @@ Inspect a shipment's complete audit history with `GET /api/v1/shipments/{trackin
 - Reconciliation that accounts for every generated event
 - Repeatable load and failure experiments
 - Incremental modernization from synchronous delivery to queue-based processing
-- Evidence-based comparison of local, rehosted, and cloud-native architectures
+- Evidence that cloud capacity can expand and contract automatically with demand
 
 ## Headline result goal
 
-The project's primary result will be one large **p95 response latency versus offered load** plot comparing the synchronous AWS control with the selected modernized architecture. From each curve, TrackRelay will derive one headline number: maximum sustainable throughput.
+The project's primary result will demonstrate **cloud elasticity**, not merely that an asynchronous design is faster:
 
-A load point is sustainable only while p95 latency remains below 500 ms, request errors remain below 1%, no requests are dropped or missing, and all correctness and reconciliation guardrails pass. The final README claim will report both capacity boundaries and their improvement multiplier—for example, “TrackRelay sustains X× more events per second after modernization without losing correctness.”
+> **AWS-modernized TrackRelay automatically scaled from A to B worker tasks to absorb an X× traffic increase, kept p95 latency below 500 ms, accounted for every accepted event, and returned to A tasks after demand fell.**
 
-Phase 8 must first publish the local legacy curve, capacity number, and reusable benchmark artifact. Phase 9 will establish a comparable synchronous AWS control before measuring the modernized system, so the headline does not confuse architectural improvement with different hardware. CPU, memory, cost, and outage recovery remain supporting or follow-up results rather than competing with this main story.
+The hero figure will align offered load, running worker tasks, queue depth, and p95 latency on one time axis. Scale-out will show that TrackRelay acquired processing capacity when demand rose; queue drain and scale-in will show that it caught up and released that capacity when demand fell. A run succeeds only while request errors remain below 1%, no requests are dropped or missing, every accepted event is accounted for, correctness guardrails pass, and the backlog remains bounded and drains within the experiment deadline.
+
+The causal comparison will run the same queue-based AWS architecture twice: first with a fixed worker count and then with worker autoscaling enabled. SQS, ECS task definitions, RDS, the API capacity, workload, SLO, and minimum worker count will remain constant. Queue decoupling makes delivery independently scalable and exposes pending demand; autoscaling is the mechanism; AWS supplies and releases the underlying compute. Public cloud is not the only way to build an elastic platform, but it makes that capacity available on demand without TrackRelay's owner procuring and operating spare hardware beforehand.
+
+Phase 8 will still publish the local legacy latency-versus-load curve and capacity number. That is the project's first measurable end product and proves the benchmark and reconciliation machinery, but it is not the causal denominator for the final elasticity claim. Fixed-resource throughput, CPU, memory, cost, and outage recovery remain supporting or follow-up results rather than competing with the main story.
 
 ## Planned technology stack
 
@@ -414,4 +418,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The local synchronous implementation and its measurement plumbing are complete through Step 8.5. TrackRelay can run reconciled correctness, ramp, slow-downstream, and outage-under-load experiments, but the baseline is not frozen yet. Step 8.6 must now produce the versioned legacy latency-versus-load plot, maximum sustainable throughput, and comparison-ready benchmark artifact before AWS modernization begins.
+The local synchronous implementation and its measurement plumbing are complete through Step 8.5. TrackRelay can run reconciled correctness, ramp, slow-downstream, and outage-under-load experiments, but the baseline is not frozen yet. Step 8.6 must now produce the versioned legacy latency-versus-load plot, fixed-capacity reference, and reusable benchmark artifact before AWS modernization begins. Phase 9 will use that machinery for its decisive fixed-versus-elastic AWS experiment.

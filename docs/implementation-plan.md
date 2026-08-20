@@ -333,16 +333,16 @@ incorrect final shipment states = 0
 
 ## Phase 8 — Repeatable correctness and performance experiments
 
-Goal: determine and publish the trustworthy performance envelope of the local synchronous architecture.
+Goal: determine and publish the trustworthy fixed-capacity performance envelope of the local synchronous architecture, while proving the benchmark machinery that Phase 9 will reuse.
 
 Phase 8 measurements have different jobs:
 
-- **Headline measurement:** p95 response latency at each offered request rate.
-- **Derived headline:** maximum sustainable throughput, defined as the highest consecutive rate that remains inside the SLO.
+- **Local reference measurement:** p95 response latency at each offered request rate.
+- **Derived local result:** maximum sustainable throughput, defined as the highest consecutive rate that remains inside the SLO.
 - **Acceptance guardrails:** request errors, dropped or missing requests, reconciliation, duplicate effects, and final shipment correctness. A point that violates a guardrail is not a valid capacity result.
 - **Supporting diagnostics:** CPU, memory, database connections, and delivery rates explain a result but are not the primary comparison.
 
-The end product is one comparison-ready legacy curve and capacity number, not a collection of unrelated metrics.
+The end product is one reproducible legacy curve and capacity number, not a collection of unrelated metrics. It is the project's first measured end product and a benchmark rehearsal, but it is not the causal control for the final cloud-elasticity claim.
 
 ### Step 8.1 — Turn correctness scenarios into commands
 
@@ -376,32 +376,36 @@ The end product is one comparison-ready legacy curve and capacity number, not a 
 - [ ] Define legacy capacity as the last consecutive passing rate before the first failing rate; higher points may remain visible as diagnostics but cannot restore a failed envelope.
 - [ ] Produce `results/legacy-baseline/benchmark-definition.json`, `summary.json`, `ramp-results.csv`, `latency-vs-load.png`, and a short `README.md` containing the environment, maximum sustainable throughput, and first SLO violation.
 - [ ] Version the compact legacy-baseline artifact in Git while keeping bulky per-run raw evidence ignored or archived separately.
-- [ ] Treat these files and their schema as the comparison contract reused by every Phase 9 architecture.
+- [ ] Treat the workload definition, rate semantics, SLO, reconciliation guardrails, and core result fields as the foundation for Phase 9; the elasticity experiment will add aligned queue-depth and worker-count time series.
 
 **Milestone:** `legacy-local-baseline-v1` — the local synchronous implementation is complete and measured.
 
 ## Phase 9 — AWS modernization
 
-Goal: move the performance envelope and publish one defensible headline:
+Goal: answer one cloud-specific question:
 
-> **TrackRelay sustains X× more events per second after modernization while preserving the same SLO and correctness guardrails.**
+> **Can TrackRelay automatically acquire and release processing capacity as demand changes while continuing to meet its latency, completion, and correctness requirements?**
 
-The primary figure is one p95-latency-versus-offered-load plot. Its most important annotations are the sustainable-throughput boundary for the synchronous control, the boundary for the selected modernized architecture, and the improvement multiplier.
+The intended headline is:
 
-Correctness and reconciliation remain mandatory acceptance gates, not competing headline metrics. Failure recovery, resource efficiency, cloud cost, and broader operational comparisons remain useful evidence but are deferred until after the throughput/latency headline is complete.
+> **AWS-modernized TrackRelay sustained an X× traffic increase by automatically scaling from A to B worker tasks, maintained every latency, completion, and correctness guardrail, and returned to A tasks when demand normalized.**
 
-Phase 8 proves the benchmark locally. Stage 9.1 must also establish a synchronous AWS control on comparable infrastructure, because the final modernization multiplier must not confuse an architectural improvement with a local-versus-cloud hardware difference.
+The primary figure will be one aligned time-series story: offered load rises and falls, running worker tasks follow it, queue depth stays bounded and drains, and p95 latency remains below the SLO. Scale-out alone is insufficient; returning to the minimum worker count after demand falls is required to demonstrate elasticity rather than permanent overprovisioning.
 
-### Stage 9.1 — Establish the synchronous AWS control
+The causal experiment compares the same modernized AWS deployment with **worker autoscaling off** and **worker autoscaling on**. SQS, ECS task definitions, RDS, fixed API capacity, workload, SLO, and minimum worker count must remain the same. Only the worker-capacity policy changes. The asynchronous architecture is a prerequisite that makes delivery independently scalable; access to additional on-demand compute is the cloud capability being tested.
+
+The local legacy baseline remains important as the starting point and benchmark rehearsal, but it is not the denominator for the final X× elasticity claim. A local asynchronous implementation is optional and is not required for this experiment.
+
+### Stage 9.1 — Rehost synchronous TrackRelay on AWS
 
 - [ ] Package and run the synchronous application with minimal architectural change.
-- [ ] Run the frozen benchmark and guardrails unchanged to produce the authoritative synchronous AWS curve.
-- [ ] Record instance type, process count, database placement, region, and benchmark-driver placement so later curves are comparable.
+- [ ] Run the frozen workload and guardrails to verify that the benchmark is portable to the AWS environment.
+- [ ] Record instance type, process count, database placement, region, and benchmark-driver placement as migration evidence, not as the causal elasticity control.
 
 ### Stage 9.2 — Move PostgreSQL to RDS without changing delivery
 
 - [ ] Replace the locally managed database with RDS.
-- [ ] Rerun the same headline benchmark and record whether the sustainable-throughput boundary moves.
+- [ ] Rerun a small benchmark and correctness check to distinguish database migration effects from later queue and scaling changes.
 - [ ] Keep the synchronous downstream call unchanged so the database effect remains distinguishable from the later queue effect.
 
 ### Stage 9.3 — Decouple downstream delivery with SQS and a worker
@@ -409,35 +413,44 @@ Phase 8 proves the benchmark locally. Stage 9.1 must also establish a synchronou
 - [ ] Make ingestion persist and enqueue work.
 - [ ] Move downstream delivery into a separate worker.
 - [ ] Add retries and a dead-letter queue.
-- [ ] Rerun the frozen benchmark with the same offered loads, SLO, and accepted-event guardrails.
-- [ ] Confirm the measured API success boundary still represents durable acceptance, not merely a faster response that loses work later.
+- [ ] Define durable acceptance precisely and confirm that a fast API response cannot hide lost work.
+- [ ] Add processing guardrails: every accepted event is accounted for, duplicate business effects remain zero, final shipment states are correct, and the queue drains by a documented deadline after offered load falls.
 
 ### Stage 9.4 — Containerize on ECS/Fargate
 
 - [ ] Build separate API, worker, and simulator images.
 - [ ] Deploy behind an Application Load Balancer where appropriate.
-- [ ] Rerun the headline benchmark with a fixed, documented task count and resource allocation.
+- [ ] Publish CloudWatch metrics for offered load, API p95 latency, request errors, running worker tasks, queue depth, and message age or processing lag.
+- [ ] Run the API at a fixed, documented capacity with enough headroom that worker delivery capacity is the variable under test.
 
-### Stage 9.5 — Scale and freeze the modernized envelope
+### Stage 9.5 — Establish the fixed-capacity modernized control
 
-- [ ] Add only the observability needed to validate load, latency, errors, durable acceptance, queue depth, and benchmark health.
-- [ ] Apply a documented scaling policy, rerun the standard load points, and select the final modernized curve.
-- [ ] Freeze `results/modernized-baseline/` using the same artifact schema as the legacy baseline.
-- [ ] Version the compact modernized artifact so both headline inputs are durable and independently inspectable.
+- [ ] Disable worker autoscaling and fix the worker tier at its documented minimum task count.
+- [ ] Run a stepped workload that rises beyond fixed worker capacity and later returns to the starting rate.
+- [ ] Define a sustainable end-to-end load using ingestion SLOs plus bounded backlog, completion, drain-deadline, and correctness guardrails; API latency alone is insufficient.
+- [ ] Freeze the fixed-control configuration and aligned time series in `results/aws-fixed-control/`.
 
-### Stage 9.6 — Publish the headline comparison
+### Stage 9.6 — Enable and measure worker elasticity
 
-- [ ] Overlay the synchronous AWS control and final modernized p95-latency curves on one large plot with the 500 ms SLO line.
-- [ ] Report both maximum sustainable throughputs and calculate the improvement multiplier.
-- [ ] Put the plot and one-sentence result near the top of the repository README.
-- [ ] Keep intermediate architectures and detailed guardrail evidence in the benchmark report rather than competing with the main result.
+- [ ] Enable a documented worker scaling policy with the same minimum task count and a bounded maximum; use queue backlog or backlog per task as the demand signal.
+- [ ] Replay the fixed-control workload without changing the application, task definition, API capacity, database, simulator, benchmark driver, SLO, or guardrails.
+- [ ] Verify that workers scale from A to B as load rises, backlog remains bounded and drains, and workers return to A after demand falls.
+- [ ] Freeze the scaling policy, environment, raw aligned time series, reconciliation evidence, and summary in `results/aws-elastic-treatment/`.
+
+### Stage 9.7 — Publish the elasticity headline
+
+- [ ] Produce one large, aligned time-series figure comparing fixed and elastic runs across offered load, running worker tasks, queue depth or message age, and p95 latency with its 500 ms SLO line.
+- [ ] Report the highest demand step that satisfies every end-to-end guardrail in each run, the load multiplier, worker expansion A→B, time to scale out, backlog drain time, and return to A.
+- [ ] Put the figure and one-sentence elasticity result near the top of the repository README.
+- [ ] Explain the causal chain plainly: SQS exposes pending demand, autoscaling responds, ECS changes the worker count, and AWS supplies and releases compute without TrackRelay owning spare hardware.
+- [ ] Keep migration-stage measurements, fixed-resource architecture effects, and detailed guardrail evidence in the benchmark report rather than competing with the main result.
 
 ## Deferred follow-up results
 
-Only after the headline throughput/latency comparison is published:
+Only after the headline elasticity result is published:
 
 - [ ] Measure automatic delivery recovery and backlog drain after a downstream outage.
-- [ ] Compare CPU, memory, database utilization, AWS cost, and operational complexity.
+- [ ] Compare fixed-resource throughput effects, CPU, memory, database utilization, AWS cost, and operational complexity.
 - [ ] Publish secondary resilience and efficiency figures without diluting the primary result.
 
 ## Explicitly out of scope at the beginning

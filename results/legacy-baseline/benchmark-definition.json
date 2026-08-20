@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "configuration": {
+    "schema_version": 1,
+    "name": "legacy-local-baseline-v1",
+    "architecture": "local-synchronous",
+    "downstream_condition": "healthy",
+    "workload_shape": "one-created-event-per-shipment",
+    "offered_rates_per_second": [
+      10,
+      25,
+      50,
+      100,
+      250,
+      500
+    ],
+    "tier_duration_seconds": 10,
+    "random_seed": 20260806,
+    "partner_id": "load-alpha",
+    "start_at": "2026-08-06T00:00:00Z",
+    "resource_sample_interval_seconds": 0.25,
+    "post_load_settle_timeout_seconds": 30.0,
+    "post_load_stable_window_seconds": 2.0,
+    "k6_image": "grafana/k6:2.1.0",
+    "trackrelay_api_url": "http://127.0.0.1:8000",
+    "trackrelay_api_url_for_container": "http://host.docker.internal:8000",
+    "downstream_url": "http://127.0.0.1:8001",
+    "api_process_count": 1,
+    "downstream_process_count": 1,
+    "api_access_log_enabled": false,
+    "downstream_access_log_enabled": false,
+    "database_server": "PostgreSQL 17 (postgres:17-alpine)",
+    "slo": {
+      "schema_version": 1,
+      "name": "initial-local-baseline-v1",
+      "scope": "local_experiment",
+      "p95_response_latency_must_be_below_ms": 500.0,
+      "request_error_rate_must_be_below": 0.01,
+      "unaccounted_events_must_equal": 0
+    }
+  },
+  "environment": {
+    "schema_version": 1,
+    "captured_at": "2026-08-20T13:55:51.048356Z",
+    "operating_system": "macOS-26.5.2-arm64-arm-64bit",
+    "architecture": "arm64",
+    "processor": "Apple M3 Pro",
+    "logical_cpu_count": 11,
+    "total_memory_bytes": 19327352832,
+    "python_version": "3.12.12",
+    "database_url": "postgresql+psycopg://trackrelay:***@localhost:5433/trackrelay_baseline_final"
+  }
+}

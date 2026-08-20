@@ -309,6 +309,7 @@ def execute_correctness_scenario(
     simulator_receipts = fetch_simulator_receipts(
         downstream_url,
         client=downstream_client,
+        test_run_id=manifest.test_run_id,
     )
     with sessions() as session:
         reconciliation = reconcile_manifest(

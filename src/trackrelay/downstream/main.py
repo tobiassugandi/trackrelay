@@ -1,6 +1,7 @@
 """Downstream order-system simulator API."""
 
 from time import sleep
+from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, ConfigDict
@@ -78,6 +79,9 @@ def receive_event(event: NormalizedEvent) -> dict[str, object]:
 
 
 @app.get("/events", response_model_exclude_none=True)
-def list_events() -> list[NormalizedEvent]:
-    """Return every event received by this simulator process."""
-    return list(event_store.all())
+def list_events(test_run_id: UUID | None = None) -> list[NormalizedEvent]:
+    """Return all receipts, optionally scoped to one experiment."""
+    events = event_store.all()
+    if test_run_id is None:
+        return list(events)
+    return [event for event in events if event.test_run_id == test_run_id]

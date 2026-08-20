@@ -51,6 +51,14 @@ The causal comparison will run the same queue-based AWS architecture twice: firs
 
 Phase 8 will still publish the local legacy latency-versus-load curve and capacity number. That is the project's first measurable end product and proves the benchmark and reconciliation machinery, but it is not the causal denominator for the final elasticity claim. Fixed-resource throughput, CPU, memory, cost, and outage recovery remain supporting or follow-up results rather than competing with the main story.
 
+### Local fixed-capacity reference
+
+On the recorded local environment, synchronous TrackRelay sustained **250 events/s** while passing every latency, request-completion, reconciliation, duplicate-effect, and final-state guardrail. At the next configured point, 500 offered events/s, observed throughput remained about 243 events/s, 2,324 iterations were dropped, and p95 latency rose to 1,506 ms. This machine-specific result is the Phase 8 reference and benchmark rehearsal; the final cloud claim will come from the controlled fixed-versus-elastic AWS experiment.
+
+![Local synchronous latency versus offered load](results/legacy-baseline/latency-vs-load.png)
+
+See [the frozen baseline report](results/legacy-baseline/README.md) for the environment, exact values, and compact machine-readable evidence.
+
 ## Planned technology stack
 
 ### Application
@@ -364,6 +372,40 @@ The raw k6 summary supplies latency, errors, and observed throughput. Runtime sa
 
 These are intentionally failure experiments. Slow delivery should normally cross the 500 ms latency target, while unavailability should produce an HTTP error rate far above 1%. A correctly functioning experiment can therefore have `execution_valid: true` and reconciled evidence while `complete_experiment_passed` is false. That distinction demonstrates the synchronous architecture's limitation without misclassifying accounted failures as lost events.
 
+### Frozen legacy performance envelope
+
+The Step 8.6 baseline reuses the complete experiment lifecycle under a healthy downstream condition and evaluates 10, 25, 50, 100, 250, and 500 offered events per second independently. Each request creates one distinct shipment in the `CREATED` state. This avoids manufacturing concurrent updates to the same shipment while preserving a manifest-declared final state for every request. The separate correctness scenarios remain responsible for exercising complete five-state histories and ordering behavior.
+
+For the recorded single-process topology, run both servers without development reload or access-log overhead:
+
+```bash
+uv run --locked uvicorn trackrelay.downstream.main:app \
+  --host 127.0.0.1 --port 8001 --no-access-log
+```
+
+```bash
+uv run --locked uvicorn trackrelay.main:app \
+  --host 127.0.0.1 --port 8000 --no-access-log
+```
+
+Use a freshly migrated, dedicated PostgreSQL database when producing an authoritative result, and expose the same `TRACKRELAY_DATABASE_URL` to both the API and baseline command. Then run:
+
+```bash
+make load-baseline
+```
+
+The command runs the pinned k6 container once per rate, waits for server-side work to settle, reconciles each test run independently, and writes the compact artifact under `results/legacy-baseline/`:
+
+```text
+benchmark-definition.json
+summary.json
+ramp-results.csv
+latency-vs-load.png
+README.md
+```
+
+Per-run manifests, k6 summaries, runtime samples, database summaries, simulator receipts, and reconciliation reports are stored under `results/raw/legacy-baseline/` and ignored by Git. Override `BASELINE_RATES`, `BASELINE_TIER_DURATION_SECONDS`, `BASELINE_OUTPUT`, or `BASELINE_RAW_OUTPUT` through Make variables for diagnostics; the versioned reference uses the defaults.
+
 ### Duplicate-event contract
 
 A logical event is identified by `(partner_id, partner_event_id)`. Multiple HTTP requests carrying that identity are transport retries of the same logical event, not additional events. Likewise, a downstream HTTP delivery is a side effect of the logical event; retrying ingestion must not create another downstream delivery.
@@ -418,4 +460,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The local synchronous implementation and its measurement plumbing are complete through Step 8.5. TrackRelay can run reconciled correctness, ramp, slow-downstream, and outage-under-load experiments, but the baseline is not frozen yet. Step 8.6 must now produce the versioned legacy latency-versus-load plot, fixed-capacity reference, and reusable benchmark artifact before AWS modernization begins. Phase 9 will use that machinery for its decisive fixed-versus-elastic AWS experiment.
+The local synchronous implementation is complete and measured through Step 8.6. Its frozen reference sustains 250 events/s on the recorded machine and first fails at 500 events/s. Phase 9 begins next with Stage 9.1, rehosting synchronous TrackRelay on AWS as a migration and benchmark-portability step before building the decisive fixed-versus-elastic worker experiment.

@@ -371,12 +371,14 @@ The end product is one reproducible legacy curve and capacity number, not a coll
 
 ### Step 8.6 — Freeze the legacy performance envelope
 
-- [ ] Run the healthy-downstream benchmark at 10, 25, 50, 100, 250, and 500 offered events per second using one versioned workload and SLO definition.
-- [ ] Evaluate every rate independently and accept it only when p95 latency is below 500 ms, request errors are below 1%, no iterations are dropped or missing, and every correctness and reconciliation guardrail passes.
-- [ ] Define legacy capacity as the last consecutive passing rate before the first failing rate; higher points may remain visible as diagnostics but cannot restore a failed envelope.
-- [ ] Produce `results/legacy-baseline/benchmark-definition.json`, `summary.json`, `ramp-results.csv`, `latency-vs-load.png`, and a short `README.md` containing the environment, maximum sustainable throughput, and first SLO violation.
-- [ ] Version the compact legacy-baseline artifact in Git while keeping bulky per-run raw evidence ignored or archived separately.
-- [ ] Treat the workload definition, rate semantics, SLO, reconciliation guardrails, and core result fields as the foundation for Phase 9; the elasticity experiment will add aligned queue-depth and worker-count time series.
+- [x] Run the healthy-downstream benchmark at 10, 25, 50, 100, 250, and 500 offered events per second using one versioned workload and SLO definition.
+- [x] Evaluate every rate independently and accept it only when p95 latency is below 500 ms, request errors are below 1%, no iterations are dropped or missing, and every correctness and reconciliation guardrail passes.
+- [x] Define legacy capacity as the last consecutive passing rate before the first failing rate; higher points may remain visible as diagnostics but cannot restore a failed envelope.
+- [x] Produce `results/legacy-baseline/benchmark-definition.json`, `summary.json`, `ramp-results.csv`, `latency-vs-load.png`, and a short `README.md` containing the environment, maximum sustainable throughput, and first SLO violation.
+- [x] Version the compact legacy-baseline artifact in Git while keeping bulky per-run raw evidence ignored or archived separately.
+- [x] Treat the workload definition, rate semantics, SLO, reconciliation guardrails, and core result fields as the foundation for Phase 9; the elasticity experiment will add aligned queue-depth and worker-count time series.
+
+**Measured result:** the recorded local system passes every complete gate through 250 offered events/s. At 500 events/s, observed throughput is about 243 events/s, 2,324 iterations are dropped, p95 latency is 1,506 ms, and the final-state guardrail fails for the missing requests. The frozen workload uses one distinct `CREATED` shipment per request so the envelope measures ingestion and synchronous delivery capacity without artificial same-shipment races.
 
 **Milestone:** `legacy-local-baseline-v1` — the local synchronous implementation is complete and measured.
 

@@ -15,6 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
+trackrelay-baseline = "trackrelay.experiments.baseline:main"
 trackrelay-generate = "trackrelay.experiments.generator:main"
 trackrelay-load-experiment = "trackrelay.experiments.performance:experiment_main"
 trackrelay-prepare-load = "trackrelay.experiments.performance:main"
@@ -23,6 +24,7 @@ trackrelay-scenario = "trackrelay.experiments.scenarios:main"
 
 [dependency-groups]
 dev = [
+    "matplotlib>=3.10,<4",
     "pytest>=8.4,<10",
     "ruff>=0.12,<1",
 ]

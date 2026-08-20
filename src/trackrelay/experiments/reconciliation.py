@@ -153,16 +153,22 @@ def write_reconciliation_report(
 def fetch_simulator_receipts(
     downstream_url: str,
     *,
+    test_run_id: UUID | None = None,
     client: httpx.Client | None = None,
     timeout_seconds: float = 5.0,
 ) -> tuple[NormalizedEvent, ...]:
     """Fetch and validate the simulator's current normalized-event receipts."""
     endpoint = f"{downstream_url.rstrip('/')}/events"
+    parameters = (
+        {"test_run_id": str(test_run_id)}
+        if test_run_id is not None
+        else None
+    )
     if client is not None:
-        response = client.get(endpoint)
+        response = client.get(endpoint, params=parameters)
     else:
         with httpx.Client(timeout=timeout_seconds) as http_client:
-            response = http_client.get(endpoint)
+            response = http_client.get(endpoint, params=parameters)
     response.raise_for_status()
     return tuple(TypeAdapter(list[NormalizedEvent]).validate_json(response.content))
 
@@ -585,6 +591,7 @@ def main() -> None:
     try:
         simulator_receipts = fetch_simulator_receipts(
             arguments.downstream_url,
+            test_run_id=manifest.test_run_id,
             timeout_seconds=Settings().downstream_timeout_seconds,
         )
         with session_factory() as session:

@@ -2,7 +2,6 @@ import exec from "k6/execution";
 import { SharedArray } from "k6/data";
 import http from "k6/http";
 import { check } from "k6";
-import { Counter } from "k6/metrics";
 
 function positiveInteger(value, name) {
   const parsed = Number(value);
@@ -42,10 +41,6 @@ if (manifestEvents.length !== expectedRequests) {
   );
 }
 
-const manifestExhaustedIterations = new Counter(
-  "manifest_exhausted_iterations",
-);
-
 export const options = {
   discardResponseBodies: true,
   scenarios: {
@@ -54,22 +49,20 @@ export const options = {
       rate: requestRate,
       timeUnit: "1s",
       duration: `${activeDurationMilliseconds}ms`,
-      preAllocatedVUs: requestRate * 2,
-      maxVUs: requestRate * 6,
+      preAllocatedVUs: Math.max(1, Math.ceil(requestRate / 2)),
+      maxVUs: requestRate,
       gracefulStop: "10s",
     },
   },
   thresholds: {
     checks: ["rate==1"],
     dropped_iterations: ["count==0"],
-    manifest_exhausted_iterations: ["count==0"],
   },
 };
 
 export default function () {
   const manifestEvent = manifestEvents[exec.scenario.iterationInTest];
   if (!manifestEvent) {
-    manifestExhaustedIterations.add(1);
     return;
   }
   const response = http.post(

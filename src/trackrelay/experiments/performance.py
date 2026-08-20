@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from time import sleep
+from time import monotonic, sleep
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
@@ -21,11 +21,12 @@ from pydantic import (
     computed_field,
     model_validator,
 )
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from trackrelay.config import Settings
 from trackrelay.database import session_factory as default_session_factory
-from trackrelay.domain import NormalizedEvent
+from trackrelay.domain import NormalizedEvent, ShipmentStatus
 from trackrelay.downstream.control import SimulatorMode
 from trackrelay.experiments.generator import (
     DEFAULT_START_AT,
@@ -48,7 +49,7 @@ from trackrelay.experiments.slo import (
     BaselineSLOEvaluation,
     evaluate_baseline_slo,
 )
-from trackrelay.models import Partner
+from trackrelay.models import DeliveryAttempt, Event, Partner
 from trackrelay.runtime_metrics import RuntimeMetricsSnapshot
 
 LOAD_ADAPTER_TYPE = "courier-alpha"
@@ -58,24 +59,28 @@ NonNegativeFloat = Annotated[float, Field(ge=0)]
 NonNegativeInteger = Annotated[int, Field(ge=0)]
 
 
-class LoadFailureScenario(StrEnum):
+class LoadScenario(StrEnum):
     """Downstream conditions measured under a fixed request rate."""
 
+    HEALTHY = "healthy"
     SLOW = "slow"
     OUTAGE = "outage"
 
 
 SCENARIO_MODE = {
-    LoadFailureScenario.SLOW: SimulatorMode.SLOW,
-    LoadFailureScenario.OUTAGE: SimulatorMode.UNAVAILABLE,
+    LoadScenario.HEALTHY: SimulatorMode.HEALTHY,
+    LoadScenario.SLOW: SimulatorMode.SLOW,
+    LoadScenario.OUTAGE: SimulatorMode.UNAVAILABLE,
 }
 SCENARIO_HTTP_STATUS = {
-    LoadFailureScenario.SLOW: 201,
-    LoadFailureScenario.OUTAGE: 502,
+    LoadScenario.HEALTHY: 201,
+    LoadScenario.SLOW: 201,
+    LoadScenario.OUTAGE: 502,
 }
 SCENARIO_MANIFEST_NAME = {
-    LoadFailureScenario.SLOW: "slow-under-load",
-    LoadFailureScenario.OUTAGE: "outage-under-load",
+    LoadScenario.HEALTHY: "healthy-baseline",
+    LoadScenario.SLOW: "slow-under-load",
+    LoadScenario.OUTAGE: "outage-under-load",
 }
 
 
@@ -85,13 +90,15 @@ class PerformanceExperimentConfiguration(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[1] = 1
-    scenario: LoadFailureScenario
+    scenario: LoadScenario
     request_rate_per_second: PositiveInteger = 5
     duration_seconds: PositiveInteger = 5
     random_seed: int = 20260806
     partner_id: str = "load-alpha"
     start_at: AwareDatetime = DEFAULT_START_AT
     resource_sample_interval_seconds: PositiveFloat = 0.25
+    post_load_settle_timeout_seconds: PositiveFloat = 30
+    post_load_stable_window_seconds: PositiveFloat = 2
     k6_image: str = "grafana/k6:2.1.0"
     trackrelay_api_url: str = "http://127.0.0.1:8000"
     trackrelay_api_url_for_container: str = (
@@ -118,7 +125,10 @@ class PerformanceExperimentConfiguration(BaseModel):
     def require_complete_shipment_histories(
         self,
     ) -> "PerformanceExperimentConfiguration":
-        if self.expected_request_count % 5:
+        if (
+            self.scenario is not LoadScenario.HEALTHY
+            and self.expected_request_count % 5
+        ):
             raise ValueError(
                 "request rate times duration must be divisible by 5"
             )
@@ -145,6 +155,7 @@ class PerformanceExperimentResult(BaseModel):
     configuration: PerformanceExperimentConfiguration
     k6_exit_code: int
     observed_request_count: NonNegativeInteger
+    dropped_iteration_count: NonNegativeInteger
     observed_request_rate_per_second: NonNegativeFloat
     p95_response_latency_ms: NonNegativeFloat
     request_error_rate: Annotated[float, Field(ge=0, le=1)]
@@ -162,6 +173,7 @@ class PerformanceExperimentResult(BaseModel):
     def execution_valid(self) -> bool:
         return (
             self.k6_exit_code == 0
+            and self.dropped_iteration_count == 0
             and self.observed_request_count
             == self.configuration.expected_request_count
         )
@@ -216,16 +228,46 @@ def build_performance_manifest(
     *,
     test_run_id: UUID,
 ) -> InputManifest:
-    """Build complete Alpha histories for the exact scheduled request count."""
+    """Build the scenario's exact scheduled Courier Alpha request set."""
+    shipment_count = (
+        configuration.expected_request_count
+        if configuration.scenario is LoadScenario.HEALTHY
+        else configuration.expected_request_count // 5
+    )
     manifest = generate_input_manifest(
         seed=configuration.random_seed,
         configuration=GeneratorConfiguration(
             partner_id=configuration.partner_id,
-            shipment_count=configuration.expected_request_count // 5,
+            shipment_count=shipment_count,
             start_at=configuration.start_at,
         ),
         test_run_id=test_run_id,
     )
+    if configuration.scenario is LoadScenario.HEALTHY:
+        created_events = tuple(
+            event.model_copy(update={"sequence_number": sequence_number})
+            for sequence_number, event in enumerate(
+                (
+                    event
+                    for event in manifest.expected_events
+                    if event.expected_status is ShipmentStatus.CREATED
+                ),
+                start=1,
+            )
+        )
+        manifest = InputManifest(
+            test_run_id=manifest.test_run_id,
+            scenario_name="healthy-baseline",
+            seed=manifest.seed,
+            configuration=manifest.configuration,
+            events_generated=len(created_events),
+            expected_unique_events=len(created_events),
+            expected_events=created_events,
+            expected_final_shipments={
+                event.tracking_number: ShipmentStatus.CREATED
+                for event in created_events
+            },
+        )
     return InputManifest.model_validate(
         {
             **manifest.model_dump(),
@@ -343,6 +385,20 @@ def _k6_metric_value(
         ) from error
 
 
+def _optional_k6_metric_value(
+    summary: dict[str, object],
+    metric_name: str,
+    value_name: str,
+    *,
+    default: float,
+) -> float:
+    """Read a metric that k6 omits when it never records a sample."""
+    try:
+        return _k6_metric_value(summary, metric_name, value_name)
+    except ValueError:
+        return default
+
+
 def _maximum_checked_out_connections(
     samples: Sequence[RuntimeMetricsSnapshot],
 ) -> int:
@@ -376,6 +432,54 @@ def _receipts_for_run(
     return tuple(
         receipt for receipt in receipts if receipt.test_run_id == test_run_id
     )
+
+
+def _database_run_counts(
+    test_run_id: UUID,
+    *,
+    sessions: sessionmaker[Session],
+) -> tuple[int, int]:
+    with sessions() as session:
+        event_count = session.scalar(
+            select(func.count())
+            .select_from(Event)
+            .where(Event.test_run_id == test_run_id)
+        )
+        delivery_attempt_count = session.scalar(
+            select(func.count())
+            .select_from(DeliveryAttempt)
+            .join(Event, DeliveryAttempt.event_id == Event.id)
+            .where(Event.test_run_id == test_run_id)
+        )
+    return int(event_count or 0), int(delivery_attempt_count or 0)
+
+
+def _wait_for_database_run_to_settle(
+    test_run_id: UUID,
+    *,
+    expected_request_count: int,
+    timeout_seconds: float,
+    stable_window_seconds: float,
+    sessions: sessionmaker[Session],
+    sample_interval_seconds: float = 0.25,
+) -> None:
+    """Let server-side work finish after k6 stops waiting for responses."""
+    deadline = monotonic() + timeout_seconds
+    stable_since = monotonic()
+    previous_counts: tuple[int, int] | None = None
+    while True:
+        counts = _database_run_counts(test_run_id, sessions=sessions)
+        if counts == (expected_request_count, expected_request_count):
+            return
+        now = monotonic()
+        if counts != previous_counts:
+            previous_counts = counts
+            stable_since = now
+        elif now - stable_since >= stable_window_seconds:
+            return
+        if now >= deadline:
+            return
+        sleep(sample_interval_seconds)
 
 
 def execute_performance_experiment(
@@ -435,6 +539,15 @@ def execute_performance_experiment(
         )
         reset_response.raise_for_status()
 
+    _wait_for_database_run_to_settle(
+        resolved_test_run_id,
+        expected_request_count=configuration.expected_request_count,
+        timeout_seconds=configuration.post_load_settle_timeout_seconds,
+        stable_window_seconds=(
+            configuration.post_load_stable_window_seconds
+        ),
+        sessions=sessions,
+    )
     complete_database_run(resolved_test_run_id, sessions=sessions)
     runtime_samples = RuntimeMetricsSamples(
         test_run_id=resolved_test_run_id,
@@ -445,6 +558,7 @@ def execute_performance_experiment(
     all_simulator_receipts = fetch_simulator_receipts(
         configuration.downstream_url,
         client=downstream_client,
+        test_run_id=resolved_test_run_id,
     )
     simulator_receipts = _receipts_for_run(
         all_simulator_receipts,
@@ -495,6 +609,14 @@ def execute_performance_experiment(
         k6_exit_code=k6_exit_code,
         observed_request_count=int(
             _k6_metric_value(k6_summary, "http_reqs", "count")
+        ),
+        dropped_iteration_count=int(
+            _optional_k6_metric_value(
+                k6_summary,
+                "dropped_iterations",
+                "count",
+                default=0,
+            )
         ),
         observed_request_rate_per_second=_k6_metric_value(
             k6_summary,
@@ -555,8 +677,8 @@ def build_experiment_parser() -> ArgumentParser:
     parser = ArgumentParser(description=__doc__)
     parser.add_argument(
         "scenario",
-        type=LoadFailureScenario,
-        choices=tuple(LoadFailureScenario),
+        type=LoadScenario,
+        choices=tuple(LoadScenario),
     )
     parser.add_argument("--rate", type=int, default=5)
     parser.add_argument("--duration-seconds", type=int, default=5)

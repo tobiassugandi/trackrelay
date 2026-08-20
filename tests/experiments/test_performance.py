@@ -7,8 +7,9 @@ from pydantic import ValidationError
 from pytest import raises
 
 from trackrelay.database import Base, create_database_engine, create_session_factory
+from trackrelay.domain import ShipmentStatus
 from trackrelay.experiments.performance import (
-    LoadFailureScenario,
+    LoadScenario,
     PerformanceExperimentConfiguration,
     build_k6_command,
     build_performance_manifest,
@@ -82,7 +83,7 @@ def test_prepare_load_partner_rejects_an_incompatible_partner() -> None:
 
 def test_slow_configuration_declares_every_repeatable_input() -> None:
     configuration = PerformanceExperimentConfiguration(
-        scenario=LoadFailureScenario.SLOW,
+        scenario=LoadScenario.SLOW,
     )
 
     assert configuration.expected_request_count == 25
@@ -96,15 +97,40 @@ def test_slow_configuration_declares_every_repeatable_input() -> None:
         "http://host.docker.internal:8000"
     )
     assert configuration.downstream_url == "http://127.0.0.1:8001"
+    assert configuration.post_load_settle_timeout_seconds == 30
+    assert configuration.post_load_stable_window_seconds == 2
 
 
 def test_outage_configuration_expects_the_persisted_delivery_failure() -> None:
     configuration = PerformanceExperimentConfiguration(
-        scenario=LoadFailureScenario.OUTAGE,
+        scenario=LoadScenario.OUTAGE,
     )
 
     assert configuration.simulator_mode == "UNAVAILABLE"
     assert configuration.expected_http_status_code == 502
+
+
+def test_healthy_configuration_declares_the_baseline_condition() -> None:
+    configuration = PerformanceExperimentConfiguration(
+        scenario=LoadScenario.HEALTHY,
+    )
+
+    assert configuration.simulator_mode == "HEALTHY"
+    assert configuration.expected_http_status_code == 201
+
+    manifest = build_performance_manifest(
+        configuration,
+        test_run_id=TEST_RUN_ID,
+    )
+
+    assert manifest.scenario_name == "healthy-baseline"
+    assert manifest.events_generated == configuration.expected_request_count
+    assert len(manifest.expected_final_shipments) == (
+        configuration.expected_request_count
+    )
+    assert set(manifest.expected_final_shipments.values()) == {
+        ShipmentStatus.CREATED
+    }
 
 
 def test_configuration_requires_complete_five_event_histories() -> None:
@@ -113,15 +139,23 @@ def test_configuration_requires_complete_five_event_histories() -> None:
         match="request rate times duration must be divisible by 5",
     ):
         PerformanceExperimentConfiguration(
-            scenario=LoadFailureScenario.SLOW,
+            scenario=LoadScenario.SLOW,
             request_rate_per_second=2,
             duration_seconds=3,
         )
 
+    healthy_configuration = PerformanceExperimentConfiguration(
+        scenario=LoadScenario.HEALTHY,
+        request_rate_per_second=2,
+        duration_seconds=3,
+    )
+
+    assert healthy_configuration.expected_request_count == 6
+
 
 def test_performance_manifest_matches_the_scheduled_load() -> None:
     configuration = PerformanceExperimentConfiguration(
-        scenario=LoadFailureScenario.OUTAGE,
+        scenario=LoadScenario.OUTAGE,
         request_rate_per_second=1,
         duration_seconds=5,
     )
@@ -140,7 +174,7 @@ def test_performance_manifest_matches_the_scheduled_load() -> None:
 
 def test_k6_command_mounts_the_manifest_and_run_directory() -> None:
     configuration = PerformanceExperimentConfiguration(
-        scenario=LoadFailureScenario.SLOW,
+        scenario=LoadScenario.SLOW,
     )
     manifest_path = Path("/tmp/trackrelay-manifest.json")
     run_directory = Path("/tmp/trackrelay-performance-run")

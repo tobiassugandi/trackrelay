@@ -20,8 +20,12 @@ K6_RAMP_OUTPUT ?= results/k6/ramp-summary.json
 LOAD_RATE ?= 5
 LOAD_DURATION_SECONDS ?= 5
 PERFORMANCE_OUTPUT ?= results/performance
+BASELINE_RATES ?= 10,25,50,100,250,500
+BASELINE_TIER_DURATION_SECONDS ?= 10
+BASELINE_OUTPUT ?= results/legacy-baseline
+BASELINE_RAW_OUTPUT ?= results/raw/legacy-baseline
 
-.PHONY: sync test test-integration lint run run-downstream generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp load-slow load-outage db-up db-status db-check db-down migrate migration-status
+.PHONY: sync test test-integration lint run run-downstream generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp load-slow load-outage load-baseline db-up db-status db-check db-down migrate migration-status
 
 sync:
 	$(UV) sync --locked --python 3.12
@@ -100,6 +104,16 @@ load-slow:
 
 load-outage:
 	$(UV) run --locked trackrelay-load-experiment outage --rate $(LOAD_RATE) --duration-seconds $(LOAD_DURATION_SECONDS) --api-url $(API_URL) --k6-image $(K6_IMAGE) --output-root $(PERFORMANCE_OUTPUT)
+
+load-baseline:
+	$(UV) run --locked trackrelay-baseline \
+		--rates $(BASELINE_RATES) \
+		--tier-duration-seconds $(BASELINE_TIER_DURATION_SECONDS) \
+		--api-url $(API_URL) \
+		--container-api-url $(K6_API_URL) \
+		--k6-image $(K6_IMAGE) \
+		--output-root $(BASELINE_OUTPUT) \
+		--raw-output-root $(BASELINE_RAW_OUTPUT)
 
 db-up:
 	$(COMPOSE) up -d --wait postgres

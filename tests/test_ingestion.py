@@ -21,12 +21,16 @@ class StubSession:
 
     def __init__(self, partner: Partner | None) -> None:
         self.partner = partner
+        self.closed = False
 
     def get(self, model: type[Partner], partner_id: str) -> Partner | None:
         assert model is Partner
         if self.partner is not None and self.partner.id == partner_id:
             return self.partner
         return None
+
+    def close(self) -> None:
+        self.closed = True
 
 
 @fixture
@@ -51,9 +55,11 @@ def configure_dependencies(
     partner: Partner | None,
     persist_event: Callable[[NormalizedEvent], EventPersistenceResult],
     deliver_event: Callable[[NormalizedEvent, UUID], DeliveryResult] | None = None,
-) -> None:
+) -> StubSession:
+    session = StubSession(partner)
+
     def override_session() -> Iterator[StubSession]:
-        yield StubSession(partner)
+        yield session
 
     app.dependency_overrides[get_session] = override_session
     app.dependency_overrides[get_event_persister] = lambda: persist_event
@@ -61,6 +67,7 @@ def configure_dependencies(
         deliver_event
         or (lambda event, event_id: DeliveryResult(downstream_status_code=202))
     )
+    return session
 
 
 def configured_partner(**overrides: Any) -> Partner:
@@ -81,8 +88,10 @@ def test_ingestion_normalizes_and_persists_an_alpha_event(
     persisted_event_id = uuid4()
     persisted: list[NormalizedEvent] = []
     delivered: list[NormalizedEvent] = []
+    session: StubSession
 
     def persist_event(event: NormalizedEvent) -> EventPersistenceResult:
+        assert session.closed is True
         persisted.append(event)
         return EventPersistenceResult(
             event_id=persisted_event_id,
@@ -93,7 +102,11 @@ def test_ingestion_normalizes_and_persists_an_alpha_event(
         delivered.append(event)
         return DeliveryResult(downstream_status_code=202)
 
-    configure_dependencies(configured_partner(), persist_event, deliver_event)
+    session = configure_dependencies(
+        configured_partner(),
+        persist_event,
+        deliver_event,
+    )
 
     response = client.post(
         "/api/v1/partners/courier-alpha/events",

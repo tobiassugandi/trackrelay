@@ -19,7 +19,9 @@ wheels/
 .ruff_cache/
 
 # Generated experiment evidence
-results/
+results/*
+!results/legacy-baseline/
+!results/legacy-baseline/**
 
 # Operating-system metadata
 .DS_Store

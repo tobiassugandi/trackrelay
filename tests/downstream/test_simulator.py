@@ -59,6 +59,26 @@ def test_simulator_preserves_a_synthetic_events_test_run_id(
     assert client.get("/events").json()[0]["test_run_id"] == str(test_run_id)
 
 
+def test_simulator_filters_receipts_by_test_run_id(client: TestClient) -> None:
+    selected_run_id = UUID("00000000-0000-0000-0000-000000000701")
+    other_run_id = UUID("00000000-0000-0000-0000-000000000702")
+    for test_run_id in (selected_run_id, other_run_id):
+        event = normalized_event_data()
+        event["partner_event_id"] = str(test_run_id)
+        event["test_run_id"] = str(test_run_id)
+        assert client.post("/events", json=event).status_code == 202
+
+    response = client.get(
+        "/events",
+        params={"test_run_id": str(selected_run_id)},
+    )
+
+    assert response.status_code == 200
+    assert [event["test_run_id"] for event in response.json()] == [
+        str(selected_run_id)
+    ]
+
+
 def test_simulator_rejects_an_invalid_event_without_recording_it(
     client: TestClient,
 ) -> None:

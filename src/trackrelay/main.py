@@ -403,6 +403,10 @@ def ingest_partner_event(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Partner adapter is not supported",
         )
+    configured_partner_id = partner.id
+    # Persistence and delivery-attempt recording use separate transactions.
+    # Release the lookup connection before they acquire their connections.
+    session.close()
 
     try:
         validated_payload = adapter.payload_model.model_validate(payload)
@@ -415,7 +419,7 @@ def ingest_partner_event(
 
     normalized_event = adapter.normalize(
         validated_payload,
-        partner_id=partner.id,
+        partner_id=configured_partner_id,
         received_at=datetime.now(UTC),
     )
     if test_run_id is not None:

@@ -402,11 +402,14 @@ The local legacy baseline remains important as the starting point and benchmark 
 - [ ] Run the frozen workload and guardrails to verify that the benchmark is portable to the AWS environment.
 - [ ] Record instance type, process count, database placement, region, and benchmark-driver placement as migration evidence, not as the causal elasticity control.
 
-### Stage 9.2 — Move PostgreSQL to RDS without changing delivery
+### Stage 9.2 — Provision RDS for the AWS deployment
 
-- [ ] Replace the locally managed database with RDS.
-- [ ] Rerun a small benchmark and correctness check to distinguish database migration effects from later queue and scaling changes.
-- [ ] Keep the synchronous downstream call unchanged so the database effect remains distinguishable from the later queue effect.
+- [ ] Provision PostgreSQL on RDS.
+- [ ] Point TrackRelay at RDS and verify connectivity, migrations, and persistence.
+- [ ] Rerun the core correctness scenarios against RDS.
+- [ ] Record and freeze the RDS configuration used by every later fixed-capacity and elastic performance experiment.
+
+RDS provides the stable managed data layer for the target architecture; it is setup for the elasticity experiment, not a separately benchmarked intervention.
 
 ### Stage 9.3 — Decouple downstream delivery with SQS and a worker
 

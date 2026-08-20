@@ -333,7 +333,16 @@ incorrect final shipment states = 0
 
 ## Phase 8 — Repeatable correctness and performance experiments
 
-Goal: establish an evidence-based baseline for the synchronous architecture.
+Goal: determine and publish the trustworthy performance envelope of the local synchronous architecture.
+
+Phase 8 measurements have different jobs:
+
+- **Headline measurement:** p95 response latency at each offered request rate.
+- **Derived headline:** maximum sustainable throughput, defined as the highest consecutive rate that remains inside the SLO.
+- **Acceptance guardrails:** request errors, dropped or missing requests, reconciliation, duplicate effects, and final shipment correctness. A point that violates a guardrail is not a valid capacity result.
+- **Supporting diagnostics:** CPU, memory, database connections, and delivery rates explain a result but are not the primary comparison.
+
+The end product is one comparison-ready legacy curve and capacity number, not a collection of unrelated metrics.
 
 ### Step 8.1 — Turn correctness scenarios into commands
 
@@ -360,44 +369,76 @@ Goal: establish an evidence-based baseline for the synchronous architecture.
 - [x] Capture latency, errors, throughput, CPU, memory, database connections, delivery rate, and reconciliation output.
 - [x] Store raw results with the test configuration.
 
+### Step 8.6 — Freeze the legacy performance envelope
+
+- [ ] Run the healthy-downstream benchmark at 10, 25, 50, 100, 250, and 500 offered events per second using one versioned workload and SLO definition.
+- [ ] Evaluate every rate independently and accept it only when p95 latency is below 500 ms, request errors are below 1%, no iterations are dropped or missing, and every correctness and reconciliation guardrail passes.
+- [ ] Define legacy capacity as the last consecutive passing rate before the first failing rate; higher points may remain visible as diagnostics but cannot restore a failed envelope.
+- [ ] Produce `results/legacy-baseline/benchmark-definition.json`, `summary.json`, `ramp-results.csv`, `latency-vs-load.png`, and a short `README.md` containing the environment, maximum sustainable throughput, and first SLO violation.
+- [ ] Version the compact legacy-baseline artifact in Git while keeping bulky per-run raw evidence ignored or archived separately.
+- [ ] Treat these files and their schema as the comparison contract reused by every Phase 9 architecture.
+
 **Milestone:** `legacy-local-baseline-v1` — the local synchronous implementation is complete and measured.
 
 ## Phase 9 — AWS modernization
 
-AWS begins only after the same local scenarios are repeatable. Each stage reruns those scenarios so its effect can be compared fairly.
+Goal: move the performance envelope and publish one defensible headline:
 
-### Stage 9.1 — Rehost on EC2
+> **TrackRelay sustains X× more events per second after modernization while preserving the same SLO and correctness guardrails.**
+
+The primary figure is one p95-latency-versus-offered-load plot. Its most important annotations are the sustainable-throughput boundary for the synchronous control, the boundary for the selected modernized architecture, and the improvement multiplier.
+
+Correctness and reconciliation remain mandatory acceptance gates, not competing headline metrics. Failure recovery, resource efficiency, cloud cost, and broader operational comparisons remain useful evidence but are deferred until after the throughput/latency headline is complete.
+
+Phase 8 proves the benchmark locally. Stage 9.1 must also establish a synchronous AWS control on comparable infrastructure, because the final modernization multiplier must not confuse an architectural improvement with a local-versus-cloud hardware difference.
+
+### Stage 9.1 — Establish the synchronous AWS control
 
 - [ ] Package and run the synchronous application with minimal architectural change.
-- [ ] Repeat the baseline experiments.
+- [ ] Run the frozen benchmark and guardrails unchanged to produce the authoritative synchronous AWS curve.
+- [ ] Record instance type, process count, database placement, region, and benchmark-driver placement so later curves are comparable.
 
-### Stage 9.2 — Move PostgreSQL to RDS
+### Stage 9.2 — Move PostgreSQL to RDS without changing delivery
 
 - [ ] Replace the locally managed database with RDS.
-- [ ] Repeat the experiments and document operational differences.
+- [ ] Rerun the same headline benchmark and record whether the sustainable-throughput boundary moves.
+- [ ] Keep the synchronous downstream call unchanged so the database effect remains distinguishable from the later queue effect.
 
-### Stage 9.3 — Introduce SQS and a worker
+### Stage 9.3 — Decouple downstream delivery with SQS and a worker
 
 - [ ] Make ingestion persist and enqueue work.
 - [ ] Move downstream delivery into a separate worker.
 - [ ] Add retries and a dead-letter queue.
-- [ ] Repeat outage and load experiments.
+- [ ] Rerun the frozen benchmark with the same offered loads, SLO, and accepted-event guardrails.
+- [ ] Confirm the measured API success boundary still represents durable acceptance, not merely a faster response that loses work later.
 
 ### Stage 9.4 — Containerize on ECS/Fargate
 
 - [ ] Build separate API, worker, and simulator images.
 - [ ] Deploy behind an Application Load Balancer where appropriate.
-- [ ] Repeat the experiments.
+- [ ] Rerun the headline benchmark with a fixed, documented task count and resource allocation.
 
-### Stage 9.5 — Add observability and autoscaling
+### Stage 9.5 — Scale and freeze the modernized envelope
 
-- [ ] Add structured logs, metrics, alarms, queue-depth monitoring, and scaling policies.
-- [ ] Test bursts, worker termination, poison events, and recovery.
+- [ ] Add only the observability needed to validate load, latency, errors, durable acceptance, queue depth, and benchmark health.
+- [ ] Apply a documented scaling policy, rerun the standard load points, and select the final modernized curve.
+- [ ] Freeze `results/modernized-baseline/` using the same artifact schema as the legacy baseline.
+- [ ] Version the compact modernized artifact so both headline inputs are durable and independently inspectable.
 
-### Stage 9.6 — Publish the comparison
+### Stage 9.6 — Publish the headline comparison
 
-- [ ] Compare every architecture using the same scenarios and SLOs.
-- [ ] Document throughput, latency, failure isolation, recovery, operational cost, and remaining tradeoffs.
+- [ ] Overlay the synchronous AWS control and final modernized p95-latency curves on one large plot with the 500 ms SLO line.
+- [ ] Report both maximum sustainable throughputs and calculate the improvement multiplier.
+- [ ] Put the plot and one-sentence result near the top of the repository README.
+- [ ] Keep intermediate architectures and detailed guardrail evidence in the benchmark report rather than competing with the main result.
+
+## Deferred follow-up results
+
+Only after the headline throughput/latency comparison is published:
+
+- [ ] Measure automatic delivery recovery and backlog drain after a downstream outage.
+- [ ] Compare CPU, memory, database utilization, AWS cost, and operational complexity.
+- [ ] Publish secondary resilience and efficiency figures without diluting the primary result.
 
 ## Explicitly out of scope at the beginning
 

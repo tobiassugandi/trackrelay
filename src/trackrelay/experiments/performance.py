@@ -333,7 +333,7 @@ def build_k6_command(
         f"{run_directory.resolve()}:/results",
         configuration.k6_image,
         "run",
-        "/scripts/failure-experiment.js",
+        "/scripts/fixed-rate.js",
     )
 
 

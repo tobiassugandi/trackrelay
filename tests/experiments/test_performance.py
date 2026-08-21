@@ -191,4 +191,4 @@ def test_k6_command_mounts_the_manifest_and_run_directory() -> None:
     assert "EXPECTED_HTTP_STATUS=201" in command
     assert f"{manifest_path.resolve()}:/input-manifest.json:ro" in command
     assert f"{run_directory.resolve()}:/results" in command
-    assert command[-2:] == ("run", "/scripts/failure-experiment.js")
+    assert command[-2:] == ("run", "/scripts/fixed-rate.js")

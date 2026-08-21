@@ -410,14 +410,33 @@ Infrastructure as code is the reproducible source of truth. The AWS console may 
 
 Stages 9.5 and 9.6 are one controlled experiment session. Between them, reset application data and measurements but do not recreate infrastructure, deploy different code, change task definitions, resize the API or database, or move the load generator. The worker autoscaling policy is the only treatment variable.
 
+### Ownership and user handoffs
+
+Most of Phase 9 remains Codex implementation work. The human owner is needed only where AWS requires account ownership, private authentication, a spending decision, or an explicit decision to start a billable cloud session.
+
+| Stage | Owner | What you need to do |
+| --- | --- | --- |
+| 9.0 | **You + Codex** | You create or secure the AWS account, enable MFA, establish the working identity, receive budget alerts, privately complete authentication, and approve the region and spending ceiling. Codex supplies guidance, repository configuration, checks, and documentation. |
+| 9.1 | **Codex** | No routine input after the Stage 9.0 choices; review only if a deployment choice changes scope or expected cost. |
+| 9.2 | **Codex, with your cloud-session approval** | Before cloud session 1, explicitly authorize the session and its budget and complete MFA or browser sign-in if AWS requests it. Codex provisions, validates, collects evidence, destroys, and verifies teardown. |
+| 9.3 | **Codex** | No routine input; this is local application development and testing. |
+| 9.4 | **Codex, with your cloud-session approval** | Provide the same authorization and private authentication handoff for cloud session 2. |
+| 9.5–9.6 | **Codex, with your cloud-session approval** | Approve cloud session 3 and its experiment cost ceiling and complete any private authentication. Codex runs both treatments in the same session and tears everything down only after both result sets are secured. |
+| 9.7 | **Codex** | No required input unless you want to review or revise the final headline and presentation. |
+
+You never need to send Codex an AWS password, MFA code, root credential, secret access key, or payment information. When interactive authentication is necessary, you enter it directly into AWS or the AWS CLI's browser flow. Before each cloud session, Codex must present the intended resources, region, estimated duration, cost guardrail, and teardown command; your ordinary `continue` is not sufficient authorization to begin incurring AWS charges unless it explicitly refers to that prepared session.
+
 ### Stage 9.0 — Prepare safe, reproducible AWS access
 
-- [ ] Secure the AWS account, enable root MFA, and create the working identity used for Phase 9.
-- [ ] Configure the AWS CLI, choose one region after verifying that every required service is available there, and record the choice.
-- [ ] Configure budget alerts before provisioning experiment infrastructure.
-- [ ] Add the initial infrastructure-as-code structure with explicit provision and destroy workflows.
-- [ ] Write a short cloud-session checklist covering provision, validation, evidence collection, destroy, and post-destroy verification.
-- [ ] Define how each session will prove that its billable resources have actually been removed.
+- [ ] **You:** Create or open the AWS account, secure the root user with MFA, and create or select the non-root working identity for Phase 9.
+- [ ] **You:** Ensure the account has valid billing details and choose the email address that should receive budget alerts.
+- [ ] **Together:** Choose a region only after Codex verifies required-service availability, and agree on the initial cost ceiling for cloud session 1.
+- [ ] **You, privately:** Complete the AWS CLI's recommended interactive authentication flow; do not put credentials in the repository or chat.
+- [ ] **Codex:** Verify the CLI identity and region without printing secrets, then record only non-secret configuration.
+- [ ] **Together:** Configure budget alerts; you confirm the threshold and delivery, while Codex may guide or automate non-secret configuration.
+- [ ] **Codex:** Add the initial infrastructure-as-code structure with explicit provision and destroy workflows.
+- [ ] **Codex:** Write a short cloud-session checklist covering provision, validation, evidence collection, destroy, and post-destroy verification.
+- [ ] **Codex:** Define how each session will prove that its billable resources have actually been removed.
 
 ### Stage 9.1 — Prepare the synchronous rehost locally
 
@@ -433,6 +452,7 @@ Do not start cloud session 1 until the local-preparation items in both Stages 9.
 
 Use cloud session 1 to validate both Stages 9.1 and 9.2:
 
+- [ ] **You:** Explicitly authorize cloud session 1 after reviewing its resource list, region, estimated duration, cost guardrail, and teardown command.
 - [ ] Provision and run the synchronous rehost in AWS.
 - [ ] Run the frozen workload and guardrails to verify that the benchmark is portable to the AWS environment.
 - [ ] Record instance type, process count, database placement, region, and benchmark-driver placement as migration evidence, not as the causal elasticity control.
@@ -462,6 +482,7 @@ RDS provides the stable managed data layer for the target architecture; it is se
 
 Use cloud session 2 as a small integration checkpoint:
 
+- [ ] **You:** Explicitly authorize cloud session 2 after reviewing its resource list, region, estimated duration, cost guardrail, and teardown command.
 - [ ] Provision the complete asynchronous stack and deploy the locally tested artifacts.
 - [ ] Exercise 1-, 10-, and 100-event workloads before attempting a performance experiment.
 - [ ] Verify the full path through the load balancer, API, RDS, SQS, worker, simulator, dead-letter queue, and CloudWatch.
@@ -472,6 +493,7 @@ Use cloud session 2 as a small integration checkpoint:
 
 - [ ] Make provision, fixed experiment, application-state reset, elastic experiment, result collection, and teardown reproducible through `make aws-up`, `make experiment-fixed`, `make experiment-reset`, `make experiment-elastic`, `make collect-results`, and `make aws-down` (or clearly documented equivalents).
 - [ ] Test the workload driver, reset procedure, metrics collection, reconciliation, and plot generation locally before starting cloud session 3.
+- [ ] **You:** Explicitly authorize cloud session 3 after reviewing its resource list, region, expected experiment duration, cost ceiling, and teardown command.
 - [ ] Provision the final experiment environment once and record its immutable application and infrastructure versions.
 - [ ] Disable worker autoscaling and fix the worker tier at its documented minimum task count.
 - [ ] Run a stepped workload that rises beyond fixed worker capacity and later returns to the starting rate.

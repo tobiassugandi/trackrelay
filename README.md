@@ -88,7 +88,17 @@ See [the frozen baseline report](results/legacy-baseline/README.md) for the envi
 - Terraform
 - GitHub Actions with OIDC
 
-These are planned tools, not current prerequisites. The local synchronous version comes first.
+These are Phase 9 tools, not prerequisites for running the completed local synchronous version.
+
+### Phase 9 working model
+
+AWS will remain off during ordinary development. TrackRelay code, container builds, experiment automation, and infrastructure definitions will be prepared locally; infrastructure as code will then create disposable environments for three bounded cloud sessions:
+
+1. Validate the synchronous rehost and RDS setup, then tear it down.
+2. Validate the SQS worker and ECS/Fargate integration with tiny workloads, then tear it down.
+3. Provision once, run the fixed-worker control and autoscaled-worker treatment back-to-back, collect the headline evidence, then tear it down.
+
+The third session is one controlled experiment: application and infrastructure versions, API and database capacity, task definitions, benchmark driver, workload, and guardrails stay unchanged. Application state is reset between runs, and only the worker autoscaling policy changes. Every cloud session ends by verifying that its RDS instances, load balancers, ECS resources, NAT gateways if used, and other session-owned billable resources were removed.
 
 ## Local development
 
@@ -460,4 +470,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The local synchronous implementation is complete and measured through Step 8.6. Its frozen reference sustains 250 events/s on the recorded machine and first fails at 500 events/s. Phase 9 begins next with Stage 9.1, rehosting synchronous TrackRelay on AWS as a migration and benchmark-portability step before building the decisive fixed-versus-elastic worker experiment.
+The local synchronous implementation is complete and measured through Step 8.6. Its frozen reference sustains 250 events/s on the recorded machine and first fails at 500 events/s. Phase 9 begins next with Stage 9.0: prepare safe AWS access, budget guardrails, infrastructure-as-code foundations, and verified teardown before the first short cloud validation session.

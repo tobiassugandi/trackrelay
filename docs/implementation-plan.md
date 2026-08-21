@@ -398,52 +398,99 @@ The causal experiment compares the same modernized AWS deployment with **worker 
 
 The local legacy baseline remains important as the starting point and benchmark rehearsal, but it is not the denominator for the final X× elasticity claim. A local asynchronous implementation is optional and is not required for this experiment.
 
-### Stage 9.1 — Rehost synchronous TrackRelay on AWS
+### Phase 9 operating model
 
-- [ ] Package and run the synchronous application with minimal architectural change.
-- [ ] Run the frozen workload and guardrails to verify that the benchmark is portable to the AWS environment.
-- [ ] Record instance type, process count, database placement, region, and benchmark-driver placement as migration evidence, not as the causal elasticity control.
+AWS is **off by default**. Application code, container builds, experiment automation, and infrastructure definitions are developed and tested locally. AWS is used only for bounded validation or measurement sessions:
+
+1. **Cloud session 1 — synchronous migration:** validate Stages 9.1 and 9.2, collect evidence, then destroy the stack.
+2. **Cloud session 2 — asynchronous integration:** validate Stages 9.3 and 9.4 with tiny workloads, collect evidence, then destroy the stack.
+3. **Cloud session 3 — headline experiment:** provision once, run the Stage 9.5 fixed control and Stage 9.6 elastic treatment back-to-back, collect both result sets, then destroy the stack.
+
+Infrastructure as code is the reproducible source of truth. The AWS console may be used to learn, inspect, and troubleshoot, but repeatable creation and teardown must come from the repository. Synthetic experiment resources are disposable: each cloud session must remove RDS, load balancers, ECS services and tasks, NAT gateways if used, and every other session-owned billable resource. Retain definitions and evidence, not idle infrastructure.
+
+Stages 9.5 and 9.6 are one controlled experiment session. Between them, reset application data and measurements but do not recreate infrastructure, deploy different code, change task definitions, resize the API or database, or move the load generator. The worker autoscaling policy is the only treatment variable.
+
+### Stage 9.0 — Prepare safe, reproducible AWS access
+
+- [ ] Secure the AWS account, enable root MFA, and create the working identity used for Phase 9.
+- [ ] Configure the AWS CLI, choose one region after verifying that every required service is available there, and record the choice.
+- [ ] Configure budget alerts before provisioning experiment infrastructure.
+- [ ] Add the initial infrastructure-as-code structure with explicit provision and destroy workflows.
+- [ ] Write a short cloud-session checklist covering provision, validation, evidence collection, destroy, and post-destroy verification.
+- [ ] Define how each session will prove that its billable resources have actually been removed.
+
+### Stage 9.1 — Prepare the synchronous rehost locally
+
+Do not start cloud session 1 until the local-preparation items in both Stages 9.1 and 9.2 are complete.
+
+- [ ] Package the synchronous application for AWS with minimal architectural change.
+- [ ] Define the rehost infrastructure and deployment configuration as code.
+- [ ] Automate deployment, migrations, health checks, smoke tests, workload execution, and result collection.
 
 ### Stage 9.2 — Provision RDS for the AWS deployment
 
-- [ ] Provision PostgreSQL on RDS.
+- [ ] Define the RDS instance, networking, configuration, and secrets integration as code locally.
+
+Use cloud session 1 to validate both Stages 9.1 and 9.2:
+
+- [ ] Provision and run the synchronous rehost in AWS.
+- [ ] Run the frozen workload and guardrails to verify that the benchmark is portable to the AWS environment.
+- [ ] Record instance type, process count, database placement, region, and benchmark-driver placement as migration evidence, not as the causal elasticity control.
+- [ ] Provision PostgreSQL on RDS during cloud session 1.
 - [ ] Point TrackRelay at RDS and verify connectivity, migrations, and persistence.
 - [ ] Rerun the core correctness scenarios against RDS.
-- [ ] Record and freeze the RDS configuration used by every later fixed-capacity and elastic performance experiment.
+- [ ] Record and freeze the RDS configuration intended for every later fixed-capacity and elastic performance experiment.
+- [ ] Collect the session evidence, destroy the complete session-1 stack, and verify the teardown.
 
 RDS provides the stable managed data layer for the target architecture; it is setup for the elasticity experiment, not a separately benchmarked intervention.
 
 ### Stage 9.3 — Decouple downstream delivery with SQS and a worker
 
-- [ ] Make ingestion persist and enqueue work.
-- [ ] Move downstream delivery into a separate worker.
+- [ ] Define a narrow queue interface and develop ingestion and worker behavior locally with deterministic fakes; do not require a local AWS emulator or substitute message broker.
+- [ ] Make ingestion persist and enqueue work through that interface.
+- [ ] Move downstream delivery into a separate worker and implement the real SQS adapter behind the same interface.
 - [ ] Add retries and a dead-letter queue.
 - [ ] Define durable acceptance precisely and confirm that a fast API response cannot hide lost work.
 - [ ] Add processing guardrails: every accepted event is accounted for, duplicate business effects remain zero, final shipment states are correct, and the queue drains by a documented deadline after offered load falls.
 
 ### Stage 9.4 — Containerize on ECS/Fargate
 
-- [ ] Build separate API, worker, and simulator images.
-- [ ] Deploy behind an Application Load Balancer where appropriate.
-- [ ] Publish CloudWatch metrics for offered load, API p95 latency, request errors, running worker tasks, queue depth, and message age or processing lag.
-- [ ] Run the API at a fixed, documented capacity with enough headroom that worker delivery capacity is the variable under test.
+- [ ] Build and test separate API, worker, and simulator images locally.
+- [ ] Define ECS/Fargate, ECR, SQS, dead-letter queue, RDS, networking, load balancing, secrets, and observability as code.
+- [ ] Define CloudWatch metrics for offered load, API p95 latency, request errors, running worker tasks, queue depth, and message age or processing lag.
+- [ ] Configure the API at a fixed, documented capacity with enough headroom that worker delivery capacity is the variable under test.
+
+Use cloud session 2 as a small integration checkpoint:
+
+- [ ] Provision the complete asynchronous stack and deploy the locally tested artifacts.
+- [ ] Exercise 1-, 10-, and 100-event workloads before attempting a performance experiment.
+- [ ] Verify the full path through the load balancer, API, RDS, SQS, worker, simulator, dead-letter queue, and CloudWatch.
+- [ ] Reconcile every accepted event and confirm that the new processing and drain guardrails work.
+- [ ] Collect integration evidence, destroy the complete session-2 stack, and verify the teardown.
 
 ### Stage 9.5 — Establish the fixed-capacity modernized control
 
+- [ ] Make provision, fixed experiment, application-state reset, elastic experiment, result collection, and teardown reproducible through `make aws-up`, `make experiment-fixed`, `make experiment-reset`, `make experiment-elastic`, `make collect-results`, and `make aws-down` (or clearly documented equivalents).
+- [ ] Test the workload driver, reset procedure, metrics collection, reconciliation, and plot generation locally before starting cloud session 3.
+- [ ] Provision the final experiment environment once and record its immutable application and infrastructure versions.
 - [ ] Disable worker autoscaling and fix the worker tier at its documented minimum task count.
 - [ ] Run a stepped workload that rises beyond fixed worker capacity and later returns to the starting rate.
 - [ ] Define a sustainable end-to-end load using ingestion SLOs plus bounded backlog, completion, drain-deadline, and correctness guardrails; API latency alone is insufficient.
 - [ ] Freeze the fixed-control configuration and aligned time series in `results/aws-fixed-control/`.
+- [ ] Leave the deployment unchanged and continue directly into Stage 9.6; do not tear it down or redeploy it between treatments.
 
 ### Stage 9.6 — Enable and measure worker elasticity
 
+- [ ] Reset application data, queues, simulator state, and measurements without recreating or resizing the infrastructure.
 - [ ] Enable a documented worker scaling policy with the same minimum task count and a bounded maximum; use queue backlog or backlog per task as the demand signal.
 - [ ] Replay the fixed-control workload without changing the application, task definition, API capacity, database, simulator, benchmark driver, SLO, or guardrails.
 - [ ] Verify that workers scale from A to B as load rises, backlog remains bounded and drains, and workers return to A after demand falls.
 - [ ] Freeze the scaling policy, environment, raw aligned time series, reconciliation evidence, and summary in `results/aws-elastic-treatment/`.
+- [ ] Collect both treatments' evidence, destroy the complete session-3 stack, and verify the teardown.
 
 ### Stage 9.7 — Publish the elasticity headline
 
+- [ ] Analyze the frozen results and build the report locally with AWS off.
 - [ ] Produce one large, aligned time-series figure comparing fixed and elastic runs across offered load, running worker tasks, queue depth or message age, and p95 latency with its 500 ms SLO line.
 - [ ] Report the highest demand step that satisfies every end-to-end guardrail in each run, the load multiplier, worker expansion A→B, time to scale out, backlog drain time, and return to A.
 - [ ] Put the figure and one-sentence elasticity result near the top of the repository README.

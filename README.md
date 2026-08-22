@@ -116,6 +116,15 @@ make aws-check \
 
 AWS credentials remain in the developer's standard private AWS CLI configuration and must never be added to this repository.
 
+The Terraform root module starts in `infra/terraform` with no AWS resources. Initialize its locked provider and validate the local foundation with:
+
+```bash
+make infra-init
+make infra-check
+```
+
+Neither command provisions infrastructure. Apply and destroy workflows will be added behind the documented cloud-session approval gate before the first deployment.
+
 ## Local development
 
 [uv](https://docs.astral.sh/uv/) manages TrackRelay's Python interpreter, project environment, dependencies, and lockfile. The repository pins the local interpreter to Python 3.12 in `.python-version`. `uv` will use or install a matching interpreter when needed.

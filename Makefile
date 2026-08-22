@@ -1,5 +1,7 @@
 UV := uv
 COMPOSE := docker compose
+TERRAFORM := terraform
+TERRAFORM_DIR := infra/terraform
 SEED ?= 20260806
 SHIPMENTS ?= 3
 OUTPUT ?= results/input-manifest.json
@@ -27,7 +29,7 @@ BASELINE_RAW_OUTPUT ?= results/raw/legacy-baseline
 TRACKRELAY_AWS_PROFILE ?= trackrelay-admin
 TRACKRELAY_AWS_REGION ?= ap-southeast-3
 
-.PHONY: sync test test-integration lint run run-downstream generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp load-slow load-outage load-baseline aws-check db-up db-status db-check db-down migrate migration-status
+.PHONY: sync test test-integration lint run run-downstream generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp load-slow load-outage load-baseline aws-check infra-init infra-check db-up db-status db-check db-down migrate migration-status
 
 sync:
 	$(UV) sync --locked --python 3.12
@@ -121,6 +123,13 @@ aws-check:
 	$(UV) run --locked trackrelay-aws-check \
 		--profile "$(TRACKRELAY_AWS_PROFILE)" \
 		--region "$(TRACKRELAY_AWS_REGION)"
+
+infra-init:
+	$(TERRAFORM) -chdir=$(TERRAFORM_DIR) init -backend=false -input=false
+
+infra-check:
+	$(TERRAFORM) -chdir=$(TERRAFORM_DIR) fmt -check -recursive
+	$(TERRAFORM) -chdir=$(TERRAFORM_DIR) validate
 
 db-up:
 	$(COMPOSE) up -d --wait postgres

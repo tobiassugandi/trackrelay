@@ -14,6 +14,16 @@ wheels/
 .env.*
 !.env.example
 
+# Terraform local working data, state, and variable values
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+crash.log
+crash.*.log
+
 # Test and tool caches
 .pytest_cache/
 .ruff_cache/

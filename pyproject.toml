@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 trackrelay-baseline = "trackrelay.experiments.baseline:main"
+trackrelay-aws-check = "trackrelay.aws_preflight:main"
 trackrelay-generate = "trackrelay.experiments.generator:main"
 trackrelay-load-experiment = "trackrelay.experiments.performance:experiment_main"
 trackrelay-prepare-load = "trackrelay.experiments.performance:main"

@@ -435,7 +435,7 @@ You never need to send Codex an AWS password, MFA code, root credential, secret 
 - [ ] **Together:** Agree on cloud session 1's cost ceiling after Codex presents its concrete resource list and estimate; the ceiling must fit within the remaining USD 25 monthly budget.
 - [x] **You, privately:** Complete AWS CLI authentication using the non-root `trackrelay-admin` profile; no credentials belong in the repository or chat.
 - [x] **Codex:** Verify without printing account identifiers or secrets that `trackrelay-admin` authenticates as a non-root IAM user and selects `ap-southeast-3`.
-- [ ] **Codex (repository work):** Make future AWS commands accept a project profile and region explicitly, using `trackrelay-admin` and `ap-southeast-3` for this machine without hard-coding credentials. This prevents an unrelated ambient `AWS_PROFILE` value from selecting the wrong profile.
+- [x] **Codex (repository work):** Make AWS commands accept a project profile and region explicitly, using `trackrelay-admin` and `ap-southeast-3` by default without hard-coding credentials. `make aws-check` now proves the configured region and non-root identity without modifying resources or inheriting an unrelated ambient `AWS_PROFILE`.
 - [ ] **Codex:** Add the initial infrastructure-as-code structure with explicit provision and destroy workflows.
 - [ ] **Codex:** Write a short cloud-session checklist covering provision, validation, evidence collection, destroy, and post-destroy verification.
 - [ ] **Codex:** Define how each session will prove that its billable resources have actually been removed.

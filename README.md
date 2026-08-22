@@ -100,6 +100,22 @@ AWS will remain off during ordinary development. TrackRelay code, container buil
 
 The third session is one controlled experiment: application and infrastructure versions, API and database capacity, task definitions, benchmark driver, workload, and guardrails stay unchanged. Application state is reset between runs, and only the worker autoscaling policy changes. Every cloud session ends by verifying that its RDS instances, load balancers, ECS resources, NAT gateways if used, and other session-owned billable resources were removed.
 
+Before any infrastructure exists, verify the non-secret local AWS configuration:
+
+```bash
+make aws-check
+```
+
+The command explicitly selects the `trackrelay-admin` profile and Asia Pacific (Jakarta), `ap-southeast-3`, instead of inheriting an unrelated `AWS_PROFILE`. It reads the profile's configured region and calls only STS `GetCallerIdentity`; it rejects the root user, does not print account identifiers, and does not create or modify resources. Another developer can override the non-secret defaults:
+
+```bash
+make aws-check \
+  TRACKRELAY_AWS_PROFILE=another-profile \
+  TRACKRELAY_AWS_REGION=another-region
+```
+
+AWS credentials remain in the developer's standard private AWS CLI configuration and must never be added to this repository.
+
 ## Local development
 
 [uv](https://docs.astral.sh/uv/) manages TrackRelay's Python interpreter, project environment, dependencies, and lockfile. The repository pins the local interpreter to Python 3.12 in `.python-version`. `uv` will use or install a matching interpreter when needed.

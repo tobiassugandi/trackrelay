@@ -24,8 +24,10 @@ BASELINE_RATES ?= 10,25,50,100,250,500
 BASELINE_TIER_DURATION_SECONDS ?= 10
 BASELINE_OUTPUT ?= results/legacy-baseline
 BASELINE_RAW_OUTPUT ?= results/raw/legacy-baseline
+TRACKRELAY_AWS_PROFILE ?= trackrelay-admin
+TRACKRELAY_AWS_REGION ?= ap-southeast-3
 
-.PHONY: sync test test-integration lint run run-downstream generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp load-slow load-outage load-baseline db-up db-status db-check db-down migrate migration-status
+.PHONY: sync test test-integration lint run run-downstream generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp load-slow load-outage load-baseline aws-check db-up db-status db-check db-down migrate migration-status
 
 sync:
 	$(UV) sync --locked --python 3.12
@@ -114,6 +116,11 @@ load-baseline:
 		--k6-image $(K6_IMAGE) \
 		--output-root $(BASELINE_OUTPUT) \
 		--raw-output-root $(BASELINE_RAW_OUTPUT)
+
+aws-check:
+	$(UV) run --locked trackrelay-aws-check \
+		--profile "$(TRACKRELAY_AWS_PROFILE)" \
+		--region "$(TRACKRELAY_AWS_REGION)"
 
 db-up:
 	$(COMPOSE) up -d --wait postgres

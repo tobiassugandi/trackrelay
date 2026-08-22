@@ -17,3 +17,20 @@ variable "aws_region" {
     error_message = "aws_region must not be empty."
   }
 }
+
+variable "session_id" {
+  description = "Unique ID that ties every resource to one bounded cloud session."
+  type        = string
+
+  validation {
+    condition = can(
+      regex(
+        "^cloud-session-[123]-[0-9]{8}T[0-9]{6}Z$",
+        var.session_id,
+      )
+    )
+    error_message = (
+      "session_id must look like cloud-session-1-20260822T090000Z."
+    )
+  }
+}

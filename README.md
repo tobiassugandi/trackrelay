@@ -125,6 +125,8 @@ make infra-check
 
 Neither command provisions infrastructure. Apply and destroy workflows will be added behind the documented cloud-session approval gate before the first deployment.
 
+Every billable AWS session must follow the [AWS cloud-session checklist](docs/aws-cloud-session-checklist.md). A session is not complete until Terraform state is empty, the session-tagged AWS inventory is empty, and native service checks confirm that no session-owned resources remain.
+
 ## Local development
 
 [uv](https://docs.astral.sh/uv/) manages TrackRelay's Python interpreter, project environment, dependencies, and lockfile. The repository pins the local interpreter to Python 3.12 in `.python-version`. `uv` will use or install a matching interpreter when needed.

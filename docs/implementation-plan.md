@@ -438,8 +438,8 @@ You never need to send Codex an AWS password, MFA code, root credential, secret 
 - [x] **Codex (repository work):** Make AWS commands accept a project profile and region explicitly, using `trackrelay-admin` and `ap-southeast-3` by default without hard-coding credentials. `make aws-check` now proves the configured region and non-root identity without modifying resources or inheriting an unrelated ambient `AWS_PROFILE`.
 - [x] **Codex:** Add and locally validate an empty Terraform foundation with pinned tool and AWS-provider requirements, explicit profile and region inputs, standard tags, ignored state and variable files, and no AWS resources.
 - [ ] **Codex:** Add explicit, approval-gated provision and destroy workflows before defining billable resources.
-- [ ] **Codex:** Write a short cloud-session checklist covering provision, validation, evidence collection, destroy, and post-destroy verification.
-- [ ] **Codex:** Define how each session will prove that its billable resources have actually been removed.
+- [x] **Codex:** Write the cloud-session checklist covering approval, provision, validation, evidence collection, failure handling, destroy, and post-destroy verification.
+- [x] **Codex:** Define teardown proof as empty Terraform state plus empty session-tagged inventory plus native service-specific absence checks derived from the pre-destroy inventory.
 
 The USD 25 AWS Budget is a monthly monitoring and alerting guardrail, not an assumed hard spending stop. Each cloud session therefore still needs its own estimate, explicit approval, bounded duration, and verified teardown. Automatic budget actions may be considered separately, but they do not replace teardown automation.
 

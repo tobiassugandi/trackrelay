@@ -3,5 +3,6 @@ locals {
     Environment = "experiment"
     ManagedBy   = "terraform"
     Project     = "TrackRelay"
+    SessionId   = var.session_id
   }
 }

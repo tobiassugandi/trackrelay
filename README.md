@@ -127,6 +127,8 @@ Neither command provisions infrastructure. Apply and destroy workflows will be a
 
 Every billable AWS session must follow the [AWS cloud-session checklist](docs/aws-cloud-session-checklist.md). A session is not complete until Terraform state is empty, the session-tagged AWS inventory is empty, and native service checks confirm that no session-owned resources remain.
 
+The repository exposes `make aws-plan`, approval-gated `make aws-up`, unconditional `make aws-down`, and `make aws-verify-down`. Plans and lifecycle logs stay under the ignored `results/aws-sessions/` tree. The generic verifier is ready for the empty foundation; resource-specific teardown checks will be added with each future AWS resource.
+
 ## Local development
 
 [uv](https://docs.astral.sh/uv/) manages TrackRelay's Python interpreter, project environment, dependencies, and lockfile. The repository pins the local interpreter to Python 3.12 in `.python-version`. `uv` will use or install a matching interpreter when needed.

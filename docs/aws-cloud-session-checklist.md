@@ -46,7 +46,7 @@ Store the compact, non-secret session record under `results/aws-sessions/<sessio
 - [ ] Run `make aws-check` and confirm the non-root profile and Jakarta region.
 - [ ] Run `make infra-init` and `make infra-check`.
 - [ ] Confirm that Terraform state will survive a terminal or process interruption; do not provision from disposable local state.
-- [ ] Generate and save the exact Terraform plan without applying it.
+- [ ] Generate and save the exact Terraform plan with `make aws-plan SESSION_ID=<session ID>`; this does not apply it.
 - [ ] Review the plan's add/change/destroy counts and reconcile every planned object with the approved resource list.
 - [ ] Confirm that the session ID is new and appears in the provider's default tags.
 - [ ] Confirm budget headroom and obtain explicit human approval for this plan and cost ceiling.
@@ -54,7 +54,7 @@ Store the compact, non-secret session record under `results/aws-sessions/<sessio
 ## While AWS is on
 
 - [ ] Record the UTC start time and start the session-duration timer.
-- [ ] Apply only the saved, approved plan.
+- [ ] Apply only the saved, approved plan with `make aws-up SESSION_ID=<session ID> APPROVED_SESSION_ID=<same session ID> APPROVED_COST_CEILING_USD=<approved ceiling>`.
 - [ ] Do not create untracked resources in the AWS console. If emergency diagnosis creates or changes anything, record it immediately and bring it under Terraform or remove it before continuing.
 - [ ] Run only the validation or experiment named in the approved proposal.
 - [ ] Collect evidence continuously so an interrupted run can still be diagnosed.
@@ -65,10 +65,10 @@ Store the compact, non-secret session record under `results/aws-sessions/<sessio
 - [ ] Stop workload generation and collect the required experiment evidence.
 - [ ] Save `terraform state list` and an AWS inventory filtered by both `Project=TrackRelay` and the session ID.
 - [ ] Generate and review a destroy plan covering every object in the pre-destroy Terraform state.
-- [ ] Apply the saved destroy plan. Do not rely on targeted destroy for normal teardown.
+- [ ] Run `make aws-down SESSION_ID=<session ID>` to generate and apply the complete destroy plan. This command deliberately has no approval gate; do not rely on targeted destroy for normal teardown.
 - [ ] Wait for asynchronous deletions to reach their terminal deleted state.
 - [ ] Save the empty post-destroy `terraform state list`.
-- [ ] Query AWS's Resource Groups Tagging API for the session tags and save the empty result.
+- [ ] Run `make aws-verify-down SESSION_ID=<session ID>` to prove empty Terraform state and query AWS's Resource Groups Tagging API for the session tags.
 - [ ] Use the pre-destroy inventory to run native, service-specific absence checks. The generic tagging API is supporting evidence, not sufficient proof, because it does not return untagged resources.
 - [ ] Record the UTC finish time, observed duration, outcome, and any deviation from the approved plan.
 
@@ -101,6 +101,8 @@ A session is closed only when all of the following are true:
 5. The proposal, evidence, destroy log, and both inventories are saved locally.
 
 A successful Terraform destroy by itself is not sufficient. If any check fails or cannot run, the session remains open and teardown work continues. Billing dashboards and budget alerts may be reviewed later, but their delayed data is not the immediate teardown proof.
+
+The current `aws-verify-down` command implements the generic Terraform-state and session-tag checks. Before a stage introduces any billable resource type, its native service-specific absence check must be added to the verifier and tested. A generic-verification success message therefore does not close a future nonempty cloud session by itself.
 
 ## References
 

@@ -28,8 +28,13 @@ BASELINE_OUTPUT ?= results/legacy-baseline
 BASELINE_RAW_OUTPUT ?= results/raw/legacy-baseline
 TRACKRELAY_AWS_PROFILE ?= trackrelay-admin
 TRACKRELAY_AWS_REGION ?= ap-southeast-3
+AWS_MONTHLY_BUDGET_USD ?= 25
+AWS_SESSION_RESULTS ?= results/aws-sessions
+SESSION_ID ?=
+APPROVED_SESSION_ID ?=
+APPROVED_COST_CEILING_USD ?=
 
-.PHONY: sync test test-integration lint run run-downstream generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp load-slow load-outage load-baseline aws-check infra-init infra-check db-up db-status db-check db-down migrate migration-status
+.PHONY: sync test test-integration lint run run-downstream generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp load-slow load-outage load-baseline aws-check aws-plan aws-up aws-down aws-verify-down infra-init infra-check db-up db-status db-check db-down migrate migration-status
 
 sync:
 	$(UV) sync --locked --python 3.12
@@ -130,6 +135,41 @@ infra-init:
 infra-check:
 	$(TERRAFORM) -chdir=$(TERRAFORM_DIR) fmt -check -recursive
 	$(TERRAFORM) -chdir=$(TERRAFORM_DIR) validate
+
+aws-plan:
+	$(UV) run --locked trackrelay-aws-session plan \
+		--session-id "$(SESSION_ID)" \
+		--profile "$(TRACKRELAY_AWS_PROFILE)" \
+		--region "$(TRACKRELAY_AWS_REGION)" \
+		--terraform-dir "$(TERRAFORM_DIR)" \
+		--evidence-root "$(AWS_SESSION_RESULTS)"
+
+aws-up:
+	$(UV) run --locked trackrelay-aws-session apply \
+		--session-id "$(SESSION_ID)" \
+		--profile "$(TRACKRELAY_AWS_PROFILE)" \
+		--region "$(TRACKRELAY_AWS_REGION)" \
+		--terraform-dir "$(TERRAFORM_DIR)" \
+		--evidence-root "$(AWS_SESSION_RESULTS)" \
+		--approved-session-id "$(APPROVED_SESSION_ID)" \
+		--approved-cost-ceiling-usd "$(APPROVED_COST_CEILING_USD)" \
+		--monthly-budget-usd "$(AWS_MONTHLY_BUDGET_USD)"
+
+aws-down:
+	$(UV) run --locked trackrelay-aws-session destroy \
+		--session-id "$(SESSION_ID)" \
+		--profile "$(TRACKRELAY_AWS_PROFILE)" \
+		--region "$(TRACKRELAY_AWS_REGION)" \
+		--terraform-dir "$(TERRAFORM_DIR)" \
+		--evidence-root "$(AWS_SESSION_RESULTS)"
+
+aws-verify-down:
+	$(UV) run --locked trackrelay-aws-session verify \
+		--session-id "$(SESSION_ID)" \
+		--profile "$(TRACKRELAY_AWS_PROFILE)" \
+		--region "$(TRACKRELAY_AWS_REGION)" \
+		--terraform-dir "$(TERRAFORM_DIR)" \
+		--evidence-root "$(AWS_SESSION_RESULTS)"
 
 db-up:
 	$(COMPOSE) up -d --wait postgres

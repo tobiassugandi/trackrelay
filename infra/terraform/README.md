@@ -14,7 +14,21 @@ Check formatting and validate the configuration:
 make infra-check
 ```
 
-These commands do not provision infrastructure. Do not run `terraform apply` directly. Explicit, guarded provision and destroy commands will be added with the cloud-session checklist before the first AWS session.
+These commands do not provision infrastructure. Do not run `terraform apply` directly; use the guarded lifecycle commands below and follow the cloud-session checklist.
+
+The lifecycle commands are now available but must not be used to provision without the checklist's explicit approval:
+
+```bash
+make aws-plan SESSION_ID=cloud-session-1-20260822T090000Z
+make aws-up \
+  SESSION_ID=cloud-session-1-20260822T090000Z \
+  APPROVED_SESSION_ID=cloud-session-1-20260822T090000Z \
+  APPROVED_COST_CEILING_USD=5
+make aws-down SESSION_ID=cloud-session-1-20260822T090000Z
+make aws-verify-down SESSION_ID=cloud-session-1-20260822T090000Z
+```
+
+`aws-plan` saves an immutable plan hash and non-secret session record. `aws-up` refuses a mismatched session, a changed plan or Git revision, and a cost ceiling above the monthly budget. `aws-down` intentionally has no approval gate so recovery cannot block teardown. `aws-verify-down` currently supplies the generic state and tag checks; native service checks are added alongside future resources.
 
 The provider reads credentials from the private AWS CLI profile selected by Terraform input. Credentials and local `*.tfvars` files must not be committed. Terraform state can contain sensitive values and is also excluded from Git.
 

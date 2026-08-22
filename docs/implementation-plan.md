@@ -437,7 +437,7 @@ You never need to send Codex an AWS password, MFA code, root credential, secret 
 - [x] **Codex:** Verify without printing account identifiers or secrets that `trackrelay-admin` authenticates as a non-root IAM user and selects `ap-southeast-3`.
 - [x] **Codex (repository work):** Make AWS commands accept a project profile and region explicitly, using `trackrelay-admin` and `ap-southeast-3` by default without hard-coding credentials. `make aws-check` now proves the configured region and non-root identity without modifying resources or inheriting an unrelated ambient `AWS_PROFILE`.
 - [x] **Codex:** Add and locally validate an empty Terraform foundation with pinned tool and AWS-provider requirements, explicit profile and region inputs, standard tags, ignored state and variable files, and no AWS resources.
-- [ ] **Codex:** Add explicit, approval-gated provision and destroy workflows before defining billable resources.
+- [x] **Codex:** Add a saved-plan lifecycle with approval- and budget-gated provision, unconditional destroy, local evidence capture, and generic teardown verification before defining billable resources.
 - [x] **Codex:** Write the cloud-session checklist covering approval, provision, validation, evidence collection, failure handling, destroy, and post-destroy verification.
 - [x] **Codex:** Define teardown proof as empty Terraform state plus empty session-tagged inventory plus native service-specific absence checks derived from the pre-destroy inventory.
 

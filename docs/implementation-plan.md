@@ -447,7 +447,7 @@ The USD 25 AWS Budget is a monthly monitoring and alerting guardrail, not an ass
 
 Do not start cloud session 1 until the local-preparation items in both Stages 9.1 and 9.2 are complete.
 
-- [ ] Package the synchronous application for AWS with minimal architectural change.
+- [x] Package the unchanged synchronous API as a locally verified, non-root OCI image with locked production dependencies, liveness health check, and an explicit one-off migration command.
 - [ ] Define the rehost infrastructure and deployment configuration as code.
 - [ ] Automate deployment, migrations, health checks, smoke tests, workload execution, and result collection.
 

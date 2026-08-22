@@ -1,7 +1,9 @@
 UV := uv
 COMPOSE := docker compose
+DOCKER := docker
 TERRAFORM := terraform
 TERRAFORM_DIR := infra/terraform
+API_IMAGE ?= trackrelay-api:local
 SEED ?= 20260806
 SHIPMENTS ?= 3
 OUTPUT ?= results/input-manifest.json
@@ -34,7 +36,7 @@ SESSION_ID ?=
 APPROVED_SESSION_ID ?=
 APPROVED_COST_CEILING_USD ?=
 
-.PHONY: sync test test-integration lint run run-downstream generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp load-slow load-outage load-baseline aws-check aws-plan aws-up aws-down aws-verify-down infra-init infra-check db-up db-status db-check db-down migrate migration-status
+.PHONY: sync test test-integration lint run run-downstream image-api image-api-smoke generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp load-slow load-outage load-baseline aws-check aws-plan aws-up aws-down aws-verify-down infra-init infra-check db-up db-status db-check db-down migrate migration-status
 
 sync:
 	$(UV) sync --locked --python 3.12
@@ -53,6 +55,12 @@ run:
 
 run-downstream:
 	$(UV) run --locked uvicorn trackrelay.downstream.main:app --reload --host 127.0.0.1 --port 8001
+
+image-api:
+	$(DOCKER) build --file Dockerfile --tag "$(API_IMAGE)" .
+
+image-api-smoke: image-api
+	DOCKER="$(DOCKER)" ./scripts/smoke-api-image.sh "$(API_IMAGE)"
 
 generate:
 	$(UV) run --locked trackrelay-generate --seed $(SEED) --shipments $(SHIPMENTS) --output $(OUTPUT)

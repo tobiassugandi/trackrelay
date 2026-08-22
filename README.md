@@ -116,6 +116,33 @@ make aws-check \
 
 AWS credentials remain in the developer's standard private AWS CLI configuration and must never be added to this repository.
 
+### Synchronous API container
+
+Stage 9.1 packages the unchanged synchronous API as a production-style OCI image. Build it locally from the locked Python dependencies:
+
+```bash
+make image-api
+```
+
+Run the reproducible smoke test:
+
+```bash
+make image-api-smoke
+```
+
+The multi-stage image installs TrackRelay non-editably, excludes development dependencies and build tooling from the runtime stage, runs as UID/GID `10001`, exposes port `8000`, and uses `/health/live` for its container health check. The smoke test starts the image on an ephemeral host port, waits for Docker health, verifies the liveness response and non-root UID, and removes the test container.
+
+Database migrations remain an explicit one-off command using the same image rather than part of API startup:
+
+```bash
+docker run --rm \
+  --env TRACKRELAY_DATABASE_URL='<database URL>' \
+  trackrelay-api:local \
+  alembic upgrade head
+```
+
+Do not place a real database URL in the Dockerfile, image, or Git. AWS deployment configuration will supply it at runtime through the planned secrets integration.
+
 The Terraform root module starts in `infra/terraform` with no AWS resources. Initialize its locked provider and validate the local foundation with:
 
 ```bash

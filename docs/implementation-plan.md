@@ -428,12 +428,14 @@ You never need to send Codex an AWS password, MFA code, root credential, secret 
 
 ### Stage 9.0 — Prepare safe, reproducible AWS access
 
-- [ ] **You:** Create or open the AWS account, secure the root user with MFA, and create or select the non-root working identity for Phase 9.
-- [ ] **You:** Ensure the account has valid billing details and choose the email address that should receive budget alerts.
-- [ ] **Together:** Choose a region only after Codex verifies required-service availability, and agree on the initial cost ceiling for cloud session 1.
-- [ ] **You, privately:** Complete the AWS CLI's recommended interactive authentication flow; do not put credentials in the repository or chat.
-- [ ] **Codex:** Verify the CLI identity and region without printing secrets, then record only non-secret configuration.
-- [ ] **Together:** Configure budget alerts; you confirm the threshold and delivery, while Codex may guide or automate non-secret configuration.
+- [x] **You:** Create or open the AWS account and create or select the non-root working identity for Phase 9.
+- [ ] **You:** Confirm that the AWS account's root user has MFA enabled.
+- [x] **You:** Ensure the account has valid billing details and configure budget-alert delivery.
+- [x] **Together:** Use Asia Pacific (Jakarta), `ap-southeast-3`; Codex verified current regional support for the planned core services against AWS's regional service documentation.
+- [ ] **Together:** Agree on the initial cost ceiling after Codex presents cloud session 1's concrete resource list and estimate.
+- [x] **You, privately:** Complete AWS CLI authentication using the non-root `trackrelay-admin` profile; no credentials belong in the repository or chat.
+- [x] **Codex:** Verify without printing account identifiers or secrets that `trackrelay-admin` authenticates as a non-root IAM user and selects `ap-southeast-3`.
+- [ ] **Codex:** Make future repository AWS commands accept an explicit profile and region so they do not depend on the current shell's stale `AWS_PROFILE=my-dev-profile` value.
 - [ ] **Codex:** Add the initial infrastructure-as-code structure with explicit provision and destroy workflows.
 - [ ] **Codex:** Write a short cloud-session checklist covering provision, validation, evidence collection, destroy, and post-destroy verification.
 - [ ] **Codex:** Define how each session will prove that its billable resources have actually been removed.

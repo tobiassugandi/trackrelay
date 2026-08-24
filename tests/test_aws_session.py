@@ -19,7 +19,12 @@ from trackrelay.aws_session import (
 SESSION_ID = "cloud-session-1-20260822T090000Z"
 PROFILE = "trackrelay-admin"
 REGION = "ap-southeast-3"
+API_INGRESS_CIDR = "203.0.113.10/32"
 GIT_REVISION = "a" * 40
+
+
+def empty_native_inventory(**_: object) -> dict[str, int]:
+    return {}
 
 
 def make_session(tmp_path: Path) -> AwsSession:
@@ -29,6 +34,7 @@ def make_session(tmp_path: Path) -> AwsSession:
         session_id=SESSION_ID,
         profile=PROFILE,
         region=REGION,
+        api_ingress_cidr=API_INGRESS_CIDR,
         terraform_dir=terraform_dir,
         evidence_root=tmp_path / "evidence",
     )
@@ -69,6 +75,7 @@ def test_session_rejects_an_unstructured_identifier(tmp_path: Path) -> None:
             session_id="session-one",
             profile=PROFILE,
             region=REGION,
+            api_ingress_cidr=API_INGRESS_CIDR,
             terraform_dir=tmp_path,
             evidence_root=tmp_path,
         )
@@ -91,6 +98,7 @@ def test_plan_saves_exact_inputs_and_plan_identity(tmp_path: Path) -> None:
     assert manifest["session_id"] == SESSION_ID
     assert manifest["profile"] == PROFILE
     assert manifest["region"] == REGION
+    assert manifest["api_ingress_cidr"] == API_INGRESS_CIDR
     assert manifest["git_revision"] == GIT_REVISION
     assert manifest["status"] == "planned"
     assert len(manifest["plan_sha256"]) == 64
@@ -211,7 +219,11 @@ def test_generic_verification_accepts_empty_state_and_inventory(
             return completed(call)
         return completed(call, stdout='{"ResourceTagMappingList": []}')
 
-    verify_destroyed(session, runner=runner)
+    verify_destroyed(
+        session,
+        runner=runner,
+        native_inventory=empty_native_inventory,
+    )
 
     inventory = loads(
         (session.evidence_dir / "aws-inventory-after-destroy.json").read_text(
@@ -249,7 +261,11 @@ def test_generic_verification_accepts_that_state_never_existed(
             )
         return completed(call, stdout='{"ResourceTagMappingList": []}')
 
-    verify_destroyed(session, runner=runner)
+    verify_destroyed(
+        session,
+        runner=runner,
+        native_inventory=empty_native_inventory,
+    )
 
     inventory = loads(
         (session.evidence_dir / "aws-inventory-after-destroy.json").read_text(
@@ -277,7 +293,11 @@ def test_generic_verification_rejects_remaining_tagged_resources(
         )
 
     with raises(AwsSessionError, match="still reports resources"):
-        verify_destroyed(session, runner=runner)
+        verify_destroyed(
+            session,
+            runner=runner,
+            native_inventory=empty_native_inventory,
+        )
 
     inventory = loads(
         (session.evidence_dir / "aws-inventory-after-destroy.json").read_text(
@@ -286,3 +306,25 @@ def test_generic_verification_rejects_remaining_tagged_resources(
     )
     assert inventory["remaining_resource_count"] == 1
     assert "ResourceARN" not in inventory
+
+
+def test_verification_rejects_resources_found_by_native_checks(
+    tmp_path: Path,
+) -> None:
+    session = make_session(tmp_path)
+
+    def runner(arguments: Sequence[str]) -> CompletedProcess[str]:
+        call = tuple(arguments)
+        if call[0] == "terraform":
+            return completed(call)
+        return completed(call, stdout='{"ResourceTagMappingList": []}')
+
+    def native_inventory(**_: object) -> dict[str, int]:
+        return {"ec2_instances": 1, "ecr_repositories": 0}
+
+    with raises(AwsSessionError, match="ec2_instances"):
+        verify_destroyed(
+            session,
+            runner=runner,
+            native_inventory=native_inventory,
+        )

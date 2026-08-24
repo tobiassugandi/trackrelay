@@ -6,15 +6,22 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
+from ipaddress import IPv4Network
 from json import JSONDecodeError, dumps, loads
 from pathlib import Path
 from re import compile as compile_pattern
 from subprocess import CompletedProcess, run
 
+from trackrelay.aws_teardown import (
+    AwsTeardownCheckError,
+    inventory_rehost_resources,
+)
+
 SESSION_ID_PATTERN = compile_pattern(
     r"^cloud-session-[123]-[0-9]{8}T[0-9]{6}Z$"
 )
 CommandRunner = Callable[[Sequence[str]], CompletedProcess[str]]
+NativeInventory = Callable[..., dict[str, int]]
 
 
 class AwsSessionError(RuntimeError):
@@ -28,6 +35,7 @@ class AwsSession:
     session_id: str
     profile: str
     region: str
+    api_ingress_cidr: str
     terraform_dir: Path
     evidence_root: Path
 
@@ -41,6 +49,16 @@ class AwsSession:
             raise AwsSessionError("AWS profile must not be empty")
         if not self.region.strip():
             raise AwsSessionError("AWS region must not be empty")
+        try:
+            ingress_network = IPv4Network(self.api_ingress_cidr, strict=True)
+        except ValueError as error:
+            raise AwsSessionError(
+                "API ingress must be one explicit IPv4 /32 CIDR"
+            ) from error
+        if ingress_network.prefixlen != 32:
+            raise AwsSessionError(
+                "API ingress must be one explicit IPv4 /32 CIDR"
+            )
 
     @property
     def evidence_dir(self) -> Path:
@@ -65,6 +83,7 @@ class AwsSession:
         return (
             f"-var=aws_profile={self.profile}",
             f"-var=aws_region={self.region}",
+            f"-var=api_ingress_cidr={self.api_ingress_cidr}",
             f"-var=session_id={self.session_id}",
         )
 
@@ -146,6 +165,7 @@ def load_manifest(session: AwsSession) -> dict[str, object]:
         ("session_id", session.session_id),
         ("profile", session.profile),
         ("region", session.region),
+        ("api_ingress_cidr", session.api_ingress_cidr),
     ):
         if manifest.get(field) != expected:
             raise AwsSessionError(
@@ -188,6 +208,7 @@ def plan_session(
         {
             "created_at": datetime.now(UTC).isoformat(),
             "git_revision": resolved_revision,
+            "api_ingress_cidr": session.api_ingress_cidr,
             "plan_sha256": file_sha256(session.plan_path),
             "profile": session.profile,
             "region": session.region,
@@ -317,8 +338,9 @@ def verify_destroyed(
     session: AwsSession,
     *,
     runner: CommandRunner = run_command,
+    native_inventory: NativeInventory = inventory_rehost_resources,
 ) -> None:
-    """Verify empty Terraform state and empty session-tagged AWS inventory."""
+    """Verify empty state plus generic and native AWS inventories."""
     session.evidence_dir.mkdir(parents=True, exist_ok=True)
     state_result = runner(session.terraform_command("state", "list"))
     state_log_path = (
@@ -378,12 +400,34 @@ def verify_destroyed(
             "AWS still reports resources carrying this session's tags"
         )
 
+    try:
+        native_counts = native_inventory(
+            profile=session.profile,
+            region=session.region,
+            session_id=session.session_id,
+            runner=runner,
+        )
+    except AwsTeardownCheckError as error:
+        raise AwsSessionError(str(error)) from error
+    (session.evidence_dir / "aws-native-inventory-after-destroy.json").write_text(
+        dumps(native_counts, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    remaining_native_resources = {
+        name: count for name, count in native_counts.items() if count
+    }
+    if remaining_native_resources:
+        raise AwsSessionError(
+            "AWS native checks still report session-owned resources: "
+            f"{sorted(remaining_native_resources)}"
+        )
+
     if session.manifest_path.exists():
         manifest = load_manifest(session)
         manifest.update(
             {
-                "generic_teardown_verified_at": datetime.now(UTC).isoformat(),
-                "status": "generic_teardown_verified",
+                "teardown_verified_at": datetime.now(UTC).isoformat(),
+                "status": "teardown_verified",
             }
         )
         write_manifest(session, manifest)
@@ -394,6 +438,7 @@ def add_shared_arguments(parser: ArgumentParser) -> None:
     parser.add_argument("--session-id", required=True)
     parser.add_argument("--profile", required=True)
     parser.add_argument("--region", required=True)
+    parser.add_argument("--api-ingress-cidr", required=True)
     parser.add_argument("--terraform-dir", type=Path, required=True)
     parser.add_argument("--evidence-root", type=Path, required=True)
 
@@ -418,6 +463,7 @@ def session_from_arguments(arguments: Namespace) -> AwsSession:
         session_id=arguments.session_id,
         profile=arguments.profile,
         region=arguments.region,
+        api_ingress_cidr=arguments.api_ingress_cidr,
         terraform_dir=arguments.terraform_dir,
         evidence_root=arguments.evidence_root,
     )
@@ -446,10 +492,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"destroyed Terraform resources for {session.session_id}")
         else:
             verify_destroyed(session)
-            print(
-                "generic teardown verification passed; "
-                "run the session's native service checks before closure"
-            )
+            print("Terraform, tagged, and native teardown checks passed")
     except AwsSessionError as error:
         raise SystemExit(f"AWS session command failed: {error}") from error
     return 0

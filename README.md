@@ -143,18 +143,18 @@ docker run --rm \
 
 Do not place a real database URL in the Dockerfile, image, or Git. AWS deployment configuration will supply it at runtime through the planned secrets integration.
 
-The Terraform root module starts in `infra/terraform` with no AWS resources. Initialize its locked provider and validate the local foundation with:
+The Terraform root module in `infra/terraform` defines the minimal Stage 9.1 rehost host: one ARM EC2 instance, its disposable network, an ECR repository, and SSM access without SSH. The [rehost architecture note](docs/aws-rehost-architecture.md) explains the boundary and cost choices. Initialize its locked provider and run formatting, validation, and mocked plan assertions with:
 
 ```bash
 make infra-init
 make infra-check
 ```
 
-Neither command provisions infrastructure. Apply and destroy workflows will be added behind the documented cloud-session approval gate before the first deployment.
+Neither command provisions infrastructure or contacts AWS. The real plan and apply remain behind the documented cloud-session approval gate.
 
 Every billable AWS session must follow the [AWS cloud-session checklist](docs/aws-cloud-session-checklist.md). A session is not complete until Terraform state is empty, the session-tagged AWS inventory is empty, and native service checks confirm that no session-owned resources remain.
 
-The repository exposes `make aws-plan`, approval-gated `make aws-up`, unconditional `make aws-down`, and `make aws-verify-down`. Plans and lifecycle logs stay under the ignored `results/aws-sessions/` tree. The generic verifier is ready for the empty foundation; resource-specific teardown checks will be added with each future AWS resource.
+The repository exposes `make aws-plan`, approval-gated `make aws-up`, unconditional `make aws-down`, and `make aws-verify-down`. Plans and lifecycle logs stay under the ignored `results/aws-sessions/` tree. The verifier checks Terraform state, the tagging API, and native EC2, EBS, VPC, ECR, and IAM inventories for the Stage 9.1 resources; each later resource type must add its own native check before use.
 
 ## Local development
 

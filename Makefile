@@ -4,6 +4,7 @@ DOCKER := docker
 TERRAFORM := terraform
 TERRAFORM_DIR := infra/terraform
 API_IMAGE ?= trackrelay-api:local
+API_INGRESS_CIDR ?= 127.0.0.1/32
 SEED ?= 20260806
 SHIPMENTS ?= 3
 OUTPUT ?= results/input-manifest.json
@@ -143,12 +144,14 @@ infra-init:
 infra-check:
 	$(TERRAFORM) -chdir=$(TERRAFORM_DIR) fmt -check -recursive
 	$(TERRAFORM) -chdir=$(TERRAFORM_DIR) validate
+	$(TERRAFORM) -chdir=$(TERRAFORM_DIR) test
 
 aws-plan:
 	$(UV) run --locked trackrelay-aws-session plan \
 		--session-id "$(SESSION_ID)" \
 		--profile "$(TRACKRELAY_AWS_PROFILE)" \
 		--region "$(TRACKRELAY_AWS_REGION)" \
+		--api-ingress-cidr "$(API_INGRESS_CIDR)" \
 		--terraform-dir "$(TERRAFORM_DIR)" \
 		--evidence-root "$(AWS_SESSION_RESULTS)"
 
@@ -157,6 +160,7 @@ aws-up:
 		--session-id "$(SESSION_ID)" \
 		--profile "$(TRACKRELAY_AWS_PROFILE)" \
 		--region "$(TRACKRELAY_AWS_REGION)" \
+		--api-ingress-cidr "$(API_INGRESS_CIDR)" \
 		--terraform-dir "$(TERRAFORM_DIR)" \
 		--evidence-root "$(AWS_SESSION_RESULTS)" \
 		--approved-session-id "$(APPROVED_SESSION_ID)" \
@@ -168,6 +172,7 @@ aws-down:
 		--session-id "$(SESSION_ID)" \
 		--profile "$(TRACKRELAY_AWS_PROFILE)" \
 		--region "$(TRACKRELAY_AWS_REGION)" \
+		--api-ingress-cidr "$(API_INGRESS_CIDR)" \
 		--terraform-dir "$(TERRAFORM_DIR)" \
 		--evidence-root "$(AWS_SESSION_RESULTS)"
 
@@ -176,6 +181,7 @@ aws-verify-down:
 		--session-id "$(SESSION_ID)" \
 		--profile "$(TRACKRELAY_AWS_PROFILE)" \
 		--region "$(TRACKRELAY_AWS_REGION)" \
+		--api-ingress-cidr "$(API_INGRESS_CIDR)" \
 		--terraform-dir "$(TERRAFORM_DIR)" \
 		--evidence-root "$(AWS_SESSION_RESULTS)"
 

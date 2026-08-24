@@ -34,3 +34,42 @@ variable "session_id" {
     )
   }
 }
+
+variable "api_ingress_cidr" {
+  description = "Single trusted IPv4 CIDR allowed to reach the rehost API."
+  type        = string
+
+  validation {
+    condition = (
+      can(cidrnetmask(var.api_ingress_cidr))
+      && endswith(var.api_ingress_cidr, "/32")
+    )
+    error_message = "api_ingress_cidr must be one explicit IPv4 /32 CIDR."
+  }
+}
+
+variable "rehost_instance_type" {
+  description = "Cost-bounded ARM instance type for synchronous rehost validation."
+  type        = string
+  default     = "t4g.small"
+}
+
+variable "rehost_root_volume_gib" {
+  description = "Encrypted gp3 root-volume size for the ephemeral rehost."
+  type        = number
+  default     = 16
+
+  validation {
+    condition = (
+      var.rehost_root_volume_gib >= 8
+      && var.rehost_root_volume_gib <= 32
+    )
+    error_message = "rehost_root_volume_gib must be between 8 and 32 GiB."
+  }
+}
+
+variable "rehost_ami_parameter" {
+  description = "AWS public SSM parameter for the current ARM Amazon Linux 2023 AMI."
+  type        = string
+  default     = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64"
+}

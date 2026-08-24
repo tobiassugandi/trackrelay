@@ -448,7 +448,8 @@ The USD 25 AWS Budget is a monthly monitoring and alerting guardrail, not an ass
 Do not start cloud session 1 until the local-preparation items in both Stages 9.1 and 9.2 are complete.
 
 - [x] Package the unchanged synchronous API as a locally verified, non-root OCI image with locked production dependencies, liveness health check, and an explicit one-off migration command.
-- [ ] Define the rehost infrastructure and deployment configuration as code.
+- [x] Define the minimal rehost host as locally tested Terraform: one cost-bounded ARM EC2 instance, a disposable public network without a NAT gateway, restricted `/32` API ingress, ECR, SSM access without SSH, and service-native teardown checks. Do not apply it yet.
+- [ ] Define the host runtime configuration for the API, host-local PostgreSQL, and downstream simulator as code.
 - [ ] Automate deployment, migrations, health checks, smoke tests, workload execution, and result collection.
 
 ### Stage 9.2 — Provision RDS for the AWS deployment

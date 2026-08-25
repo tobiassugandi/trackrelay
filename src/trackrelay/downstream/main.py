@@ -42,6 +42,12 @@ def simulator_status(mode: SimulatorMode) -> SimulatorStatusResponse:
     )
 
 
+@app.get("/health/live", tags=["health"])
+def liveness() -> dict[str, str]:
+    """Report that the downstream simulator process is running."""
+    return {"status": "ok"}
+
+
 @app.put("/control/mode", response_model=SimulatorStatusResponse)
 def set_simulator_mode(request: SimulatorModeRequest) -> SimulatorStatusResponse:
     """Activate one deterministic downstream behavior."""

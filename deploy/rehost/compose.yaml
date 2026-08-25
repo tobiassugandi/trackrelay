@@ -1,0 +1,97 @@
+x-application: &application
+  image: ${TRACKRELAY_API_IMAGE:?TRACKRELAY_API_IMAGE must be set}
+  pull_policy: ${TRACKRELAY_IMAGE_PULL_POLICY:-missing}
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp:size=16m,mode=1777
+  logging:
+    driver: json-file
+    options:
+      max-file: "3"
+      max-size: 10m
+
+x-application-environment: &application-environment
+  TRACKRELAY_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set}
+  TRACKRELAY_DEBUG: "false"
+  TRACKRELAY_ENVIRONMENT: production
+
+services:
+  postgres:
+    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 2s
+      timeout: 5s
+      retries: 15
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-file: "3"
+        max-size: 10m
+
+  migrate:
+    <<: *application
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *application-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+
+  downstream:
+    <<: *application
+    restart: unless-stopped
+    command:
+      - uvicorn
+      - trackrelay.downstream.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8001"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          from urllib.request import urlopen;
+          urlopen('http://127.0.0.1:8001/health/live', timeout=1).read()
+      interval: 5s
+      timeout: 2s
+      retries: 6
+      start_period: 5s
+
+  api:
+    <<: *application
+    restart: unless-stopped
+    environment:
+      <<: *application-environment
+      TRACKRELAY_DOWNSTREAM_TIMEOUT_SECONDS: ${TRACKRELAY_DOWNSTREAM_TIMEOUT_SECONDS:-5.0}
+      TRACKRELAY_DOWNSTREAM_URL: http://downstream:8001
+    ports:
+      - host_ip: ${TRACKRELAY_API_BIND_ADDRESS:?TRACKRELAY_API_BIND_ADDRESS must be set}
+        target: 8000
+        published: ${TRACKRELAY_API_PORT:-8000}
+        protocol: tcp
+    depends_on:
+      downstream:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  postgres_data:

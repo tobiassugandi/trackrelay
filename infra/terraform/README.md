@@ -11,7 +11,7 @@ The current module contains:
 - one ECR repository that can be emptied during teardown; and
 - an instance role for ECR reads and Systems Manager access.
 
-The API, host-local PostgreSQL, and downstream simulator runtime configuration is the next Stage 9.1 slice. RDS is a separate Stage 9.2 concern. See the [Stage 9.1 architecture note](../../docs/aws-rehost-architecture.md).
+The API, one-off migration, host-local PostgreSQL, and downstream simulator runtime is defined separately in `deploy/rehost/compose.yaml`. Deployment automation is the next Stage 9.1 slice. RDS is a separate Stage 9.2 concern. See the [Stage 9.1 architecture note](../../docs/aws-rehost-architecture.md).
 
 Initialize the pinned provider locally:
 

@@ -143,6 +143,20 @@ docker run --rm \
 
 Do not place a real database URL in the Dockerfile, image, or Git. AWS deployment configuration will supply it at runtime through the planned secrets integration.
 
+### Synchronous rehost runtime
+
+The Stage 9.1 host runtime is defined in `deploy/rehost/compose.yaml`, independently of Terraform. It runs the same application image as a one-off Alembic migration, the API, and the private downstream simulator alongside host-local PostgreSQL. Only the API publishes a host port; PostgreSQL and the simulator remain inside the Compose network. The API cannot start until PostgreSQL is healthy, migrations succeed, and the simulator is healthy.
+
+Validate interpolation and the Compose model without starting containers:
+
+```bash
+make rehost-config
+```
+
+For a real runtime, copy `deploy/rehost/.env.example` to the ignored `deploy/rehost/.env`, replace the synthetic database password with a random URL-safe value, and select the exact application image. The committed example binds the API to `127.0.0.1`. Cloud deployment will explicitly use `0.0.0.0`, while Terraform restricts external access to the approved benchmark-driver `/32`.
+
+The deployment, health/smoke checks, frozen workload, result collection, and cleanup will be exposed as one guarded workflow in the next Stage 9.1 slice. Merely having this Compose definition does not authorize or start AWS resources.
+
 The Terraform root module in `infra/terraform` defines the minimal Stage 9.1 rehost host: one ARM EC2 instance, its disposable network, an ECR repository, and SSM access without SSH. The [rehost architecture note](docs/aws-rehost-architecture.md) explains the boundary and cost choices. Initialize its locked provider and run formatting, validation, and mocked plan assertions with:
 
 ```bash

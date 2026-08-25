@@ -33,6 +33,13 @@ def normalized_event_data() -> dict[str, object]:
     }
 
 
+def test_liveness(client: TestClient) -> None:
+    response = client.get("/health/live")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
 def test_simulator_accepts_and_exposes_a_normalized_event(
     client: TestClient,
 ) -> None:

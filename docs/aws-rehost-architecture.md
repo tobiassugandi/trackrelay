@@ -8,9 +8,10 @@ approved benchmark host
         | TCP 8000 from one IPv4 /32
         v
 public subnet: one t4g.small EC2 instance
-        |- TrackRelay API container       (next slice)
-        |- PostgreSQL container           (next slice)
-        `- downstream simulator container (next slice)
+        |- TrackRelay API container
+        |- one-off migration container
+        |- PostgreSQL container
+        `- downstream simulator container
 
 EC2 pulls the API image from ECR and is administered through SSM, not SSH.
 ```
@@ -23,11 +24,19 @@ The module deliberately has no NAT gateway, load balancer, Elastic IP, SSH key, 
 
 Amazon EC2 T4g is available in Asia Pacific (Jakarta), and the selected Amazon Linux 2023 ARM image supports the architecture. AWS documents that the SSM Agent is commonly preinstalled on Amazon Linux 2023 images; bootstrap also enables it explicitly.
 
+## Host runtime
+
+`deploy/rehost/compose.yaml` is the source of truth for the synchronous host runtime. One application image supplies the migration, API, and downstream-simulator processes. PostgreSQL is pinned to a multi-platform image digest. The database and simulator are internal-only; the API is the only service with a published host port.
+
+Compose waits for PostgreSQL health before running `alembic upgrade head`, and the API waits for both a successful migration and a healthy simulator. Application containers have read-only root filesystems, bounded JSON logs, and a small temporary filesystem. PostgreSQL data uses a named volume so an application-container restart does not silently erase it. The data remains synthetic and the complete volume is disposable at session teardown.
+
+Runtime values come from a private, uncommitted env file. The committed example binds the API to `127.0.0.1` for local validation. A cloud session must explicitly bind the host port to `0.0.0.0`; the EC2 security group still restricts the external source to the approved `/32`.
+
 ## What remains local-only
 
 `make infra-check` formats and validates Terraform and executes provider-mocked plan assertions. Those assertions guard the chosen instance type, standard CPU credits, volume size and deletion, IMDSv2, ingress restriction, and removable ECR repository without contacting AWS.
 
-The next Stage 9.1 slice will define the three-container host runtime. Stage 9.2 will replace host-local PostgreSQL with RDS for the target AWS deployment. A real AWS plan waits until both stages are locally prepared, the private CLI session is authenticated, and the account owner approves cloud session 1's exact resource list, estimate, duration, and cost ceiling.
+The next Stage 9.1 slice will automate image publication, remote runtime installation, migrations, health and smoke checks, frozen-workload execution, evidence collection, and cleanup. Stage 9.2 will replace host-local PostgreSQL with RDS for the target AWS deployment. A real AWS plan waits until both stages are locally prepared, the private CLI session is authenticated, and the account owner approves cloud session 1's exact resource list, estimate, duration, and cost ceiling.
 
 No AWS resources were created while preparing this architecture.
 

@@ -56,6 +56,8 @@ Store the compact, non-secret session record under `results/aws-sessions/<sessio
 
 - [ ] Record the UTC start time and start the session-duration timer.
 - [ ] Apply only the saved, approved plan with `make aws-up SESSION_ID=<session ID> API_INGRESS_CIDR=<approved IPv4>/32 APPROVED_SESSION_ID=<same session ID> APPROVED_COST_CEILING_USD=<approved ceiling>`.
+- [ ] Publish the exact approved Git revision as a Linux ARM64 image with `make aws-rehost-publish SESSION_ID=<session ID> API_INGRESS_CIDR=<approved IPv4>/32`; confirm that session evidence contains its digest.
+- [ ] Deploy the digest-pinned runtime and execute its tiny on-host smoke check with `make aws-rehost-deploy SESSION_ID=<session ID> API_INGRESS_CIDR=<approved IPv4>/32`.
 - [ ] Do not create untracked resources in the AWS console. If emergency diagnosis creates or changes anything, record it immediately and bring it under Terraform or remove it before continuing.
 - [ ] Run only the validation or experiment named in the approved proposal.
 - [ ] Collect evidence continuously so an interrupted run can still be diagnosed.

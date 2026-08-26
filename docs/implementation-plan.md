@@ -451,7 +451,7 @@ Do not start cloud session 1 until the local-preparation items in both Stages 9.
 - [x] Define the minimal rehost host as locally tested Terraform: one cost-bounded ARM EC2 instance, a disposable public network without a NAT gateway, restricted `/32` API ingress, ECR, SSM access without SSH, and service-native teardown checks. Do not apply it yet.
 - [x] Define the host runtime configuration for the API, host-local PostgreSQL, one-off migration, and downstream simulator as a locally validated Compose model. Publish only the API port, require healthy dependencies and successful migrations, pin PostgreSQL by digest, and bound container logs.
 - [x] Add one failure-safe local rehost smoke command that builds the application image, creates isolated credentials and storage, starts the complete stack, verifies the migration head and non-root processes, ingests and delivers a real event, proves database persistence across restarts, and removes the stack and volume.
-- [ ] Automate ARM64 image publication, SSM-based host deployment, migrations, health checks, and a tiny cloud smoke test without SSH.
+- [x] Add locally tested, guarded automation that publishes only a Linux ARM64 image, records its ECR digest without account identifiers, transfers the committed runtime through SSM without SSH or plaintext secrets, generates the synthetic database password on-host, and performs migrations, health checks, and a unique tiny ingestion smoke test. Do not execute it before cloud-session approval and Terraform apply.
 - [ ] Automate frozen workload execution and non-secret result collection for cloud session 1.
 
 ### Stage 9.2 — Provision RDS for the AWS deployment

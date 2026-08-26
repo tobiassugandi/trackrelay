@@ -167,6 +167,10 @@ For a real runtime, copy `deploy/rehost/.env.example` to the ignored `deploy/reh
 
 Cloud image publication, SSM-based deployment, the frozen workload, result collection, and AWS teardown integration remain separate guarded workflows. Merely running the local smoke command does not authorize or start AWS resources.
 
+The image-publication and host-deployment portions are now prepared as `make aws-rehost-publish` and `make aws-rehost-deploy`. They cannot run before Terraform records an approved apply of the same clean Git revision. Publication builds only Linux ARM64, passes the temporary ECR password over standard input, and records an immutable image digest without persisting the repository URL or account identifier. Deployment uses that digest and SSM Run Command rather than SSH. Because AWS retains Run Command history and logs API activity, no password is included in its payload; the host generates its own synthetic database password and stores it mode `0600`.
+
+These are cloud-mutating commands and have only been tested with simulated command runners so far. Do not invoke them until cloud session 1 has been explicitly approved and provisioned. The [rehost architecture note](docs/aws-rehost-architecture.md) describes the full sequence and security boundary.
+
 The Terraform root module in `infra/terraform` defines the minimal Stage 9.1 rehost host: one ARM EC2 instance, its disposable network, an ECR repository, and SSM access without SSH. The [rehost architecture note](docs/aws-rehost-architecture.md) explains the boundary and cost choices. Initialize its locked provider and run formatting, validation, and mocked plan assertions with:
 
 ```bash

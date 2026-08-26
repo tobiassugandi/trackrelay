@@ -50,6 +50,8 @@ Replace the documentation-only address with the public IPv4 `/32` of the approve
 
 `aws-plan` saves an immutable plan hash and non-secret session record, including the approved ingress CIDR. `aws-up` refuses a mismatched session, a changed plan or Git revision, and a cost ceiling above the monthly budget. `aws-down` intentionally has no approval gate so recovery cannot block teardown. `aws-verify-down` supplies the generic state and tag checks plus native checks for every resource type currently introduced by this module.
 
+After an approved `aws-up`, `make aws-rehost-publish` builds and pushes only Linux ARM64 and records its immutable digest. `make aws-rehost-deploy` transfers the runtime through SSM, generates the synthetic database password on the host, starts the stack, and runs a tiny smoke event. Both commands require the same clean Git revision as the applied plan. They are stateful cloud-session commands, not local validation commands, and must not be run merely because their implementation exists.
+
 The provider reads credentials from the private AWS CLI profile selected by Terraform input. Credentials and local `*.tfvars` files must not be committed. Terraform state can contain sensitive values and is also excluded from Git.
 
 Every future resource inherits `Project=TrackRelay`, `Environment=experiment`, `ManagedBy=terraform`, and a unique `SessionId` tag. The session ID connects the Terraform state, AWS-side inventory, experiment evidence, and teardown proof for one bounded cloud session. See the [cloud-session checklist](../../docs/aws-cloud-session-checklist.md) for the required lifecycle.

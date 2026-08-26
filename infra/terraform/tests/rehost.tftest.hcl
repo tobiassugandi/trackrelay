@@ -63,4 +63,14 @@ run "rehost_is_small_and_disposable" {
     condition     = aws_ecr_repository.api.force_delete
     error_message = "Teardown must remove the ECR repository even with images."
   }
+
+  assert {
+    condition     = strcontains(aws_instance.rehost.user_data, "docker-compose-linux-aarch64")
+    error_message = "The ARM rehost must install the Docker Compose plugin."
+  }
+
+  assert {
+    condition     = strcontains(aws_instance.rehost.user_data, "sha256sum --check")
+    error_message = "The downloaded Compose binary must be checksum verified."
+  }
 }

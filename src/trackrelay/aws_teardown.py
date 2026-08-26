@@ -68,7 +68,7 @@ def inventory_rehost_resources(
     session_id: str,
     runner: CommandRunner,
 ) -> dict[str, int]:
-    """Count every native resource type introduced by the Stage 9.1 rehost."""
+    """Count every native resource type introduced through Stage 9.2."""
     prefix = aws_command_prefix(profile=profile, region=region)
     tag_filters = (
         "Name=tag:Project,Values=TrackRelay",
@@ -165,6 +165,7 @@ def inventory_rehost_resources(
 
     resource_suffix = sha256(session_id.encode()).hexdigest()[:8]
     name_prefix = f"trackrelay-{resource_suffix}"
+    database_identifier = f"{name_prefix}-postgres"
     counts["ecr_repositories"] = named_resource_exists(
         name="ecr_repositories",
         command=(
@@ -205,6 +206,101 @@ def inventory_rehost_resources(
             "json",
         ),
         not_found_marker="NoSuchEntity",
+        runner=runner,
+    )
+    counts["rds_instances"] = named_resource_exists(
+        name="rds_instances",
+        command=(
+            *prefix,
+            "rds",
+            "describe-db-instances",
+            "--db-instance-identifier",
+            database_identifier,
+            "--output",
+            "json",
+        ),
+        not_found_marker="DBInstanceNotFound",
+        runner=runner,
+    )
+    counts["rds_automated_backups"] = named_resource_exists(
+        name="rds_automated_backups",
+        command=(
+            *prefix,
+            "rds",
+            "describe-db-instance-automated-backups",
+            "--db-instance-identifier",
+            database_identifier,
+            "--output",
+            "json",
+        ),
+        not_found_marker="DBInstanceAutomatedBackupNotFound",
+        runner=runner,
+    )
+    counts["rds_manual_snapshots"] = count_query(
+        name="rds_manual_snapshots",
+        command=(
+            *prefix,
+            "rds",
+            "describe-db-snapshots",
+            "--db-instance-identifier",
+            database_identifier,
+            "--snapshot-type",
+            "manual",
+            "--query",
+            "length(DBSnapshots)",
+            "--output",
+            "text",
+        ),
+        runner=runner,
+    )
+    counts["rds_subnet_groups"] = named_resource_exists(
+        name="rds_subnet_groups",
+        command=(
+            *prefix,
+            "rds",
+            "describe-db-subnet-groups",
+            "--db-subnet-group-name",
+            database_identifier,
+            "--output",
+            "json",
+        ),
+        not_found_marker="DBSubnetGroupNotFoundFault",
+        runner=runner,
+    )
+    counts["rds_parameter_groups"] = named_resource_exists(
+        name="rds_parameter_groups",
+        command=(
+            *prefix,
+            "rds",
+            "describe-db-parameter-groups",
+            "--db-parameter-group-name",
+            database_identifier,
+            "--output",
+            "json",
+        ),
+        not_found_marker="DBParameterGroupNotFound",
+        runner=runner,
+    )
+    secret_tag_query = (
+        "length(SecretList[?length(Tags[?"
+        "(Key=='aws:rds:primarydbinstancearn' || "
+        "Key=='aws:rds:primaryDBInstanceArn') && "
+        f"ends_with(Value, ':db:{database_identifier}')]) > `0`])"
+    )
+    counts["rds_managed_secrets"] = count_query(
+        name="rds_managed_secrets",
+        command=(
+            *prefix,
+            "secretsmanager",
+            "list-secrets",
+            "--include-planned-deletion",
+            "--filters",
+            "Key=owning-service,Values=rds.amazonaws.com",
+            "--query",
+            secret_tag_query,
+            "--output",
+            "text",
+        ),
         runner=runner,
     )
     return counts

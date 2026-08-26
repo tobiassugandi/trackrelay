@@ -42,7 +42,15 @@ The frozen-workload controller is also prepared locally. `make aws-rehost-worklo
 
 The ignored session bundle records the workload contract, driver placement, region, instance type, process counts, database placement, manifests, k6 summaries, runtime samples, compact reconciliation, and per-rate pass interpretation. It deliberately omits the temporary API address, instance ID, AWS account ID, and ECR repository URL from the workload result files. This is migration and benchmark-portability evidence, not the final fixed-versus-elastic causal comparison.
 
-Stage 9.2 will replace host-local PostgreSQL with RDS for the target AWS deployment. A real AWS plan waits until Stage 9.2 is locally prepared, the private CLI session is authenticated, and the account owner approves cloud session 1's exact resource list, estimate, duration, and cost ceiling.
+## Stage 9.2 private data layer
+
+Terraform now defines the RDS boundary without provisioning it. The database is RDS for PostgreSQL 17 on a single-AZ `db.t4g.micro` instance with 20 GiB of encrypted gp3 storage. A saved plan resolves the major version to a concrete available minor and verifies that the engine, class, and storage combination is orderable in Jakarta. Automatic minor upgrades, storage autoscaling, Multi-AZ, Performance Insights, enhanced monitoring, retained automated backups, final snapshots, and deletion protection are disabled for this short synthetic experiment.
+
+RDS requires its subnet group to cover two Availability Zones even for this single-AZ instance. The module therefore adds two private subnets with a route table containing no internet or NAT route. The database receives no public address; its security group accepts port 5432 only from the rehost security group. Placing the instance in the host's Availability Zone avoids deliberate cross-AZ traffic during this migration checkpoint.
+
+RDS generates the master password and manages it in Secrets Manager, keeping plaintext credentials out of configuration and Terraform state. The EC2 role can retrieve only that specific managed secret. AWS documents that deleting a database with an RDS-managed credential also deletes the secret. Native teardown verification nevertheless checks the instance, subnet and parameter groups, manual snapshots, retained automated backups, and matching RDS-managed secrets—including secrets pending deletion.
+
+The next local slice will teach the guarded deployment controller to retrieve that credential on-host, build the private SQLAlchemy URL, run migrations against RDS, and switch the API without placing the password or private endpoint in SSM parameters or saved evidence. A real AWS plan still waits until that integration is prepared, the private CLI session is authenticated, and the account owner approves cloud session 1's exact resource list, estimate, duration, and cost ceiling.
 
 ## Image publication and deployment controller
 
@@ -58,9 +66,9 @@ No AWS resources were created while preparing this architecture.
 
 ## Chargeable footprint when eventually applied
 
-The planned Stage 9.1-only footprint is one `t4g.small` instance, 16 GiB of gp3 storage, one public IPv4 while the instance runs, and ECR image storage. The VPC components, IAM objects, and security group are not themselves the intended billable capacity. Stage 9.2 will add RDS and will require a revised resource list and estimate before approval.
+The planned cloud-session-1 footprint is one `t4g.small` instance, its encrypted 16 GiB gp3 root volume, one public IPv4 while the instance runs, ECR image storage, one single-AZ `db.t4g.micro` PostgreSQL instance, fixed encrypted 20 GiB gp3 database storage, and one RDS-managed Secrets Manager secret. There is no NAT gateway, load balancer, Multi-AZ standby, retained database backup, or final snapshot. A current Jakarta price estimate and explicit session ceiling are still required before approval.
 
-Teardown is not considered complete merely because Terraform destroy succeeds. `make aws-verify-down` also checks empty session tags and native EC2, EBS, network, ECR, and IAM inventories. Later AWS resource types must extend that verifier before they are used.
+Teardown is not considered complete merely because Terraform destroy succeeds. `make aws-verify-down` also checks empty session tags and native EC2, EBS, network, ECR, IAM, RDS, snapshot, retained-backup, and RDS-managed-secret inventories. Later AWS resource types must extend that verifier before they are used.
 
 ## References
 
@@ -69,3 +77,6 @@ Teardown is not considered complete merely because Terraform destroy succeeds. `
 - [Terraform provider mocking and tests](https://developer.hashicorp.com/terraform/language/tests/mocking)
 - [AWS Systems Manager Run Command security guidance](https://docs.aws.amazon.com/systems-manager/latest/userguide/running-commands.html)
 - [Docker Compose plugin installation on Linux](https://docs.docker.com/compose/install/linux/)
+- [RDS DB subnet-group requirements](https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_CreateDBSubnetGroup.html)
+- [RDS-managed master credentials](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/rds-secrets-manager.html)
+- [RDS PostgreSQL instance-class support](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.DBInstanceClass.Support.html)

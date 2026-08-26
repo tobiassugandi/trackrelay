@@ -3,7 +3,7 @@ mock_provider "aws" {
 
   mock_data "aws_availability_zones" {
     defaults = {
-      names = ["ap-southeast-3a"]
+      names = ["ap-southeast-3a", "ap-southeast-3b"]
     }
   }
 
@@ -11,6 +11,92 @@ mock_provider "aws" {
     defaults = {
       value = "ami-mocked-arm64"
     }
+  }
+
+  mock_data "aws_rds_engine_version" {
+    defaults = {
+      version_actual = "17.6"
+    }
+  }
+
+  mock_data "aws_rds_orderable_db_instance" {
+    defaults = {
+      instance_class = "db.t4g.micro"
+    }
+  }
+}
+
+run "rds_is_private_small_and_disposable" {
+  command = plan
+
+  assert {
+    condition     = length(aws_subnet.database) == 2
+    error_message = "The RDS subnet group must span two private subnets."
+  }
+
+  assert {
+    condition     = aws_subnet.database[0].availability_zone != aws_subnet.database[1].availability_zone
+    error_message = "The RDS subnets must occupy different Availability Zones."
+  }
+
+  assert {
+    condition     = alltrue([for subnet in aws_subnet.database : !subnet.map_public_ip_on_launch])
+    error_message = "Database subnets must not assign public addresses."
+  }
+
+  assert {
+    condition     = one(aws_security_group.database.ingress).from_port == 5432
+    error_message = "The database security group must expose only PostgreSQL."
+  }
+
+  assert {
+    condition     = one(aws_security_group.database.ingress).cidr_blocks == null
+    error_message = "The database must not accept PostgreSQL from an IP CIDR."
+  }
+
+  assert {
+    condition     = aws_db_instance.postgres.instance_class == "db.t4g.micro"
+    error_message = "Cloud session 1 must use the cost-bounded RDS class."
+  }
+
+  assert {
+    condition     = aws_db_instance.postgres.allocated_storage == 20
+    error_message = "Cloud session 1 must use exactly 20 GiB of RDS storage."
+  }
+
+  assert {
+    condition     = aws_db_instance.postgres.storage_type == "gp3" && aws_db_instance.postgres.storage_encrypted
+    error_message = "RDS storage must use encrypted gp3."
+  }
+
+  assert {
+    condition     = !aws_db_instance.postgres.publicly_accessible && !aws_db_instance.postgres.multi_az
+    error_message = "The migration database must be private and single-AZ."
+  }
+
+  assert {
+    condition     = aws_db_instance.postgres.manage_master_user_password
+    error_message = "RDS must generate and manage the master password in Secrets Manager."
+  }
+
+  assert {
+    condition     = aws_db_instance.postgres.backup_retention_period == 0 && aws_db_instance.postgres.delete_automated_backups && aws_db_instance.postgres.skip_final_snapshot
+    error_message = "The synthetic database must retain no backup or final snapshot."
+  }
+
+  assert {
+    condition     = !aws_db_instance.postgres.deletion_protection
+    error_message = "The bounded experiment database must remain removable."
+  }
+
+  assert {
+    condition     = !aws_db_instance.postgres.performance_insights_enabled && aws_db_instance.postgres.monitoring_interval == 0
+    error_message = "Optional RDS monitoring charges must remain disabled."
+  }
+
+  assert {
+    condition     = local.rehost_database_secret_actions == ["secretsmanager:GetSecretValue"]
+    error_message = "The rehost role needs narrowly scoped access to the managed database secret."
   }
 }
 

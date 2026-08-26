@@ -73,3 +73,36 @@ variable "rehost_ami_parameter" {
   type        = string
   default     = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64"
 }
+
+variable "rds_postgres_major_version" {
+  description = "PostgreSQL major version resolved to a concrete minor in each saved plan."
+  type        = string
+  default     = "17"
+
+  validation {
+    condition     = var.rds_postgres_major_version == "17"
+    error_message = "The migration target must remain PostgreSQL 17."
+  }
+}
+
+variable "rds_instance_class" {
+  description = "Small single-AZ RDS class for migration validation."
+  type        = string
+  default     = "db.t4g.micro"
+
+  validation {
+    condition     = var.rds_instance_class == "db.t4g.micro"
+    error_message = "Cloud session 1 is cost-bounded to db.t4g.micro."
+  }
+}
+
+variable "rds_allocated_storage_gib" {
+  description = "Fixed encrypted gp3 storage for the disposable database."
+  type        = number
+  default     = 20
+
+  validation {
+    condition     = var.rds_allocated_storage_gib == 20
+    error_message = "Cloud session 1 is fixed at 20 GiB of RDS storage."
+  }
+}

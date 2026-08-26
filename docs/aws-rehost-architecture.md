@@ -38,7 +38,11 @@ Runtime values come from a private, uncommitted env file. The committed example 
 
 `make rehost-smoke` exercises the complete runtime locally in an isolated Compose project. It verifies migrations, readiness, non-root processes, ingestion, downstream delivery, and durable PostgreSQL state across a restart, then removes its containers, network, and volume even on failure.
 
-The remaining Stage 9.1 slice will automate frozen-workload execution and non-secret evidence collection. Stage 9.2 will replace host-local PostgreSQL with RDS for the target AWS deployment. A real AWS plan waits until both stages are locally prepared, the private CLI session is authenticated, and the account owner approves cloud session 1's exact resource list, estimate, duration, and cost ceiling.
+The frozen-workload controller is also prepared locally. `make aws-rehost-workload` runs the exact Step 8.6 healthy workload rates from the approved developer machine, not from the small EC2 host. For every rate it generates the manifest locally, uses SSM to regenerate and prepare the same run inside the private Compose network, drives the public API with local k6, samples API runtime metrics, then asks the private helper to reconcile PostgreSQL and simulator evidence. PostgreSQL and the simulator never receive public ports.
+
+The ignored session bundle records the workload contract, driver placement, region, instance type, process counts, database placement, manifests, k6 summaries, runtime samples, compact reconciliation, and per-rate pass interpretation. It deliberately omits the temporary API address, instance ID, AWS account ID, and ECR repository URL from the workload result files. This is migration and benchmark-portability evidence, not the final fixed-versus-elastic causal comparison.
+
+Stage 9.2 will replace host-local PostgreSQL with RDS for the target AWS deployment. A real AWS plan waits until Stage 9.2 is locally prepared, the private CLI session is authenticated, and the account owner approves cloud session 1's exact resource list, estimate, duration, and cost ceiling.
 
 ## Image publication and deployment controller
 
@@ -47,6 +51,8 @@ The remaining Stage 9.1 slice will automate frozen-workload execution and non-se
 `make aws-rehost-deploy` waits for the specific instance's SSM agent, sends the committed Compose and installer files through `AWS-RunShellScript`, waits for success, and records only the command ID and outcome. It never opens SSH. AWS warns that Run Command parameters are retained in command history and can be recorded by CloudTrail, so the payload contains no password. The installer generates the synthetic PostgreSQL password on the instance and stores its env file with mode `0600`.
 
 The bootstrap installs Docker Compose v2.32.4 for ARM64 from Docker's official release and verifies its published SHA-256 checksum before installation. The remote command waits for cloud-init, authenticates to ECR with the instance role, starts the digest-pinned application, verifies migration head and readiness, and sends one unique Courier Alpha event through the database and simulator. These workflows are locally unit-tested definitions only; they have not been run against AWS.
+
+`make aws-rehost-workload` has the same revision guard and additionally requires a successfully deployed rehost. Its SSM payload contains only synthetic workload parameters and paths to the host-private Compose configuration. The external driver learns the temporary API address in memory from Terraform output, but no workload result artifact persists it. A k6 threshold failure is still reconciled so that a failing point can be interpreted; infrastructure teardown remains a separate unconditional command.
 
 No AWS resources were created while preparing this architecture.
 

@@ -337,7 +337,7 @@ def build_k6_command(
     )
 
 
-def _run_k6_with_resource_sampling(
+def run_k6_with_resource_sampling(
     command: Sequence[str],
     *,
     trackrelay_client: httpx.Client,
@@ -356,6 +356,82 @@ def _run_k6_with_resource_sampling(
         raise
     samples.append(_runtime_snapshot(trackrelay_client))
     return process.wait(), tuple(samples)
+
+
+def derive_performance_result(
+    configuration: PerformanceExperimentConfiguration,
+    *,
+    test_run_id: UUID,
+    k6_exit_code: int,
+    k6_summary: dict[str, object],
+    resource_samples: Sequence[RuntimeMetricsSnapshot],
+    reconciliation: ReconciliationReport,
+) -> PerformanceExperimentResult:
+    """Interpret portable k6, runtime, and reconciliation evidence."""
+    if not resource_samples:
+        raise ValueError("at least one runtime metrics sample is required")
+
+    p95_response_latency_ms = _k6_metric_value(
+        k6_summary,
+        "http_req_duration",
+        "p(95)",
+    )
+    request_error_rate = _k6_metric_value(
+        k6_summary,
+        "http_req_failed",
+        "rate",
+    )
+    slo_evaluation = evaluate_baseline_slo(
+        p95_response_latency_ms=p95_response_latency_ms,
+        request_error_rate=request_error_rate,
+        reconciliation_report=reconciliation,
+    )
+    cpu_start = resource_samples[0].process_cpu_seconds
+    cpu_end = resource_samples[-1].process_cpu_seconds
+    return PerformanceExperimentResult(
+        test_run_id=test_run_id,
+        configuration=configuration,
+        k6_exit_code=k6_exit_code,
+        observed_request_count=int(
+            _k6_metric_value(k6_summary, "http_reqs", "count")
+        ),
+        dropped_iteration_count=int(
+            _optional_k6_metric_value(
+                k6_summary,
+                "dropped_iterations",
+                "count",
+                default=0,
+            )
+        ),
+        observed_request_rate_per_second=_k6_metric_value(
+            k6_summary,
+            "http_reqs",
+            "rate",
+        ),
+        p95_response_latency_ms=p95_response_latency_ms,
+        request_error_rate=request_error_rate,
+        process_cpu_seconds_used=max(0, cpu_end - cpu_start),
+        process_max_rss_bytes_observed=max(
+            sample.process_max_rss_bytes for sample in resource_samples
+        ),
+        maximum_database_connections_open=(
+            _maximum_open_connections(resource_samples)
+        ),
+        maximum_database_connections_checked_out=(
+            _maximum_checked_out_connections(resource_samples)
+        ),
+        downstream_delivery_rate_per_second=(
+            reconciliation.simulator_receipts
+            / configuration.duration_seconds
+        ),
+        downstream_delivery_receipts_per_accepted_event=(
+            reconciliation.simulator_receipts / reconciliation.accepted
+            if reconciliation.accepted
+            else 0
+        ),
+        reconciliation=reconciliation,
+        slo=slo_evaluation,
+    )
 
 
 def _k6_metric_value(
@@ -454,7 +530,7 @@ def _database_run_counts(
     return int(event_count or 0), int(delivery_attempt_count or 0)
 
 
-def _wait_for_database_run_to_settle(
+def wait_for_database_run_to_settle(
     test_run_id: UUID,
     *,
     expected_request_count: int,
@@ -525,7 +601,7 @@ def execute_performance_experiment(
         run_directory=run_directory,
     )
     try:
-        k6_exit_code, resource_samples = _run_k6_with_resource_sampling(
+        k6_exit_code, resource_samples = run_k6_with_resource_sampling(
             command,
             trackrelay_client=trackrelay_client,
             sample_interval_seconds=(
@@ -539,7 +615,7 @@ def execute_performance_experiment(
         )
         reset_response.raise_for_status()
 
-    _wait_for_database_run_to_settle(
+    wait_for_database_run_to_settle(
         resolved_test_run_id,
         expected_request_count=configuration.expected_request_count,
         timeout_seconds=configuration.post_load_settle_timeout_seconds,
@@ -585,66 +661,13 @@ def execute_performance_experiment(
     k6_summary: dict[str, object] = json.loads(
         k6_summary_path.read_text(encoding="utf-8")
     )
-    p95_response_latency_ms = _k6_metric_value(
-        k6_summary,
-        "http_req_duration",
-        "p(95)",
-    )
-    request_error_rate = _k6_metric_value(
-        k6_summary,
-        "http_req_failed",
-        "rate",
-    )
-    slo_evaluation = evaluate_baseline_slo(
-        p95_response_latency_ms=p95_response_latency_ms,
-        request_error_rate=request_error_rate,
-        reconciliation_report=reconciliation,
-    )
-
-    cpu_start = resource_samples[0].process_cpu_seconds
-    cpu_end = resource_samples[-1].process_cpu_seconds
-    result = PerformanceExperimentResult(
+    result = derive_performance_result(
+        configuration,
         test_run_id=resolved_test_run_id,
-        configuration=configuration,
         k6_exit_code=k6_exit_code,
-        observed_request_count=int(
-            _k6_metric_value(k6_summary, "http_reqs", "count")
-        ),
-        dropped_iteration_count=int(
-            _optional_k6_metric_value(
-                k6_summary,
-                "dropped_iterations",
-                "count",
-                default=0,
-            )
-        ),
-        observed_request_rate_per_second=_k6_metric_value(
-            k6_summary,
-            "http_reqs",
-            "rate",
-        ),
-        p95_response_latency_ms=p95_response_latency_ms,
-        request_error_rate=request_error_rate,
-        process_cpu_seconds_used=max(0, cpu_end - cpu_start),
-        process_max_rss_bytes_observed=max(
-            sample.process_max_rss_bytes for sample in resource_samples
-        ),
-        maximum_database_connections_open=(
-            _maximum_open_connections(resource_samples)
-        ),
-        maximum_database_connections_checked_out=(
-            _maximum_checked_out_connections(resource_samples)
-        ),
-        downstream_delivery_rate_per_second=(
-            len(simulator_receipts) / configuration.duration_seconds
-        ),
-        downstream_delivery_receipts_per_accepted_event=(
-            len(simulator_receipts) / reconciliation.accepted
-            if reconciliation.accepted
-            else 0
-        ),
+        k6_summary=k6_summary,
+        resource_samples=resource_samples,
         reconciliation=reconciliation,
-        slo=slo_evaluation,
     )
     _write_model(result, result_path)
     return PerformanceExperimentArtifacts(

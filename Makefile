@@ -39,7 +39,7 @@ APPROVED_COST_CEILING_USD ?=
 REHOST_COMPOSE_FILE ?= deploy/rehost/compose.yaml
 REHOST_INSTALLER ?= deploy/rehost/install.sh
 
-.PHONY: sync test test-integration lint run run-downstream image-api image-api-smoke rehost-config rehost-smoke generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp load-slow load-outage load-baseline aws-check aws-plan aws-up aws-rehost-publish aws-rehost-deploy aws-down aws-verify-down infra-init infra-check db-up db-status db-check db-down migrate migration-status
+.PHONY: sync test test-integration lint run run-downstream image-api image-api-smoke rehost-config rehost-smoke generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp load-slow load-outage load-baseline aws-check aws-plan aws-up aws-rehost-publish aws-rehost-deploy aws-rehost-workload aws-down aws-verify-down infra-init infra-check db-up db-status db-check db-down migrate migration-status
 
 sync:
 	$(UV) sync --locked --python 3.12
@@ -198,6 +198,15 @@ aws-rehost-deploy:
 		--evidence-root "$(AWS_SESSION_RESULTS)" \
 		--compose-file "$(REHOST_COMPOSE_FILE)" \
 		--installer "$(REHOST_INSTALLER)"
+
+aws-rehost-workload:
+	$(UV) run --locked trackrelay-aws-rehost workload \
+		--session-id "$(SESSION_ID)" \
+		--profile "$(TRACKRELAY_AWS_PROFILE)" \
+		--region "$(TRACKRELAY_AWS_REGION)" \
+		--api-ingress-cidr "$(API_INGRESS_CIDR)" \
+		--terraform-dir "$(TERRAFORM_DIR)" \
+		--evidence-root "$(AWS_SESSION_RESULTS)"
 
 aws-down:
 	$(UV) run --locked trackrelay-aws-session destroy \

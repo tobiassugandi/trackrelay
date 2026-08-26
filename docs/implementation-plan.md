@@ -452,7 +452,7 @@ Do not start cloud session 1 until the local-preparation items in both Stages 9.
 - [x] Define the host runtime configuration for the API, host-local PostgreSQL, one-off migration, and downstream simulator as a locally validated Compose model. Publish only the API port, require healthy dependencies and successful migrations, pin PostgreSQL by digest, and bound container logs.
 - [x] Add one failure-safe local rehost smoke command that builds the application image, creates isolated credentials and storage, starts the complete stack, verifies the migration head and non-root processes, ingests and delivers a real event, proves database persistence across restarts, and removes the stack and volume.
 - [x] Add locally tested, guarded automation that publishes only a Linux ARM64 image, records its ECR digest without account identifiers, transfers the committed runtime through SSM without SSH or plaintext secrets, generates the synthetic database password on-host, and performs migrations, health checks, and a unique tiny ingestion smoke test. Do not execute it before cloud-session approval and Terraform apply.
-- [ ] Automate frozen workload execution and non-secret result collection for cloud session 1.
+- [x] Automate frozen workload execution and non-secret result collection for cloud session 1. The benchmark driver remains on the approved developer machine; SSM invokes a private in-image helper to prepare and reconcile database and simulator evidence without exposing those services. The saved bundle contains the Step 8.6 workload, k6 and runtime evidence, compact reconciliation, and explicit deployment/driver placement, but not the temporary API endpoint.
 
 ### Stage 9.2 — Provision RDS for the AWS deployment
 

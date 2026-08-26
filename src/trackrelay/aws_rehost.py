@@ -456,6 +456,7 @@ def build_parser() -> ArgumentParser:
     add_shared_arguments(deploy_parser)
     deploy_parser.add_argument("--compose-file", type=Path, required=True)
     deploy_parser.add_argument("--installer", type=Path, required=True)
+    add_shared_arguments(subparsers.add_parser("workload"))
     return parser
 
 
@@ -467,7 +468,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.command == "publish":
             publish_image(session)
             print("published the approved revision as a Linux ARM64 image")
-        else:
+        elif arguments.command == "deploy":
             deploy_rehost(
                 session,
                 files=RehostFiles(
@@ -476,6 +477,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
             )
             print("deployed and smoke-tested the synchronous rehost through SSM")
+        else:
+            from trackrelay.aws_rehost_workload import workload_from_arguments
+
+            summary = workload_from_arguments(arguments)
+            print("collected the frozen synchronous rehost workload evidence")
+            print(
+                "maximum sustainable rate: "
+                f"{summary.maximum_sustainable_rate_per_second} events/s"
+            )
     except (AwsRehostError, AwsSessionError) as error:
         raise SystemExit(f"AWS rehost command failed: {error}") from error
     return 0

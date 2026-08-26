@@ -153,9 +153,19 @@ Validate interpolation and the Compose model without starting containers:
 make rehost-config
 ```
 
+With Docker running, execute the complete local lifecycle:
+
+```bash
+make rehost-smoke
+```
+
+The command builds the application image, creates a uniquely named Compose project with a temporary random database password, starts PostgreSQL, runs migrations, and waits for the simulator and API. It then sends one real Courier Alpha event, verifies its downstream receipt, restarts PostgreSQL and the API, and proves that the event, delivery attempt, shipment, and migration revision remain correct. An exit trap removes the containers, network, and database volume on success or failure; failed runs print service state and logs before cleanup.
+
+The normal command performs a fresh application build and resolves the pinned PostgreSQL digest. For diagnosis when a container registry is temporarily unavailable, an explicit `REHOST_SKIP_BUILD=true` escape hatch may use already-cached images, but it refuses a missing application image and is not the deployment path or a substitute for a fresh-image validation.
+
 For a real runtime, copy `deploy/rehost/.env.example` to the ignored `deploy/rehost/.env`, replace the synthetic database password with a random URL-safe value, and select the exact application image. The committed example binds the API to `127.0.0.1`. Cloud deployment will explicitly use `0.0.0.0`, while Terraform restricts external access to the approved benchmark-driver `/32`.
 
-The deployment, health/smoke checks, frozen workload, result collection, and cleanup will be exposed as one guarded workflow in the next Stage 9.1 slice. Merely having this Compose definition does not authorize or start AWS resources.
+Cloud image publication, SSM-based deployment, the frozen workload, result collection, and AWS teardown integration remain separate guarded workflows. Merely running the local smoke command does not authorize or start AWS resources.
 
 The Terraform root module in `infra/terraform` defines the minimal Stage 9.1 rehost host: one ARM EC2 instance, its disposable network, an ECR repository, and SSM access without SSH. The [rehost architecture note](docs/aws-rehost-architecture.md) explains the boundary and cost choices. Initialize its locked provider and run formatting, validation, and mocked plan assertions with:
 

@@ -18,7 +18,8 @@ x-application-environment: &application-environment
 
 services:
   postgres:
-    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+    image: ${TRACKRELAY_POSTGRES_IMAGE:?TRACKRELAY_POSTGRES_IMAGE must be set}
+    pull_policy: ${TRACKRELAY_POSTGRES_PULL_POLICY:-missing}
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
@@ -69,7 +70,7 @@ services:
         - -c
         - >-
           from urllib.request import urlopen;
-          urlopen('http://127.0.0.1:8001/health/live', timeout=1).read()
+          urlopen('http://127.0.0.1:8001/control/status', timeout=1).read()
       interval: 5s
       timeout: 2s
       retries: 6

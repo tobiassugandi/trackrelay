@@ -37,7 +37,7 @@ SESSION_ID ?=
 APPROVED_SESSION_ID ?=
 APPROVED_COST_CEILING_USD ?=
 
-.PHONY: sync test test-integration lint run run-downstream image-api image-api-smoke rehost-config generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp load-slow load-outage load-baseline aws-check aws-plan aws-up aws-down aws-verify-down infra-init infra-check db-up db-status db-check db-down migrate migration-status
+.PHONY: sync test test-integration lint run run-downstream image-api image-api-smoke rehost-config rehost-smoke generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp load-slow load-outage load-baseline aws-check aws-plan aws-up aws-down aws-verify-down infra-init infra-check db-up db-status db-check db-down migrate migration-status
 
 sync:
 	$(UV) sync --locked --python 3.12
@@ -68,6 +68,10 @@ rehost-config:
 		--env-file deploy/rehost/.env.example \
 		--file deploy/rehost/compose.yaml \
 		config --quiet
+
+rehost-smoke: rehost-config
+	DOCKER="$(DOCKER)" UV="$(UV)" \
+		./scripts/smoke-rehost.sh "$(API_IMAGE)"
 
 generate:
 	$(UV) run --locked trackrelay-generate --seed $(SEED) --shipments $(SHIPMENTS) --output $(OUTPUT)

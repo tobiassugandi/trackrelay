@@ -36,7 +36,9 @@ Runtime values come from a private, uncommitted env file. The committed example 
 
 `make infra-check` formats and validates Terraform and executes provider-mocked plan assertions. Those assertions guard the chosen instance type, standard CPU credits, volume size and deletion, IMDSv2, ingress restriction, and removable ECR repository without contacting AWS.
 
-The next Stage 9.1 slice will automate image publication, remote runtime installation, migrations, health and smoke checks, frozen-workload execution, evidence collection, and cleanup. Stage 9.2 will replace host-local PostgreSQL with RDS for the target AWS deployment. A real AWS plan waits until both stages are locally prepared, the private CLI session is authenticated, and the account owner approves cloud session 1's exact resource list, estimate, duration, and cost ceiling.
+`make rehost-smoke` exercises the complete runtime locally in an isolated Compose project. It verifies migrations, readiness, non-root processes, ingestion, downstream delivery, and durable PostgreSQL state across a restart, then removes its containers, network, and volume even on failure.
+
+The next Stage 9.1 slices will automate ARM64 image publication, SSM-based remote deployment, a tiny cloud smoke check, frozen-workload execution, evidence collection, and cleanup. Stage 9.2 will replace host-local PostgreSQL with RDS for the target AWS deployment. A real AWS plan waits until both stages are locally prepared, the private CLI session is authenticated, and the account owner approves cloud session 1's exact resource list, estimate, duration, and cost ceiling.
 
 No AWS resources were created while preparing this architecture.
 

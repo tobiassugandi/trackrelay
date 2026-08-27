@@ -112,6 +112,7 @@ def require_applied_clean_revision(
         "rehost_deployed",
         "rehost_workload_collected",
         "rds_deployed",
+        "rds_correctness_collected",
     }:
         raise AwsRehostError("the approved Terraform plan has not been applied")
 
@@ -618,6 +619,7 @@ def build_parser() -> ArgumentParser:
     add_shared_arguments(rds_parser)
     rds_parser.add_argument("--compose-file", type=Path, required=True)
     rds_parser.add_argument("--installer", type=Path, required=True)
+    add_shared_arguments(subparsers.add_parser("correctness-rds"))
     add_shared_arguments(subparsers.add_parser("workload"))
     return parser
 
@@ -648,6 +650,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
             )
             print("switched the synchronous rehost to private RDS")
+        elif arguments.command == "correctness-rds":
+            from trackrelay.aws_rds_correctness import collect_rds_correctness
+
+            evidence = collect_rds_correctness(session)
+            print("collected all four RDS correctness scenarios")
+            print(f"suite ID: {evidence.definition.suite_id}")
         else:
             from trackrelay.aws_rehost_workload import workload_from_arguments
 

@@ -60,6 +60,7 @@ Store the compact, non-secret session record under `results/aws-sessions/<sessio
 - [ ] Deploy the digest-pinned runtime and execute its tiny on-host smoke check with `make aws-rehost-deploy SESSION_ID=<session ID> API_INGRESS_CIDR=<approved IPv4>/32`.
 - [ ] Run the exact frozen Step 8.6 workload from the approved benchmark machine with `make aws-rehost-workload SESSION_ID=<session ID> API_INGRESS_CIDR=<approved IPv4>/32`; confirm that all six rate points and their reconciliation evidence were saved under the session evidence directory.
 - [ ] Switch the deployed API to private RDS with `make aws-rds-deploy SESSION_ID=<session ID> API_INGRESS_CIDR=<approved IPv4>/32`; confirm that the session record contains the resolved PostgreSQL minor and non-secret RDS configuration, never its endpoint or credential.
+- [ ] Run `make aws-rds-correctness SESSION_ID=<session ID> API_INGRESS_CIDR=<approved IPv4>/32`; confirm that all four scenario results and their passing reconciliation counts were saved in `rds-correctness/suite.json` without endpoints or credentials.
 - [ ] Do not create untracked resources in the AWS console. If emergency diagnosis creates or changes anything, record it immediately and bring it under Terraform or remove it before continuing.
 - [ ] Run only the validation or experiment named in the approved proposal.
 - [ ] Collect evidence continuously so an interrupted run can still be diagnosed.
@@ -67,7 +68,7 @@ Store the compact, non-secret session record under `results/aws-sessions/<sessio
 
 ## Teardown
 
-- [ ] Confirm workload generation has stopped and the `rehost-workload/summary.json` evidence is readable before teardown.
+- [ ] Confirm workload generation has stopped and both `rehost-workload/summary.json` and `rds-correctness/suite.json` are readable before teardown.
 - [ ] Save `terraform state list` and an AWS inventory filtered by both `Project=TrackRelay` and the session ID.
 - [ ] Generate and review a destroy plan covering every object in the pre-destroy Terraform state.
 - [ ] Run `make aws-down SESSION_ID=<session ID> API_INGRESS_CIDR=<approved IPv4>/32` to generate and apply the complete destroy plan. This command deliberately has no approval gate; do not rely on targeted destroy for normal teardown.

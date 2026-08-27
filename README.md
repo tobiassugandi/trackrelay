@@ -159,7 +159,7 @@ With Docker running, execute the complete local lifecycle:
 make rehost-smoke
 ```
 
-The command builds the application image, creates a uniquely named Compose project with a temporary random database password, starts PostgreSQL, runs migrations, and waits for the simulator and API. It then sends one real Courier Alpha event, verifies its downstream receipt, restarts PostgreSQL and the API, and proves that the event, delivery attempt, shipment, and migration revision remain correct. An exit trap removes the containers, network, and database volume on success or failure; failed runs print service state and logs before cleanup.
+The command builds the application image, creates a uniquely named Compose project with a temporary random database password, starts PostgreSQL, runs migrations, and waits for the simulator and API. It runs the same four-scenario private correctness helper used by the RDS checkpoint, then sends one additional Courier Alpha smoke event, verifies its downstream receipt, restarts PostgreSQL and the API, and proves that the event, delivery attempt, shipment, and migration revision remain correct. An exit trap removes the containers, network, and database volume on success or failure; failed runs print service state and logs before cleanup.
 
 The normal command performs a fresh application build and resolves the pinned PostgreSQL digest. For diagnosis when a container registry is temporarily unavailable, an explicit `REHOST_SKIP_BUILD=true` escape hatch may use already-cached images, but it refuses a missing application image and is not the deployment path or a substitute for a fresh-image validation.
 
@@ -172,6 +172,8 @@ The image-publication, host-deployment, and portability-workload portions are pr
 The workload command runs all six frozen Step 8.6 rates from the approved local benchmark machine. Only the API is reached publicly. Preparation and reconciliation run through SSM inside the private Compose network, so neither PostgreSQL nor the simulator is exposed. The result bundle records k6, API runtime, and compact database/downstream evidence plus benchmark-driver and database placement; it does not save the temporary public API address. This Stage 9.1 result proves workload portability and rehearses the evidence pipeline—it is not the later autoscaling headline comparison.
 
 `make aws-rds-deploy` is the guarded Stage 9.2 switch. It runs only after the host-local workload is collected, discovers the private endpoint and RDS-managed credential from the EC2 role, requires TLS, runs migrations, recreates the API against RDS, and verifies a real event survives an API restart. Neither the endpoint nor credential enters the SSM payload or local evidence.
+
+`make aws-rds-correctness` is the next guarded checkpoint. It runs only after the RDS switch, executes the normal, duplicate, out-of-order, and downstream-outage scenarios from a one-off container inside the private Compose network, and saves one compact suite report under the ignored AWS session evidence directory. The report contains deterministic run identities, observed HTTP status codes, and reconciliation counts, but no database endpoint, credential, AWS account ID, or public API address.
 
 These are cloud-mutating commands and have only been tested with simulated command runners so far. Do not invoke them until cloud session 1 has been explicitly approved and provisioned. The [rehost architecture note](docs/aws-rehost-architecture.md) describes the full sequence and security boundary.
 

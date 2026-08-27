@@ -129,6 +129,36 @@ if [[ "${api_uid}" != "10001" || "${downstream_uid}" != "10001" ]]; then
     exit 1
 fi
 
+printf 'Running all four correctness scenarios inside the private network...\n'
+correctness_evidence="$(
+    compose run --rm --no-deps api \
+        python -m trackrelay.experiments.rds_correctness \
+        --suite-id 00000000-0000-0000-0000-000000000922
+)"
+printf '%s\n' "${correctness_evidence}" | \
+    "${uv_command}" run --locked python -c '
+import base64
+import json
+import sys
+
+prefix = "TRACKRELAY_RDS_CORRECTNESS_EVIDENCE="
+evidence_lines = [
+    line.removeprefix(prefix)
+    for line in sys.stdin.read().splitlines()
+    if line.startswith(prefix)
+]
+assert len(evidence_lines) == 1
+evidence = json.loads(base64.b64decode(evidence_lines[0], validate=True))
+assert evidence["all_scenarios_passed"] is True
+assert [
+    result["scenario"] for result in evidence["scenario_results"]
+] == ["normal", "duplicate", "out-of-order", "downstream-outage"]
+assert all(
+    result["reconciliation"]["invariants_passed"] is True
+    for result in evidence["scenario_results"]
+)
+'
+
 compose run --rm --no-deps api python -c '
 from trackrelay.database import session_factory
 from trackrelay.models import Partner
@@ -184,11 +214,15 @@ import json
 import sys
 
 receipts = json.load(sys.stdin)
-assert len(receipts) == 1
-assert receipts[0]["partner_id"] == "smoke-alpha"
-assert receipts[0]["partner_event_id"] == "SMOKE-EVENT-001"
-assert receipts[0]["tracking_number"] == "SMOKE-TRACKING-001"
-assert receipts[0]["status"] == "picked_up"
+smoke_receipts = [
+    receipt
+    for receipt in receipts
+    if receipt["partner_id"] == "smoke-alpha"
+    and receipt["partner_event_id"] == "SMOKE-EVENT-001"
+]
+assert len(smoke_receipts) == 1
+assert smoke_receipts[0]["tracking_number"] == "SMOKE-TRACKING-001"
+assert smoke_receipts[0]["status"] == "picked_up"
 '
 
 printf 'Restarting PostgreSQL and API to prove durable persistence...\n'
@@ -238,5 +272,6 @@ assert shipment["current_status"] == "picked_up"
 printf 'Rehost smoke test passed.\n'
 printf 'Migration: 0006_test_runs (head)\n'
 printf 'API and downstream UID: 10001\n'
+printf 'Core correctness scenarios: 4 passed\n'
 printf 'Persisted event: SMOKE-EVENT-001\n'
 printf 'Persisted shipment state: picked_up\n'

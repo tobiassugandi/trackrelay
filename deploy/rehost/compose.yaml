@@ -12,7 +12,7 @@ x-application: &application
       max-size: 10m
 
 x-application-environment: &application-environment
-  TRACKRELAY_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set}
+  TRACKRELAY_DATABASE_URL: ${TRACKRELAY_DATABASE_URL:?TRACKRELAY_DATABASE_URL must be set}
   TRACKRELAY_DEBUG: "false"
   TRACKRELAY_ENVIRONMENT: production
 
@@ -47,9 +47,6 @@ services:
     command: ["alembic", "upgrade", "head"]
     environment:
       <<: *application-environment
-    depends_on:
-      postgres:
-        condition: service_healthy
     healthcheck:
       disable: true
 
@@ -91,8 +88,6 @@ services:
     depends_on:
       downstream:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
 
 volumes:
   postgres_data:

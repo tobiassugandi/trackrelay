@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from hashlib import sha256
 from json import dumps, loads
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -11,6 +12,7 @@ from pytest import raises
 from trackrelay.aws_rehost import (
     AwsRehostError,
     RehostFiles,
+    deploy_rds_rehost,
     deploy_rehost,
     publish_image,
     wait_for_ssm_online,
@@ -250,6 +252,88 @@ def test_deploy_refuses_an_image_from_a_different_revision(
         )
 
     assert not any(call[0] == "aws" for call in calls)
+
+
+def test_rds_deploy_discovers_connection_data_on_host_without_persisting_it(
+    tmp_path: Path,
+) -> None:
+    session = make_session(tmp_path, status="rehost_workload_collected")
+    manifest = loads(session.manifest_path.read_text(encoding="utf-8"))
+    manifest["image"] = {
+        "architecture": "linux/arm64",
+        "digest": IMAGE_DIGEST,
+        "tag": f"git-{GIT_REVISION[:12]}",
+    }
+    write_manifest(session, manifest)
+    compose_file = tmp_path / "compose.yaml"
+    compose_file.write_text("services: {}\n", encoding="utf-8")
+    installer = tmp_path / "install-rds.sh"
+    installer.write_text(
+        "#!/usr/bin/env bash\naws secretsmanager get-secret-value\n",
+        encoding="utf-8",
+    )
+    captured_payload: dict[str, list[str]] = {}
+
+    def runner(
+        arguments: Sequence[str],
+        input_text: str | None,
+    ) -> CompletedProcess[str]:
+        del input_text
+        call = tuple(arguments)
+        if call == ("git", "status", "--porcelain"):
+            return completed(call)
+        if call == ("git", "rev-parse", "HEAD"):
+            return completed(call, stdout=GIT_REVISION)
+        output_name = terraform_output_name(call)
+        if output_name == "rehost_ecr_repository_url":
+            return completed(call, stdout=REPOSITORY_URL)
+        if output_name == "rehost_instance_id":
+            return completed(call, stdout=INSTANCE_ID)
+        if output_name == "rds_resolved_engine_version":
+            return completed(call, stdout="17.6")
+        if "describe-instance-information" in call:
+            return completed(call, stdout="Online")
+        if "send-command" in call:
+            parameter = call[call.index("--parameters") + 1]
+            payload_path = Path(parameter.removeprefix("file://"))
+            captured_payload.update(loads(payload_path.read_text(encoding="utf-8")))
+            return completed(call, stdout=COMMAND_ID)
+        if "get-command-invocation" in call:
+            return completed(call, stdout="Success\t0")
+        return completed(call)
+
+    deployed_at = datetime(2026, 8, 27, 9, tzinfo=UTC)
+    deploy_rds_rehost(
+        session,
+        files=RehostFiles(compose=compose_file, installer=installer),
+        runner=runner,
+        sleeper=lambda _: None,
+        now=deployed_at,
+    )
+
+    suffix = sha256(SESSION_ID.encode()).hexdigest()[:8]
+    command = captured_payload["commands"][0]
+    assert (
+        f"TRACKRELAY_RDS_IDENTIFIER='trackrelay-{suffix}-postgres'"
+        in command
+    )
+    assert "rds_endpoint" not in command
+    assert "secret_arn" not in command
+    assert "POSTGRES_PASSWORD=" not in command
+
+    saved_text = session.manifest_path.read_text(encoding="utf-8")
+    saved_manifest = loads(saved_text)
+    assert saved_manifest["status"] == "rds_deployed"
+    assert saved_manifest["rds"] == {
+        "allocated_storage_gib": 20,
+        "database_placement": "private-single-az-rds",
+        "engine": "postgres",
+        "engine_version": "17.6",
+        "instance_class": "db.t4g.micro",
+        "storage_type": "encrypted-gp3",
+    }
+    assert "123456789012" not in saved_text
+    assert "rds.amazonaws.com" not in saved_text
 
 
 def test_ssm_readiness_poll_is_bounded_and_uses_ping_status(

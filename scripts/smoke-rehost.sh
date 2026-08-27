@@ -99,6 +99,7 @@ database_password="$(${uv_command} run --locked python -c \
     printf 'POSTGRES_DB=trackrelay\n'
     printf 'POSTGRES_USER=trackrelay\n'
     printf 'POSTGRES_PASSWORD=%s\n' "${database_password}"
+    printf 'TRACKRELAY_DATABASE_URL=postgresql+psycopg://trackrelay:%s@postgres:5432/trackrelay\n' "${database_password}"
     printf 'TRACKRELAY_DOWNSTREAM_TIMEOUT_SECONDS=5.0\n'
 } >"${runtime_environment}"
 chmod 600 "${runtime_environment}"
@@ -106,7 +107,9 @@ unset database_password
 
 printf 'Starting isolated rehost stack...\n'
 stack_started=1
-compose up --detach --wait --wait-timeout 90
+compose up --detach --wait --wait-timeout 90 postgres downstream
+compose run --rm --no-deps migrate alembic upgrade head
+compose up --detach --wait --wait-timeout 90 api
 
 migration_status="$(
     compose run --rm --no-deps migrate alembic current
@@ -126,14 +129,20 @@ if [[ "${api_uid}" != "10001" || "${downstream_uid}" != "10001" ]]; then
     exit 1
 fi
 
-compose exec -T postgres \
-    psql \
-    --username trackrelay \
-    --dbname trackrelay \
-    --set ON_ERROR_STOP=1 \
-    --command \
-    "INSERT INTO partners (id, name, adapter_type, is_active) VALUES ('smoke-alpha', 'Smoke Alpha', 'courier-alpha', true);" \
-    >/dev/null
+compose run --rm --no-deps api python -c '
+from trackrelay.database import session_factory
+from trackrelay.models import Partner
+
+with session_factory.begin() as session:
+    session.add(
+        Partner(
+            id="smoke-alpha",
+            name="Smoke Alpha",
+            adapter_type="courier-alpha",
+            is_active=True,
+        )
+    )
+' >/dev/null
 
 ingestion_response="$(
     curl \

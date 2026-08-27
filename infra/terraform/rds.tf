@@ -1,5 +1,6 @@
 locals {
-  rehost_database_secret_actions = ["secretsmanager:GetSecretValue"]
+  rehost_database_discovery_actions = ["rds:DescribeDBInstances"]
+  rehost_database_secret_actions    = ["secretsmanager:GetSecretValue"]
 }
 
 data "aws_rds_engine_version" "postgres" {
@@ -132,6 +133,11 @@ resource "aws_iam_role_policy" "rehost_database_secret" {
         Action   = local.rehost_database_secret_actions
         Effect   = "Allow"
         Resource = aws_db_instance.postgres.master_user_secret[0].secret_arn
+      },
+      {
+        Action   = local.rehost_database_discovery_actions
+        Effect   = "Allow"
+        Resource = "*"
       },
     ]
   })

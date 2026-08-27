@@ -5,6 +5,7 @@ from base64 import b64encode
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from hashlib import sha256
 from json import dumps
 from pathlib import Path
 from re import compile as compile_pattern
@@ -36,6 +37,10 @@ POSTGRES_IMAGE = (
     "postgres:17-alpine@sha256:"
     "18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73"
 )
+RDS_IDENTIFIER_PATTERN = compile_pattern(
+    r"^trackrelay-[0-9a-f]{8}-postgres$"
+)
+RDS_ENGINE_VERSION_PATTERN = compile_pattern(r"^17\.[0-9]+$")
 
 
 class AwsRehostError(RuntimeError):
@@ -105,6 +110,8 @@ def require_applied_clean_revision(
         "applied",
         "image_published",
         "rehost_deployed",
+        "rehost_workload_collected",
+        "rds_deployed",
     }:
         raise AwsRehostError("the approved Terraform plan has not been applied")
 
@@ -288,6 +295,150 @@ def build_ssm_payload(
     return {"commands": [command], "executionTimeout": ["600"]}
 
 
+def build_rds_ssm_payload(
+    *,
+    files: RehostFiles,
+    image_reference: str,
+    region: str,
+    database_identifier: str,
+    smoke_suffix: str,
+) -> dict[str, list[str]]:
+    """Build an RDS switch payload without its endpoint or credential."""
+    files.validate()
+    if RDS_IDENTIFIER_PATTERN.fullmatch(database_identifier) is None:
+        raise AwsRehostError("invalid RDS database identifier")
+    command = "\n".join(
+        (
+            "set -euo pipefail",
+            "install -d -m 0700 /opt/trackrelay",
+            (
+                f"printf '%s' '{encoded_file(files.compose)}' | "
+                "base64 --decode > /opt/trackrelay/compose.yaml"
+            ),
+            (
+                f"printf '%s' '{encoded_file(files.installer)}' | "
+                "base64 --decode > /opt/trackrelay/install-rds.sh"
+            ),
+            "chmod 0600 /opt/trackrelay/compose.yaml",
+            "chmod 0700 /opt/trackrelay/install-rds.sh",
+            f"TRACKRELAY_API_IMAGE='{image_reference}' \\",
+            f"TRACKRELAY_AWS_REGION='{region}' \\",
+            f"TRACKRELAY_RDS_IDENTIFIER='{database_identifier}' \\",
+            f"TRACKRELAY_SMOKE_SUFFIX='{smoke_suffix}' \\",
+            "/opt/trackrelay/install-rds.sh",
+        )
+    )
+    if len(command.encode("utf-8")) > 20_000:
+        raise AwsRehostError("SSM RDS payload exceeds the local safety limit")
+    return {"commands": [command], "executionTimeout": ["600"]}
+
+
+def deployed_image_reference(
+    session: AwsSession,
+    *,
+    manifest: dict[str, object],
+    revision: str,
+    runner: ProcessRunner,
+) -> str:
+    """Resolve the approved digest-pinned image without persisting its URL."""
+    image = manifest.get("image")
+    if not isinstance(image, dict):
+        raise AwsRehostError("no published image is recorded for this session")
+    image_tag = image.get("tag")
+    image_digest = image.get("digest")
+    if not isinstance(image_tag, str) or not isinstance(image_digest, str):
+        raise AwsRehostError("published image metadata is invalid")
+    if image_tag != f"git-{revision[:12]}":
+        raise AwsRehostError("published image tag differs from the approved revision")
+    if IMAGE_DIGEST_PATTERN.fullmatch(image_digest) is None:
+        raise AwsRehostError("published image digest is invalid")
+
+    repository_url = terraform_output(
+        session,
+        "rehost_ecr_repository_url",
+        runner=runner,
+    )
+    validate_repository_url(repository_url, region=session.region)
+    return f"{repository_url}@{image_digest}"
+
+
+def run_ssm_payload(
+    session: AwsSession,
+    *,
+    instance_id: str,
+    payload: dict[str, list[str]],
+    comment: str,
+    runner: ProcessRunner,
+) -> str:
+    """Send one secret-free payload, wait, and require successful status."""
+    with NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        prefix="trackrelay-ssm-",
+        suffix=".json",
+    ) as payload_file:
+        payload_file.write(dumps(payload))
+        payload_file.flush()
+        command_id = invoke(
+            runner,
+            (
+                *aws_prefix(session),
+                "ssm",
+                "send-command",
+                "--instance-ids",
+                instance_id,
+                "--document-name",
+                "AWS-RunShellScript",
+                "--comment",
+                comment,
+                "--parameters",
+                f"file://{payload_file.name}",
+                "--query",
+                "Command.CommandId",
+                "--output",
+                "text",
+            ),
+            action="SSM command submission",
+        ).stdout.strip()
+    if COMMAND_ID_PATTERN.fullmatch(command_id) is None:
+        raise AwsRehostError("SSM returned an invalid command ID")
+
+    invoke(
+        runner,
+        (
+            *aws_prefix(session),
+            "ssm",
+            "wait",
+            "command-executed",
+            "--command-id",
+            command_id,
+            "--instance-id",
+            instance_id,
+        ),
+        action="SSM command completion",
+    )
+    invocation = invoke(
+        runner,
+        (
+            *aws_prefix(session),
+            "ssm",
+            "get-command-invocation",
+            "--command-id",
+            command_id,
+            "--instance-id",
+            instance_id,
+            "--query",
+            "[Status,ResponseCode]",
+            "--output",
+            "text",
+        ),
+        action="SSM command status",
+    ).stdout.split()
+    if invocation != ["Success", "0"]:
+        raise AwsRehostError("SSM command did not report success")
+    return command_id
+
+
 def wait_for_ssm_online(
     session: AwsSession,
     instance_id: str,
@@ -330,24 +481,12 @@ def deploy_rehost(
 ) -> None:
     """Deploy the digest-pinned image through SSM and run a tiny smoke check."""
     manifest, revision = require_applied_clean_revision(session, runner=runner)
-    image = manifest.get("image")
-    if not isinstance(image, dict):
-        raise AwsRehostError("no published image is recorded for this session")
-    image_tag = image.get("tag")
-    image_digest = image.get("digest")
-    if not isinstance(image_tag, str) or not isinstance(image_digest, str):
-        raise AwsRehostError("published image metadata is invalid")
-    if image_tag != f"git-{revision[:12]}":
-        raise AwsRehostError("published image tag differs from the approved revision")
-    if IMAGE_DIGEST_PATTERN.fullmatch(image_digest) is None:
-        raise AwsRehostError("published image digest is invalid")
-
-    repository_url = terraform_output(
+    image_reference = deployed_image_reference(
         session,
-        "rehost_ecr_repository_url",
+        manifest=manifest,
+        revision=revision,
         runner=runner,
     )
-    validate_repository_url(repository_url, region=session.region)
     instance_id = terraform_output(
         session,
         "rehost_instance_id",
@@ -367,81 +506,100 @@ def deploy_rehost(
     smoke_suffix = f"{revision[:12]}-{deployed_at.strftime('%Y%m%dT%H%M%SZ')}"
     payload = build_ssm_payload(
         files=files,
-        image_reference=f"{repository_url}@{image_digest}",
+        image_reference=image_reference,
         region=session.region,
         smoke_suffix=smoke_suffix,
     )
-    with NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        prefix="trackrelay-ssm-",
-        suffix=".json",
-    ) as payload_file:
-        payload_file.write(dumps(payload))
-        payload_file.flush()
-        command_id = invoke(
-            runner,
-            (
-                *aws_prefix(session),
-                "ssm",
-                "send-command",
-                "--instance-ids",
-                instance_id,
-                "--document-name",
-                "AWS-RunShellScript",
-                "--comment",
-                "TrackRelay synchronous rehost deployment",
-                "--parameters",
-                f"file://{payload_file.name}",
-                "--query",
-                "Command.CommandId",
-                "--output",
-                "text",
-            ),
-            action="SSM rehost deployment",
-        ).stdout.strip()
-    if COMMAND_ID_PATTERN.fullmatch(command_id) is None:
-        raise AwsRehostError("SSM returned an invalid command ID")
-
-    invoke(
-        runner,
-        (
-            *aws_prefix(session),
-            "ssm",
-            "wait",
-            "command-executed",
-            "--command-id",
-            command_id,
-            "--instance-id",
-            instance_id,
-        ),
-        action="SSM deployment completion",
+    command_id = run_ssm_payload(
+        session,
+        instance_id=instance_id,
+        payload=payload,
+        comment="TrackRelay synchronous rehost deployment",
+        runner=runner,
     )
-    invocation = invoke(
-        runner,
-        (
-            *aws_prefix(session),
-            "ssm",
-            "get-command-invocation",
-            "--command-id",
-            command_id,
-            "--instance-id",
-            instance_id,
-            "--query",
-            "[Status,ResponseCode]",
-            "--output",
-            "text",
-        ),
-        action="SSM deployment status",
-    ).stdout.split()
-    if invocation != ["Success", "0"]:
-        raise AwsRehostError("SSM deployment did not report success")
 
     manifest.update(
         {
             "deployed_at": deployed_at.isoformat(),
             "deployment_command_id": command_id,
             "status": "rehost_deployed",
+        }
+    )
+    write_manifest(session, manifest)
+
+
+def deploy_rds_rehost(
+    session: AwsSession,
+    *,
+    files: RehostFiles,
+    runner: ProcessRunner = run_process,
+    sleeper: Sleeper = sleep,
+    now: datetime | None = None,
+) -> None:
+    """Switch the deployed rehost to private RDS and smoke-test persistence."""
+    manifest, revision = require_applied_clean_revision(session, runner=runner)
+    if manifest.get("status") != "rehost_workload_collected":
+        raise AwsRehostError(
+            "the host-local rehost workload must be collected before RDS"
+        )
+    image_reference = deployed_image_reference(
+        session,
+        manifest=manifest,
+        revision=revision,
+        runner=runner,
+    )
+    instance_id = terraform_output(
+        session,
+        "rehost_instance_id",
+        runner=runner,
+    )
+    if INSTANCE_ID_PATTERN.fullmatch(instance_id) is None:
+        raise AwsRehostError("Terraform returned an invalid EC2 instance ID")
+    resolved_engine_version = terraform_output(
+        session,
+        "rds_resolved_engine_version",
+        runner=runner,
+    )
+    if RDS_ENGINE_VERSION_PATTERN.fullmatch(resolved_engine_version) is None:
+        raise AwsRehostError("Terraform returned an invalid RDS engine version")
+
+    wait_for_ssm_online(
+        session,
+        instance_id,
+        runner=runner,
+        sleeper=sleeper,
+    )
+    deployed_at = now or datetime.now(UTC)
+    smoke_suffix = f"{revision[:12]}-{deployed_at.strftime('%Y%m%dT%H%M%SZ')}"
+    resource_suffix = sha256(session.session_id.encode()).hexdigest()[:8]
+    database_identifier = f"trackrelay-{resource_suffix}-postgres"
+    payload = build_rds_ssm_payload(
+        files=files,
+        image_reference=image_reference,
+        region=session.region,
+        database_identifier=database_identifier,
+        smoke_suffix=smoke_suffix,
+    )
+    command_id = run_ssm_payload(
+        session,
+        instance_id=instance_id,
+        payload=payload,
+        comment="TrackRelay private RDS deployment",
+        runner=runner,
+    )
+    manifest.update(
+        {
+            "rds": {
+                "allocated_storage_gib": 20,
+                "database_placement": "private-single-az-rds",
+                "engine": "postgres",
+                "engine_version": resolved_engine_version,
+                "instance_class": "db.t4g.micro",
+                "storage_type": "encrypted-gp3",
+            },
+            "rds_deployed_at": deployed_at.isoformat(),
+            "rds_deployment_command_id": command_id,
+            "status": "rds_deployed",
         }
     )
     write_manifest(session, manifest)
@@ -456,6 +614,10 @@ def build_parser() -> ArgumentParser:
     add_shared_arguments(deploy_parser)
     deploy_parser.add_argument("--compose-file", type=Path, required=True)
     deploy_parser.add_argument("--installer", type=Path, required=True)
+    rds_parser = subparsers.add_parser("deploy-rds")
+    add_shared_arguments(rds_parser)
+    rds_parser.add_argument("--compose-file", type=Path, required=True)
+    rds_parser.add_argument("--installer", type=Path, required=True)
     add_shared_arguments(subparsers.add_parser("workload"))
     return parser
 
@@ -477,6 +639,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
             )
             print("deployed and smoke-tested the synchronous rehost through SSM")
+        elif arguments.command == "deploy-rds":
+            deploy_rds_rehost(
+                session,
+                files=RehostFiles(
+                    compose=arguments.compose_file,
+                    installer=arguments.installer,
+                ),
+            )
+            print("switched the synchronous rehost to private RDS")
         else:
             from trackrelay.aws_rehost_workload import workload_from_arguments
 

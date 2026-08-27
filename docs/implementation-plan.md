@@ -457,7 +457,8 @@ Do not start cloud session 1 until the local-preparation items in both Stages 9.
 ### Stage 9.2 — Provision RDS for the AWS deployment
 
 - [x] Define the RDS instance, networking, configuration, and secrets integration as code locally: a private, single-AZ `db.t4g.micro` PostgreSQL 17 instance with fixed encrypted storage, two-AZ subnet-group coverage, security-group-only access, RDS-managed credentials, and native teardown checks. No resource has been provisioned.
-- [ ] Add a guarded RDS deployment mode that retrieves the managed credential on-host, switches migrations and the API from host-local PostgreSQL to the private RDS endpoint, verifies the new connection, and records only non-secret configuration evidence.
+- [x] Add a guarded RDS deployment mode that retrieves the managed credential and private endpoint on-host, URL-encodes the credential, requires TLS, switches migrations and the API from host-local PostgreSQL to RDS, verifies migration/readiness/ingestion/persistence, and records only non-secret configuration evidence.
+- [ ] Automate the four core correctness scenarios and compact reconciliation evidence against the RDS-backed API before cloud session 1.
 
 Use cloud session 1 to validate both Stages 9.1 and 9.2:
 

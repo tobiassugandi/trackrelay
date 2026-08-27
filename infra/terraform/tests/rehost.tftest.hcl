@@ -98,6 +98,11 @@ run "rds_is_private_small_and_disposable" {
     condition     = local.rehost_database_secret_actions == ["secretsmanager:GetSecretValue"]
     error_message = "The rehost role needs narrowly scoped access to the managed database secret."
   }
+
+  assert {
+    condition     = local.rehost_database_discovery_actions == ["rds:DescribeDBInstances"]
+    error_message = "The rehost role needs read-only RDS metadata discovery."
+  }
 }
 
 variables {

@@ -49,6 +49,7 @@ runtime_environment_temporary="$(mktemp "${deployment_directory}/.env.XXXXXX")"
     printf 'POSTGRES_DB=trackrelay\n'
     printf 'POSTGRES_USER=trackrelay\n'
     printf 'POSTGRES_PASSWORD=%s\n' "${database_password}"
+    printf 'TRACKRELAY_DATABASE_URL=postgresql+psycopg://trackrelay:%s@postgres:5432/trackrelay\n' "${database_password}"
     printf 'TRACKRELAY_DOWNSTREAM_TIMEOUT_SECONDS=5.0\n'
 } >"${runtime_environment_temporary}"
 chmod 0600 "${runtime_environment_temporary}"
@@ -71,7 +72,9 @@ aws ecr get-login-password --region "${TRACKRELAY_AWS_REGION}" | \
         >/dev/null
 
 compose pull --quiet
-compose up --detach --wait --wait-timeout 120
+compose up --detach --wait --wait-timeout 120 postgres downstream
+compose run --rm --no-deps migrate alembic upgrade head
+compose up --detach --wait --wait-timeout 120 api
 
 migration_status="$(compose run --rm --no-deps migrate alembic current)"
 if [[ "${migration_status}" != *"0006_test_runs (head)"* ]]; then
@@ -87,14 +90,25 @@ fi
 
 partner_event_id="CLOUD-SMOKE-${TRACKRELAY_SMOKE_SUFFIX}"
 tracking_number="CLOUD-SMOKE-TRK-${TRACKRELAY_SMOKE_SUFFIX}"
-compose exec -T postgres \
-    psql \
-    --username trackrelay \
-    --dbname trackrelay \
-    --set ON_ERROR_STOP=1 \
-    --command \
-    "INSERT INTO partners (id, name, adapter_type, is_active) VALUES ('cloud-smoke-alpha', 'Cloud Smoke Alpha', 'courier-alpha', true) ON CONFLICT (id) DO UPDATE SET adapter_type = EXCLUDED.adapter_type, is_active = true;" \
-    >/dev/null
+compose run --rm --no-deps api python -c '
+from trackrelay.database import session_factory
+from trackrelay.models import Partner
+
+with session_factory.begin() as session:
+    partner = session.get(Partner, "cloud-smoke-alpha")
+    if partner is None:
+        session.add(
+            Partner(
+                id="cloud-smoke-alpha",
+                name="Cloud Smoke Alpha",
+                adapter_type="courier-alpha",
+                is_active=True,
+            )
+        )
+    else:
+        partner.adapter_type = "courier-alpha"
+        partner.is_active = True
+' >/dev/null
 
 smoke_response="$(
     curl \

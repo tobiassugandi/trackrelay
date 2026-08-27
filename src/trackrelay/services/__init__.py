@@ -1,5 +1,9 @@
 """Application services coordinating domain and persistence work."""
 
+from trackrelay.services.delivery_queue import (
+    DownstreamDeliveryJob,
+    DownstreamDeliveryQueue,
+)
 from trackrelay.services.downstream_delivery import (
     DeliveryResult,
     deliver_and_record_normalized_event,
@@ -14,6 +18,8 @@ from trackrelay.services.shipment_history import list_shipment_events
 
 __all__ = [
     "DeliveryResult",
+    "DownstreamDeliveryJob",
+    "DownstreamDeliveryQueue",
     "EventPersistenceResult",
     "deliver_and_record_normalized_event",
     "deliver_normalized_event",

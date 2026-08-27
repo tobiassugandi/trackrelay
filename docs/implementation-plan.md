@@ -476,9 +476,10 @@ RDS provides the stable managed data layer for the target architecture; it is se
 
 ### Stage 9.3 — Decouple downstream delivery with SQS and a worker
 
-- [ ] Define a narrow queue interface and develop ingestion and worker behavior locally with deterministic fakes; do not require a local AWS emulator or substitute message broker.
+- [x] Define a small, versioned downstream-delivery job containing only its persisted event ID, a narrow queue publishing interface, and a deterministic recording fake.
 - [ ] Make ingestion persist and enqueue work through that interface.
-- [ ] Move downstream delivery into a separate worker and implement the real SQS adapter behind the same interface.
+- [ ] Develop worker delivery and acknowledgement behavior locally with deterministic fakes; do not require a local AWS emulator or substitute message broker.
+- [ ] Move downstream delivery into a separate worker and implement the real SQS adapter behind the same application boundary.
 - [ ] Add retries and a dead-letter queue.
 - [ ] Define durable acceptance precisely and confirm that a fast API response cannot hide lost work.
 - [ ] Add processing guardrails: every accepted event is accounted for, duplicate business effects remain zero, final shipment states are correct, and the queue drains by a documented deadline after offered load falls.

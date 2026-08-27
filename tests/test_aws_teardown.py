@@ -148,7 +148,7 @@ def test_inventory_uses_explicit_profile_region_and_session_tags() -> None:
 
     secret_call = next(call for call in calls if "list-secrets" in call)
     assert "--include-planned-deletion" in secret_call
-    assert "Key=owning-service,Values=rds.amazonaws.com" in secret_call
+    assert "Key=owning-service,Values=rds" in secret_call
     secret_query = secret_call[secret_call.index("--query") + 1]
     assert "aws:rds:primarydbinstancearn" in secret_query
     assert "trackrelay-" in secret_query

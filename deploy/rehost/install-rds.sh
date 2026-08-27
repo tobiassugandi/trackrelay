@@ -124,6 +124,23 @@ compose() {
         "$@"
 }
 
+wait_for_api_readiness() {
+    for _ in $(seq 1 60); do
+        if [[ "$(
+            curl \
+                --silent \
+                --max-time 2 \
+                http://127.0.0.1:8000/health/ready \
+                2>/dev/null || true
+        )" == '{"status":"ready"}' ]]; then
+            return 0
+        fi
+        sleep 1
+    done
+    printf 'TrackRelay API did not become ready with RDS.\n' >&2
+    return 1
+}
+
 aws ecr get-login-password --region "${TRACKRELAY_AWS_REGION}" | \
     docker login \
         --username AWS \
@@ -144,11 +161,7 @@ if [[ "${migration_status}" != *"0006_test_runs (head)"* ]]; then
     exit 1
 fi
 
-if [[ "$(curl --fail --silent http://127.0.0.1:8000/health/ready)" != \
-    '{"status":"ready"}' ]]; then
-    printf 'TrackRelay API is not ready with RDS.\n' >&2
-    exit 1
-fi
+wait_for_api_readiness
 
 compose run --rm --no-deps api python -c '
 from trackrelay.database import session_factory
@@ -191,6 +204,7 @@ assert response["downstream_status_code"] == 202
 '
 
 compose restart --timeout 10 api >/dev/null
+wait_for_api_readiness
 shipment_response="$(
     curl \
         --fail \

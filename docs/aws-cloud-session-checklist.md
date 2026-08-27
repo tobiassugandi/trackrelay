@@ -75,7 +75,7 @@ Store the compact, non-secret session record under `results/aws-sessions/<sessio
 - [ ] Wait for asynchronous deletions to reach their terminal deleted state.
 - [ ] Save the empty post-destroy `terraform state list`.
 - [ ] Run `make aws-verify-down SESSION_ID=<session ID> API_INGRESS_CIDR=<approved IPv4>/32` to prove empty Terraform state and query both AWS's Resource Groups Tagging API and the native service inventories.
-- [ ] Use the pre-destroy inventory to run native, service-specific absence checks. The generic tagging API is supporting evidence, not sufficient proof, because it does not return untagged resources.
+- [ ] Use the pre-destroy inventory to run native, service-specific absence checks. The generic tagging API is supporting evidence, not absence proof: AWS documents that `GetResources` returns tagged **or previously tagged** resources, so deleted-resource tombstones can remain after every native inventory is empty.
 - [ ] Record the UTC finish time, observed duration, outcome, and any deviation from the approved plan.
 
 ## Required service-specific absence checks
@@ -102,13 +102,13 @@ A session is closed only when all of the following are true:
 
 1. The destroy command succeeded.
 2. Terraform state contains no managed resources.
-3. The session-tagged AWS inventory is empty.
-4. Every service-specific absence check is empty.
+3. The post-destroy generic tagging-index count is saved and interpreted as a potentially historical record, never as proof that a returned resource still exists.
+4. Every service-specific native absence check is empty.
 5. The proposal, evidence, destroy log, and both inventories are saved locally.
 
 A successful Terraform destroy by itself is not sufficient. If any check fails or cannot run, the session remains open and teardown work continues. Billing dashboards and budget alerts may be reviewed later, but their delayed data is not the immediate teardown proof.
 
-The current `aws-verify-down` command implements Terraform-state and session-tag checks plus native EC2, EBS, network, ECR, IAM, RDS instance, RDS subnet-group, RDS parameter-group, manual-snapshot, retained-automated-backup, and RDS-managed-secret checks through Stage 9.2. Before a later stage introduces another resource type, its native service-specific absence check must be added to the verifier and tested.
+The current `aws-verify-down` command saves the generic tag-index count and implements authoritative Terraform-state plus native EC2, EBS, network, ECR, IAM, RDS instance, RDS subnet-group, RDS parameter-group, manual-snapshot, retained-automated-backup, and RDS-managed-secret checks through Stage 9.2. Before a later stage introduces another resource type, its native service-specific absence check must be added to the verifier and tested.
 
 ## References
 

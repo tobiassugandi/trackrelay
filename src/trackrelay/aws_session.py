@@ -388,18 +388,14 @@ def verify_destroyed(
         raise AwsSessionError("AWS returned an invalid resource inventory")
 
     sanitized_inventory = {
-        "remaining_resource_count": len(resources),
+        "get_resources_semantics": "tagged-or-previously-tagged",
+        "returned_record_count": len(resources),
         "session_id": session.session_id,
     }
     (session.evidence_dir / "aws-inventory-after-destroy.json").write_text(
         dumps(sanitized_inventory, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    if resources:
-        raise AwsSessionError(
-            "AWS still reports resources carrying this session's tags"
-        )
-
     try:
         native_counts = native_inventory(
             profile=session.profile,
@@ -426,6 +422,7 @@ def verify_destroyed(
         manifest = load_manifest(session)
         manifest.update(
             {
+                "tag_index_record_count_after_destroy": len(resources),
                 "teardown_verified_at": datetime.now(UTC).isoformat(),
                 "status": "teardown_verified",
             }

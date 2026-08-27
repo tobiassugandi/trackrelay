@@ -231,7 +231,8 @@ def test_generic_verification_accepts_empty_state_and_inventory(
         )
     )
     assert inventory == {
-        "remaining_resource_count": 0,
+        "get_resources_semantics": "tagged-or-previously-tagged",
+        "returned_record_count": 0,
         "session_id": SESSION_ID,
     }
     assert calls[0] == session.terraform_command("state", "list")
@@ -272,10 +273,10 @@ def test_generic_verification_accepts_that_state_never_existed(
             encoding="utf-8"
         )
     )
-    assert inventory["remaining_resource_count"] == 0
+    assert inventory["returned_record_count"] == 0
 
 
-def test_generic_verification_rejects_remaining_tagged_resources(
+def test_generic_verification_records_tag_tombstones_without_identifiers(
     tmp_path: Path,
 ) -> None:
     session = make_session(tmp_path)
@@ -292,19 +293,21 @@ def test_generic_verification_rejects_remaining_tagged_resources(
             ),
         )
 
-    with raises(AwsSessionError, match="still reports resources"):
-        verify_destroyed(
-            session,
-            runner=runner,
-            native_inventory=empty_native_inventory,
-        )
+    verify_destroyed(
+        session,
+        runner=runner,
+        native_inventory=empty_native_inventory,
+    )
 
     inventory = loads(
         (session.evidence_dir / "aws-inventory-after-destroy.json").read_text(
             encoding="utf-8"
         )
     )
-    assert inventory["remaining_resource_count"] == 1
+    assert inventory["returned_record_count"] == 1
+    assert inventory["get_resources_semantics"] == (
+        "tagged-or-previously-tagged"
+    )
     assert "ResourceARN" not in inventory
 
 

@@ -30,6 +30,9 @@ REPOSITORY_URL = (
 INSTANCE_ID = "i-0123456789abcdef0"
 IMAGE_DIGEST = "sha256:" + "b" * 64
 COMMAND_ID = "11111111-2222-3333-4444-555555555555"
+RDS_INSTALLER = (
+    Path(__file__).resolve().parents[1] / "deploy" / "rehost" / "install-rds.sh"
+)
 
 
 def completed(
@@ -71,6 +74,21 @@ def terraform_output_name(arguments: tuple[str, ...]) -> str | None:
     if arguments[0] != "terraform" or "output" not in arguments:
         return None
     return arguments[-1]
+
+
+def test_rds_installer_waits_for_readiness_after_api_restart() -> None:
+    installer = RDS_INSTALLER.read_text(encoding="utf-8")
+    restart_position = installer.index("compose restart --timeout 10 api")
+    readiness_position = installer.index(
+        "wait_for_api_readiness",
+        restart_position,
+    )
+    persisted_read_position = installer.index(
+        'http://127.0.0.1:8000/api/v1/shipments/${tracking_number}',
+        readiness_position,
+    )
+
+    assert restart_position < readiness_position < persisted_read_position
 
 
 def test_publish_pushes_only_arm64_and_records_digest_without_credentials(

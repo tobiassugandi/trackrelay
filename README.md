@@ -175,7 +175,7 @@ The workload command runs all six frozen Step 8.6 rates from the approved local 
 
 `make aws-rds-correctness` is the next guarded checkpoint. It runs only after the RDS switch, executes the normal, duplicate, out-of-order, and downstream-outage scenarios from a one-off container inside the private Compose network, and saves one compact suite report under the ignored AWS session evidence directory. The report contains deterministic run identities, observed HTTP status codes, and reconciliation counts, but no database endpoint, credential, AWS account ID, or public API address.
 
-These are cloud-mutating commands and have only been tested with simulated command runners so far. Do not invoke them until cloud session 1 has been explicitly approved and provisioned. The [rehost architecture note](docs/aws-rehost-architecture.md) describes the full sequence and security boundary.
+Cloud session 1 exercised this complete sequence against AWS in Jakarta. The synchronous rehost sustained 25 events/s under the frozen workload and first failed its SLO at 50 events/s. After the RDS switch, all four core correctness scenarios passed reconciliation. The complete stack was then destroyed; Terraform state and every native resource inventory were empty. These remain cloud-mutating commands and every future session still requires its own explicit approval. The [rehost architecture note](docs/aws-rehost-architecture.md) describes the full sequence and security boundary.
 
 The Terraform root module in `infra/terraform` defines the Stage 9.1 rehost host and Stage 9.2 private RDS data layer: one ARM EC2 instance, a private single-AZ PostgreSQL instance, their disposable network, an ECR repository, RDS-managed credentials, and SSM access without SSH. The [rehost architecture note](docs/aws-rehost-architecture.md) explains the boundary and cost choices. Initialize its locked provider and run formatting, validation, and mocked plan assertions with:
 
@@ -186,7 +186,7 @@ make infra-check
 
 Neither command provisions infrastructure or contacts AWS. The real plan and apply remain behind the documented cloud-session approval gate.
 
-Every billable AWS session must follow the [AWS cloud-session checklist](docs/aws-cloud-session-checklist.md). A session is not complete until Terraform state is empty, the session-tagged AWS inventory is empty, and native service checks confirm that no session-owned resources remain.
+Every billable AWS session must follow the [AWS cloud-session checklist](docs/aws-cloud-session-checklist.md). A session is not complete until Terraform state is empty and native service checks confirm that no session-owned resources remain. The generic AWS tagging-index count is still saved, but AWS documents that it includes previously tagged resources, so deleted-resource tombstones are supporting evidence rather than authoritative absence checks.
 
 The repository exposes `make aws-plan`, approval-gated `make aws-up`, unconditional `make aws-down`, and `make aws-verify-down`. Plans and lifecycle logs stay under the ignored `results/aws-sessions/` tree. The verifier checks Terraform state, the tagging API, and native EC2, EBS, VPC, ECR, IAM, RDS, backup, snapshot, and RDS-managed-secret inventories for all resources currently defined; each later resource type must add its own native check before use.
 

@@ -60,7 +60,7 @@ The guarded `make aws-rds-correctness` checkpoint now reuses the shared normal, 
 
 `make aws-rehost-deploy` waits for the specific instance's SSM agent, sends the committed Compose and installer files through `AWS-RunShellScript`, waits for success, and records only the command ID and outcome. It never opens SSH. AWS warns that Run Command parameters are retained in command history and can be recorded by CloudTrail, so the payload contains no password. The installer generates the synthetic PostgreSQL password on the instance and stores its env file with mode `0600`.
 
-The bootstrap installs Docker Compose v2.32.4 for ARM64 from Docker's official release and verifies its published SHA-256 checksum before installation. The remote command waits for cloud-init, authenticates to ECR with the instance role, starts the digest-pinned application, verifies migration head and readiness, and sends one unique Courier Alpha event through the database and simulator. These workflows are locally unit-tested definitions only; they have not been run against AWS.
+The bootstrap installs Docker Compose v2.32.4 for ARM64 from Docker's official release and verifies its published SHA-256 checksum before installation. The remote command waits for cloud-init, authenticates to ECR with the instance role, starts the digest-pinned application, verifies migration head and readiness, and sends one unique Courier Alpha event through the database and simulator. Cloud session 1 exercised this workflow in Jakarta using the approved digest-pinned revision.
 
 `make aws-rehost-workload` has the same revision guard and additionally requires a successfully deployed rehost. Its SSM payload contains only synthetic workload parameters and paths to the host-private Compose configuration. The external driver learns the temporary API address in memory from Terraform output, but no workload result artifact persists it. A k6 threshold failure is still reconciled so that a failing point can be interpreted; infrastructure teardown remains a separate unconditional command.
 
@@ -68,9 +68,11 @@ No AWS resources were created while preparing this architecture.
 
 ## Chargeable footprint when eventually applied
 
-The planned cloud-session-1 footprint is one `t4g.small` instance, its encrypted 16 GiB gp3 root volume, one public IPv4 while the instance runs, ECR image storage, one single-AZ `db.t4g.micro` PostgreSQL instance, fixed encrypted 20 GiB gp3 database storage, and one RDS-managed Secrets Manager secret. There is no NAT gateway, load balancer, Multi-AZ standby, retained database backup, or final snapshot. A current Jakarta price estimate and explicit session ceiling are still required before approval.
+Cloud session 1 used one `t4g.small` instance, its encrypted 16 GiB gp3 root volume, one public IPv4 while the instance ran, ECR image storage, one single-AZ `db.t4g.micro` PostgreSQL 17.11 instance, fixed encrypted 20 GiB gp3 database storage, and one RDS-managed Secrets Manager secret. There was no NAT gateway, load balancer, Multi-AZ standby, retained database backup, or final snapshot. It was approved with a USD 2.00 ceiling after an AWS Price List estimate of USD 0.3233 for the three-hour maximum.
 
-Teardown is not considered complete merely because Terraform destroy succeeds. `make aws-verify-down` also checks empty session tags and native EC2, EBS, network, ECR, IAM, RDS, snapshot, retained-backup, and RDS-managed-secret inventories. Later AWS resource types must extend that verifier before they are used.
+The frozen synchronous workload established 25 events/s as the maximum sustainable rate and 50 events/s as the first failing rate on this rehost. The later RDS checkpoint passed normal, duplicate, out-of-order, and downstream-outage reconciliation. This is portability and migration evidence, not the later fixed-versus-elastic headline comparison. Terraform destroy completed, Terraform state was empty, and every native resource inventory—including the RDS-managed secret—returned zero.
+
+Teardown is not considered complete merely because Terraform destroy succeeds. `make aws-verify-down` requires empty Terraform state and zero native EC2, EBS, network, ECR, IAM, RDS, snapshot, retained-backup, and RDS-managed-secret inventories. It also saves the generic tag-index count, but does not mistake its previously tagged resource tombstones for live resources. Later AWS resource types must extend the native verifier before they are used.
 
 ## References
 

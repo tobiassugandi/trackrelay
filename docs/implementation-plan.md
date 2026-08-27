@@ -432,14 +432,14 @@ You never need to send Codex an AWS password, MFA code, root credential, secret 
 - [x] **You:** Enable MFA for the AWS account's root user.
 - [x] **You:** Ensure the account has valid billing details and configure a USD 25 monthly AWS budget with alert delivery.
 - [x] **Together:** Use Asia Pacific (Jakarta), `ap-southeast-3`; Codex verified current regional support for the planned core services against AWS's regional service documentation.
-- [ ] **Together:** Agree on cloud session 1's cost ceiling after Codex presents its concrete resource list and estimate; the ceiling must fit within the remaining USD 25 monthly budget.
+- [x] **Together:** Agree on cloud session 1's cost ceiling after Codex presents its concrete resource list and estimate; cloud session 1 was explicitly approved at USD 2.00 against USD 0 reported monthly spend and a USD 25 budget.
 - [x] **You, privately:** Complete AWS CLI authentication using the non-root `trackrelay-admin` profile; no credentials belong in the repository or chat.
 - [x] **Codex:** Verify without printing account identifiers or secrets that `trackrelay-admin` authenticates as a non-root IAM user and selects `ap-southeast-3`.
 - [x] **Codex (repository work):** Make AWS commands accept a project profile and region explicitly, using `trackrelay-admin` and `ap-southeast-3` by default without hard-coding credentials. `make aws-check` now proves the configured region and non-root identity without modifying resources or inheriting an unrelated ambient `AWS_PROFILE`.
 - [x] **Codex:** Add and locally validate an empty Terraform foundation with pinned tool and AWS-provider requirements, explicit profile and region inputs, standard tags, ignored state and variable files, and no AWS resources.
 - [x] **Codex:** Add a saved-plan lifecycle with approval- and budget-gated provision, unconditional destroy, local evidence capture, and generic teardown verification before defining billable resources.
 - [x] **Codex:** Write the cloud-session checklist covering approval, provision, validation, evidence collection, failure handling, destroy, and post-destroy verification.
-- [x] **Codex:** Define teardown proof as empty Terraform state plus empty session-tagged inventory plus native service-specific absence checks derived from the pre-destroy inventory.
+- [x] **Codex:** Define teardown proof as empty Terraform state plus native service-specific absence checks derived from the pre-destroy inventory; save the generic tagging index as supporting evidence because AWS documents that it can return previously tagged resource tombstones.
 
 The USD 25 AWS Budget is a monthly monitoring and alerting guardrail, not an assumed hard spending stop. Each cloud session therefore still needs its own estimate, explicit approval, bounded duration, and verified teardown. Automatic budget actions may be considered separately, but they do not replace teardown automation.
 
@@ -462,15 +462,15 @@ Do not start cloud session 1 until the local-preparation items in both Stages 9.
 
 Use cloud session 1 to validate both Stages 9.1 and 9.2:
 
-- [ ] **You:** Explicitly authorize cloud session 1 after reviewing its resource list, region, estimated duration, cost guardrail, and teardown command.
-- [ ] Provision and run the synchronous rehost in AWS.
-- [ ] Run the frozen workload and guardrails to verify that the benchmark is portable to the AWS environment.
-- [ ] Record instance type, process count, database placement, region, and benchmark-driver placement as migration evidence, not as the causal elasticity control.
-- [ ] Provision PostgreSQL on RDS during cloud session 1.
-- [ ] Point TrackRelay at RDS and verify connectivity, migrations, and persistence.
-- [ ] Rerun the core correctness scenarios against RDS.
-- [ ] Record and freeze the RDS configuration intended for every later fixed-capacity and elastic performance experiment.
-- [ ] Collect the session evidence, destroy the complete session-1 stack, and verify the teardown.
+- [x] **You:** Explicitly authorize cloud session 1 after reviewing its resource list, region, estimated duration, cost guardrail, and teardown command.
+- [x] Provision and run the synchronous rehost in AWS.
+- [x] Run the frozen workload and guardrails to verify that the benchmark is portable to the AWS environment; the synchronous rehost sustained 25 events/s and first failed the frozen SLO at 50 events/s.
+- [x] Record instance type, process count, database placement, region, and benchmark-driver placement as migration evidence, not as the causal elasticity control.
+- [x] Provision PostgreSQL on RDS during cloud session 1.
+- [x] Point TrackRelay at RDS and verify connectivity, migrations, and persistence.
+- [x] Rerun the core correctness scenarios against RDS; normal, duplicate, out-of-order, and downstream-outage all passed reconciliation.
+- [x] Record and freeze the RDS configuration intended for every later fixed-capacity and elastic performance experiment.
+- [x] Collect the session evidence, destroy the complete session-1 stack, and verify empty Terraform state plus zero native resource inventories.
 
 RDS provides the stable managed data layer for the target architecture; it is setup for the elasticity experiment, not a separately benchmarked intervention.
 

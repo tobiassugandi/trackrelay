@@ -295,7 +295,7 @@ def inventory_rehost_resources(
             "list-secrets",
             "--include-planned-deletion",
             "--filters",
-            "Key=owning-service,Values=rds.amazonaws.com",
+            "Key=owning-service,Values=rds",
             "--query",
             secret_tag_query,
             "--output",

@@ -33,6 +33,9 @@ COMMAND_ID = "11111111-2222-3333-4444-555555555555"
 RDS_INSTALLER = (
     Path(__file__).resolve().parents[1] / "deploy" / "rehost" / "install-rds.sh"
 )
+REHOST_COMPOSE = (
+    Path(__file__).resolve().parents[1] / "deploy" / "rehost" / "compose.yaml"
+)
 
 
 def completed(
@@ -74,6 +77,17 @@ def terraform_output_name(arguments: tuple[str, ...]) -> str | None:
     if arguments[0] != "terraform" or "output" not in arguments:
         return None
     return arguments[-1]
+
+
+def test_downstream_capacity_is_fixed_independently_of_the_ec2_host() -> None:
+    compose = REHOST_COMPOSE.read_text(encoding="utf-8")
+    downstream_service = compose.split("\n  downstream:\n", 1)[1].split(
+        "\n  api:\n",
+        1,
+    )[0]
+
+    assert "\n    cpus: 1.0\n" in downstream_service
+    assert "\n    mem_limit: 256m\n" in downstream_service
 
 
 def test_rds_installer_waits_for_readiness_after_api_restart() -> None:

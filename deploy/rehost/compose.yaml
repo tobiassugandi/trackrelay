@@ -52,6 +52,9 @@ services:
 
   downstream:
     <<: *application
+    # Keep the simulated dependency constant when the EC2 host grows.
+    cpus: 1.0
+    mem_limit: 256m
     restart: unless-stopped
     command:
       - uvicorn

@@ -44,10 +44,11 @@ The price is public On-Demand Linux instance time only; it is not the complete
 session estimate. The catalog facts and their timestamps are frozen in
 `results/aws-vertical-scaling/ec2-capacity-selection.json`.
 
-The healthy downstream simulator currently shares the EC2 host with the API.
-Before measurement, its CPU and memory allowance must be fixed identically in
-both treatments so that resizing the host does not silently resize the simulated
-dependency. Its behavior and observed response latency must also be recorded.
+The healthy downstream simulator shares the EC2 host with the API, but Compose
+now fixes it at one CPU and 256 MiB in both treatments. Resizing the host
+therefore does not silently give the simulated dependency additional compute or
+memory. Its behavior, resource use, and observed response latency must still be
+recorded so simulator saturation cannot be mistaken for an API limit.
 
 ## Workload and acceptance
 

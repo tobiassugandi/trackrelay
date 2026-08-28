@@ -12,9 +12,11 @@ from trackrelay.aws_session import (
     AwsSessionError,
     apply_session,
     destroy_session,
+    load_manifest,
     plan_session,
     verify_destroyed,
 )
+from trackrelay.experiments.vertical_scaling import TREATMENT_INSTANCE_TYPE
 
 SESSION_ID = "cloud-session-1-20260822T090000Z"
 PROFILE = "trackrelay-admin"
@@ -114,9 +116,52 @@ def test_plan_saves_exact_inputs_and_plan_identity(tmp_path: Path) -> None:
     assert manifest["profile"] == PROFILE
     assert manifest["region"] == REGION
     assert manifest["api_ingress_cidr"] == API_INGRESS_CIDR
+    assert manifest["rehost_instance_type"] == "c8g.large"
     assert manifest["git_revision"] == GIT_REVISION
     assert manifest["status"] == "planned"
     assert len(manifest["plan_sha256"]) == 64
+
+
+def test_plan_records_an_explicit_larger_treatment(tmp_path: Path) -> None:
+    terraform_dir = tmp_path / "terraform"
+    terraform_dir.mkdir()
+    session = AwsSession(
+        session_id=SESSION_ID,
+        profile=PROFILE,
+        region=REGION,
+        api_ingress_cidr=API_INGRESS_CIDR,
+        terraform_dir=terraform_dir,
+        evidence_root=tmp_path / "evidence",
+        rehost_instance_type=TREATMENT_INSTANCE_TYPE,
+    )
+
+    calls = create_saved_plan(session)
+
+    assert (
+        f"-var=rehost_instance_type={TREATMENT_INSTANCE_TYPE}"
+        in calls[0]
+    )
+    manifest = load_manifest(session)
+    assert manifest["rehost_instance_type"] == TREATMENT_INSTANCE_TYPE
+
+
+def test_session_evidence_rejects_a_different_treatment(
+    tmp_path: Path,
+) -> None:
+    control_session = make_session(tmp_path)
+    create_saved_plan(control_session)
+    treatment_session = AwsSession(
+        session_id=control_session.session_id,
+        profile=control_session.profile,
+        region=control_session.region,
+        api_ingress_cidr=control_session.api_ingress_cidr,
+        terraform_dir=control_session.terraform_dir,
+        evidence_root=control_session.evidence_root,
+        rehost_instance_type=TREATMENT_INSTANCE_TYPE,
+    )
+
+    with raises(AwsSessionError, match="rehost_instance_type"):
+        load_manifest(treatment_session)
 
 
 def test_plan_refuses_to_replace_existing_session_evidence(

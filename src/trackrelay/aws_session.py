@@ -16,6 +16,10 @@ from trackrelay.aws_teardown import (
     AwsTeardownCheckError,
     inventory_rehost_resources,
 )
+from trackrelay.experiments.vertical_scaling import (
+    ALLOWED_INSTANCE_TYPES,
+    CONTROL_INSTANCE_TYPE,
+)
 
 SESSION_ID_PATTERN = compile_pattern(
     r"^cloud-session-[1234]-[0-9]{8}T[0-9]{6}Z$"
@@ -38,6 +42,7 @@ class AwsSession:
     api_ingress_cidr: str
     terraform_dir: Path
     evidence_root: Path
+    rehost_instance_type: str = CONTROL_INSTANCE_TYPE
 
     def __post_init__(self) -> None:
         if SESSION_ID_PATTERN.fullmatch(self.session_id) is None:
@@ -49,6 +54,11 @@ class AwsSession:
             raise AwsSessionError("AWS profile must not be empty")
         if not self.region.strip():
             raise AwsSessionError("AWS region must not be empty")
+        if self.rehost_instance_type not in ALLOWED_INSTANCE_TYPES:
+            raise AwsSessionError(
+                "rehost instance type must be one of the frozen "
+                f"treatments: {ALLOWED_INSTANCE_TYPES}"
+            )
         try:
             ingress_network = IPv4Network(self.api_ingress_cidr, strict=True)
         except ValueError as error:
@@ -84,6 +94,7 @@ class AwsSession:
             f"-var=aws_profile={self.profile}",
             f"-var=aws_region={self.region}",
             f"-var=api_ingress_cidr={self.api_ingress_cidr}",
+            f"-var=rehost_instance_type={self.rehost_instance_type}",
             f"-var=session_id={self.session_id}",
         )
 
@@ -166,6 +177,7 @@ def load_manifest(session: AwsSession) -> dict[str, object]:
         ("profile", session.profile),
         ("region", session.region),
         ("api_ingress_cidr", session.api_ingress_cidr),
+        ("rehost_instance_type", session.rehost_instance_type),
     ):
         if manifest.get(field) != expected:
             raise AwsSessionError(
@@ -211,6 +223,7 @@ def plan_session(
             "api_ingress_cidr": session.api_ingress_cidr,
             "plan_sha256": file_sha256(session.plan_path),
             "profile": session.profile,
+            "rehost_instance_type": session.rehost_instance_type,
             "region": session.region,
             "schema_version": 1,
             "session_id": session.session_id,
@@ -436,6 +449,11 @@ def add_shared_arguments(parser: ArgumentParser) -> None:
     parser.add_argument("--profile", required=True)
     parser.add_argument("--region", required=True)
     parser.add_argument("--api-ingress-cidr", required=True)
+    parser.add_argument(
+        "--rehost-instance-type",
+        choices=ALLOWED_INSTANCE_TYPES,
+        default=CONTROL_INSTANCE_TYPE,
+    )
     parser.add_argument("--terraform-dir", type=Path, required=True)
     parser.add_argument("--evidence-root", type=Path, required=True)
 
@@ -463,6 +481,7 @@ def session_from_arguments(arguments: Namespace) -> AwsSession:
         api_ingress_cidr=arguments.api_ingress_cidr,
         terraform_dir=arguments.terraform_dir,
         evidence_root=arguments.evidence_root,
+        rehost_instance_type=arguments.rehost_instance_type,
     )
 
 

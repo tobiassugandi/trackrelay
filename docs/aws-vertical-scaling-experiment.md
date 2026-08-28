@@ -47,7 +47,9 @@ session estimate. The catalog facts and their timestamps are frozen in
 Terraform defaults to the `c8g.large` control and rejects every instance type
 except the two frozen treatments. Because neither is burstable, the old T-family
 credit configuration is absent rather than being conditionally carried into the
-new experiment.
+new experiment. The guarded lifecycle passes the selected type as an explicit
+Terraform command-line variable, records it in the session manifest, and rejects
+later commands that identify a different treatment.
 
 The healthy downstream simulator shares the EC2 host with the API, but Compose
 now fixes it at one CPU and 1 GiB in both treatments. Resizing the host

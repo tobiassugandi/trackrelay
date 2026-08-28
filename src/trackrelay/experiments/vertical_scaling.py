@@ -8,6 +8,12 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 
 PositiveInteger = Annotated[int, Field(gt=0)]
 PositivePrice = Annotated[Decimal, Field(gt=0)]
+CONTROL_INSTANCE_TYPE = "c8g.large"
+TREATMENT_INSTANCE_TYPE = "c8g.4xlarge"
+ALLOWED_INSTANCE_TYPES = (
+    CONTROL_INSTANCE_TYPE,
+    TREATMENT_INSTANCE_TYPE,
+)
 DEFAULT_CAPACITY_SELECTION_PATH = (
     Path(__file__).resolve().parents[3]
     / "results"

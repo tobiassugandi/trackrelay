@@ -39,6 +39,7 @@ APPROVED_COST_CEILING_USD ?=
 REHOST_COMPOSE_FILE ?= deploy/rehost/compose.yaml
 REHOST_INSTALLER ?= deploy/rehost/install.sh
 REHOST_RDS_INSTALLER ?= deploy/rehost/install-rds.sh
+REHOST_INSTANCE_TYPE ?= c8g.large
 
 .PHONY: sync test test-integration lint run run-downstream image-api image-api-smoke rehost-config rehost-smoke generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp load-slow load-outage load-baseline aws-check aws-plan aws-up aws-rehost-publish aws-rehost-deploy aws-rehost-workload aws-rds-deploy aws-rds-correctness aws-down aws-verify-down infra-init infra-check db-up db-status db-check db-down migrate migration-status
 
@@ -165,6 +166,7 @@ aws-plan:
 		--profile "$(TRACKRELAY_AWS_PROFILE)" \
 		--region "$(TRACKRELAY_AWS_REGION)" \
 		--api-ingress-cidr "$(API_INGRESS_CIDR)" \
+		--rehost-instance-type "$(REHOST_INSTANCE_TYPE)" \
 		--terraform-dir "$(TERRAFORM_DIR)" \
 		--evidence-root "$(AWS_SESSION_RESULTS)"
 
@@ -174,6 +176,7 @@ aws-up:
 		--profile "$(TRACKRELAY_AWS_PROFILE)" \
 		--region "$(TRACKRELAY_AWS_REGION)" \
 		--api-ingress-cidr "$(API_INGRESS_CIDR)" \
+		--rehost-instance-type "$(REHOST_INSTANCE_TYPE)" \
 		--terraform-dir "$(TERRAFORM_DIR)" \
 		--evidence-root "$(AWS_SESSION_RESULTS)" \
 		--approved-session-id "$(APPROVED_SESSION_ID)" \
@@ -186,6 +189,7 @@ aws-rehost-publish:
 		--profile "$(TRACKRELAY_AWS_PROFILE)" \
 		--region "$(TRACKRELAY_AWS_REGION)" \
 		--api-ingress-cidr "$(API_INGRESS_CIDR)" \
+		--rehost-instance-type "$(REHOST_INSTANCE_TYPE)" \
 		--terraform-dir "$(TERRAFORM_DIR)" \
 		--evidence-root "$(AWS_SESSION_RESULTS)"
 
@@ -195,6 +199,7 @@ aws-rehost-deploy:
 		--profile "$(TRACKRELAY_AWS_PROFILE)" \
 		--region "$(TRACKRELAY_AWS_REGION)" \
 		--api-ingress-cidr "$(API_INGRESS_CIDR)" \
+		--rehost-instance-type "$(REHOST_INSTANCE_TYPE)" \
 		--terraform-dir "$(TERRAFORM_DIR)" \
 		--evidence-root "$(AWS_SESSION_RESULTS)" \
 		--compose-file "$(REHOST_COMPOSE_FILE)" \
@@ -206,6 +211,7 @@ aws-rehost-workload:
 		--profile "$(TRACKRELAY_AWS_PROFILE)" \
 		--region "$(TRACKRELAY_AWS_REGION)" \
 		--api-ingress-cidr "$(API_INGRESS_CIDR)" \
+		--rehost-instance-type "$(REHOST_INSTANCE_TYPE)" \
 		--terraform-dir "$(TERRAFORM_DIR)" \
 		--evidence-root "$(AWS_SESSION_RESULTS)"
 
@@ -215,6 +221,7 @@ aws-rds-deploy:
 		--profile "$(TRACKRELAY_AWS_PROFILE)" \
 		--region "$(TRACKRELAY_AWS_REGION)" \
 		--api-ingress-cidr "$(API_INGRESS_CIDR)" \
+		--rehost-instance-type "$(REHOST_INSTANCE_TYPE)" \
 		--terraform-dir "$(TERRAFORM_DIR)" \
 		--evidence-root "$(AWS_SESSION_RESULTS)" \
 		--compose-file "$(REHOST_COMPOSE_FILE)" \
@@ -226,6 +233,7 @@ aws-rds-correctness:
 		--profile "$(TRACKRELAY_AWS_PROFILE)" \
 		--region "$(TRACKRELAY_AWS_REGION)" \
 		--api-ingress-cidr "$(API_INGRESS_CIDR)" \
+		--rehost-instance-type "$(REHOST_INSTANCE_TYPE)" \
 		--terraform-dir "$(TERRAFORM_DIR)" \
 		--evidence-root "$(AWS_SESSION_RESULTS)"
 
@@ -235,6 +243,7 @@ aws-down:
 		--profile "$(TRACKRELAY_AWS_PROFILE)" \
 		--region "$(TRACKRELAY_AWS_REGION)" \
 		--api-ingress-cidr "$(API_INGRESS_CIDR)" \
+		--rehost-instance-type "$(REHOST_INSTANCE_TYPE)" \
 		--terraform-dir "$(TERRAFORM_DIR)" \
 		--evidence-root "$(AWS_SESSION_RESULTS)"
 
@@ -244,6 +253,7 @@ aws-verify-down:
 		--profile "$(TRACKRELAY_AWS_PROFILE)" \
 		--region "$(TRACKRELAY_AWS_REGION)" \
 		--api-ingress-cidr "$(API_INGRESS_CIDR)" \
+		--rehost-instance-type "$(REHOST_INSTANCE_TYPE)" \
 		--terraform-dir "$(TERRAFORM_DIR)" \
 		--evidence-root "$(AWS_SESSION_RESULTS)"
 

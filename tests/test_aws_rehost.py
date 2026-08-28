@@ -65,6 +65,7 @@ def make_session(tmp_path: Path, *, status: str = "applied") -> AwsSession:
             "api_ingress_cidr": API_INGRESS_CIDR,
             "git_revision": GIT_REVISION,
             "profile": PROFILE,
+            "rehost_instance_type": session.rehost_instance_type,
             "region": REGION,
             "session_id": SESSION_ID,
             "status": status,

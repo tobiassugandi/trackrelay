@@ -212,6 +212,23 @@ the exact driver-side start and end of each k6 execution; setup, reconciliation,
 CloudWatch publication waits, and other evidence collection are outside that
 load window.
 
+`make aws-scaling-run-tier` is the stateful counterpart and must be used only
+inside the separately approved cloud session. It runs the full frozen ladder
+for the session's current EC2 treatment. Every rate gets its input manifest, k6
+summary, exact k6 process window, local and private process timelines, persisted
+downstream outcomes, reconciliation report, complete CloudWatch series, full
+derived performance result, and compact pass/fail result. The session advances
+to `vertical_scaling_tier_collected` only after all six rate directories and the
+tier summary have been written; incomplete CloudWatch or reconciliation
+evidence aborts the tier instead of silently producing a publishable result.
+
+The private five-second process sampler runs for 15 seconds beyond the scheduled
+load duration. That margin covers local container startup and the final load
+seconds without expanding the CloudWatch load window: AWS metrics remain aligned
+to callbacks taken immediately after the k6 process starts and when it exits.
+Setup, the sampling tail, database settling, and metric-publication polling are
+therefore visible evidence but not counted as offered-load time.
+
 1. Provision the `t4g.small` baseline and fixed private RDS configuration.
 2. Deploy one immutable application image and verify RDS correctness.
 3. Run and freeze the economical baseline envelope and aligned evidence,

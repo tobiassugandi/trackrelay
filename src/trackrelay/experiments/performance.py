@@ -3,7 +3,7 @@
 import json
 import subprocess
 from argparse import ArgumentParser
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -364,20 +364,28 @@ def run_k6_with_resource_sampling(
     *,
     trackrelay_client: httpx.Client,
     sample_interval_seconds: float,
+    on_load_started: Callable[[], None] = lambda: None,
+    on_load_ended: Callable[[], None] = lambda: None,
 ) -> tuple[int, tuple[RuntimeMetricsSnapshot, ...]]:
     samples = [_runtime_snapshot(trackrelay_client)]
     process = subprocess.Popen(command)
     try:
-        while process.poll() is None:
-            sleep(sample_interval_seconds)
-            samples.append(_runtime_snapshot(trackrelay_client))
+        on_load_started()
+        while True:
+            try:
+                exit_code = process.wait(timeout=sample_interval_seconds)
+                break
+            except subprocess.TimeoutExpired:
+                samples.append(_runtime_snapshot(trackrelay_client))
     except BaseException:
         if process.poll() is None:
             process.terminate()
             process.wait()
         raise
+    finally:
+        on_load_ended()
     samples.append(_runtime_snapshot(trackrelay_client))
-    return process.wait(), tuple(samples)
+    return exit_code, tuple(samples)
 
 
 def derive_performance_result(

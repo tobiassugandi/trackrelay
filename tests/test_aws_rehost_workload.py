@@ -75,7 +75,8 @@ def test_remote_payload_uses_private_compose_services_without_secrets() -> None:
     runtime_command = runtime_payload["commands"][0]
     assert "trackrelay.experiments.rehost sample-runtime" in runtime_command
     assert "http://" not in runtime_command
-    assert runtime_payload["executionTimeout"] == ["130"]
+    assert "--sampling-duration-seconds 25" in runtime_command
+    assert runtime_payload["executionTimeout"] == ["145"]
 
 
 def point_from_payload(path: Path) -> tuple[str, RehostWorkloadPoint]:
@@ -152,6 +153,7 @@ def test_workload_saves_all_frozen_points_without_the_temporary_endpoint(
                 )
                 timeline = RehostRuntimeTimeline(
                     test_run_id=active_point.test_run_id,
+                    sampling_duration_seconds=25,
                     samples=(
                         DeploymentRuntimeSample(
                             api=sample,

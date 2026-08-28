@@ -94,6 +94,8 @@ class WorkloadControls(BaseModel):
     runtime_sample_interval_seconds: Literal[5]
     ec2_rds_cloudwatch_period_seconds: Literal[60]
     cpu_credit_cloudwatch_period_seconds: Literal[300]
+    post_load_settle_timeout_seconds: Literal[30]
+    post_load_stable_window_seconds: Literal[2]
     random_seed: Literal[20260806]
     partner_id: Literal["load-alpha"]
     k6_image: Literal["grafana/k6:2.1.0"]

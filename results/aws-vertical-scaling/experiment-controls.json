@@ -51,6 +51,8 @@
     "runtime_sample_interval_seconds": 5,
     "ec2_rds_cloudwatch_period_seconds": 60,
     "cpu_credit_cloudwatch_period_seconds": 300,
+    "post_load_settle_timeout_seconds": 30,
+    "post_load_stable_window_seconds": 2,
     "random_seed": 20260806,
     "partner_id": "load-alpha",
     "k6_image": "grafana/k6:2.1.0",

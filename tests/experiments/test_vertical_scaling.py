@@ -103,6 +103,8 @@ def test_committed_controls_freeze_every_non_hardware_input() -> None:
     assert controls.workload.runtime_sample_interval_seconds == 5
     assert controls.workload.ec2_rds_cloudwatch_period_seconds == 60
     assert controls.workload.cpu_credit_cloudwatch_period_seconds == 300
+    assert controls.workload.post_load_settle_timeout_seconds == 30
+    assert controls.workload.post_load_stable_window_seconds == 2
 
 
 def test_controls_reject_a_changed_workload_rate() -> None:

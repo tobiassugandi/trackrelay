@@ -188,6 +188,7 @@ def test_runtime_timeline_samples_both_private_processes_and_compresses() -> Non
         )
 
     assert len(timeline.samples) == 3
+    assert timeline.sampling_duration_seconds == 10
     assert sleeps == [5, 5]
     assert ready_samples == ["ready"]
     assert {sample.api.process_id for sample in timeline.samples} == {7}

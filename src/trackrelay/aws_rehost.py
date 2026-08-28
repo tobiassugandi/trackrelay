@@ -114,6 +114,7 @@ def require_applied_clean_revision(
         "rds_deployed",
         "rds_correctness_collected",
         "vertical_scaling_ready",
+        "vertical_scaling_tier_collected",
     }:
         raise AwsRehostError("the approved Terraform plan has not been applied")
 

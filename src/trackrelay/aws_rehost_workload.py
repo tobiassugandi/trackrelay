@@ -53,6 +53,7 @@ from trackrelay.experiments.performance import (
 from trackrelay.experiments.rehost import (
     EVIDENCE_PREFIX,
     RUNTIME_EVIDENCE_PREFIX,
+    RUNTIME_SAMPLING_MARGIN_SECONDS,
     RehostRuntimeTimeline,
     RehostServerEvidence,
     RehostWorkloadPoint,
@@ -245,6 +246,9 @@ def build_runtime_sampling_payload(
     point: RehostWorkloadPoint,
 ) -> dict[str, list[str]]:
     """Build the private five-second API/downstream sampling command."""
+    sampling_duration = (
+        point.duration_seconds + RUNTIME_SAMPLING_MARGIN_SECONDS
+    )
     command = " ".join(
         (
             "docker compose",
@@ -257,6 +261,7 @@ def build_runtime_sampling_payload(
             f"--test-run-id {point.test_run_id}",
             f"--rate {point.request_rate_per_second}",
             f"--duration-seconds {point.duration_seconds}",
+            f"--sampling-duration-seconds {sampling_duration}",
             f"--seed {point.random_seed}",
             f"--partner-id {point.partner_id}",
             f"--start-at {point.start_at.isoformat()}",
@@ -272,7 +277,7 @@ def build_runtime_sampling_payload(
     )
     payload = {
         "commands": [f"set -euo pipefail\n{command}"],
-        "executionTimeout": [str(point.duration_seconds + 120)],
+        "executionTimeout": [str(sampling_duration + 120)],
     }
     if len(json.dumps(payload).encode("utf-8")) > 20_000:
         raise AwsRehostError("SSM runtime-sampling payload exceeds the safety limit")
@@ -542,12 +547,17 @@ def execute_local_load(
     client: httpx.Client,
     sample_interval_seconds: float,
     summary_path: Path,
+    *,
+    on_load_started: Callable[[], None] = lambda: None,
+    on_load_ended: Callable[[], None] = lambda: None,
 ) -> tuple[int, tuple[RuntimeMetricsSnapshot, ...], dict[str, object]]:
     """Run k6 locally while sampling the remote API process."""
     exit_code, samples = run_k6_with_resource_sampling(
         command,
         trackrelay_client=client,
         sample_interval_seconds=sample_interval_seconds,
+        on_load_started=on_load_started,
+        on_load_ended=on_load_ended,
     )
     try:
         summary = json.loads(summary_path.read_text(encoding="utf-8"))

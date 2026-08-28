@@ -43,6 +43,7 @@ NonNegativeInteger = Annotated[int, Field(ge=0)]
 EVIDENCE_PREFIX = "TRACKRELAY_REHOST_EVIDENCE="
 RUNTIME_EVIDENCE_PREFIX = "TRACKRELAY_RUNTIME_EVIDENCE="
 RUNTIME_SAMPLE_INTERVAL_SECONDS = 5
+RUNTIME_SAMPLING_MARGIN_SECONDS = 15
 
 
 class RehostWorkloadPoint(BaseModel):
@@ -125,9 +126,10 @@ class RehostRuntimeTimeline(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     test_run_id: UUID
     sample_interval_seconds: Literal[5] = 5
+    sampling_duration_seconds: PositiveInteger
     samples: tuple[DeploymentRuntimeSample, ...]
 
 
@@ -250,12 +252,20 @@ def sample_rehost_runtime_timeline(
     *,
     api_client: httpx.Client,
     downstream_client: httpx.Client,
+    sampling_duration_seconds: int | None = None,
     sleeper=sleep,
     on_ready: Callable[[], None] = lambda: None,
 ) -> RehostRuntimeTimeline:
-    """Sample both private processes every five seconds for the rate duration."""
+    """Sample both private processes for the requested evidence window."""
+    sampling_duration = (
+        point.duration_seconds
+        if sampling_duration_seconds is None
+        else sampling_duration_seconds
+    )
+    if sampling_duration < point.duration_seconds:
+        raise ValueError("runtime sampling cannot end before the scheduled load")
     sample_count = ceil(
-        point.duration_seconds / RUNTIME_SAMPLE_INTERVAL_SECONDS
+        sampling_duration / RUNTIME_SAMPLE_INTERVAL_SECONDS
     ) + 1
     samples = []
     for sample_index in range(sample_count):
@@ -279,6 +289,7 @@ def sample_rehost_runtime_timeline(
             sleeper(RUNTIME_SAMPLE_INTERVAL_SECONDS)
     return RehostRuntimeTimeline(
         test_run_id=point.test_run_id,
+        sampling_duration_seconds=sampling_duration,
         samples=tuple(samples),
     )
 
@@ -314,6 +325,7 @@ def build_parser() -> ArgumentParser:
     parser.add_argument("--test-run-id", type=UUID, required=True)
     parser.add_argument("--rate", type=int, required=True)
     parser.add_argument("--duration-seconds", type=int, required=True)
+    parser.add_argument("--sampling-duration-seconds", type=int)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--partner-id", required=True)
     parser.add_argument("--start-at", required=True)
@@ -359,6 +371,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 point,
                 api_client=api_client,
                 downstream_client=downstream_client,
+                sampling_duration_seconds=(
+                    arguments.sampling_duration_seconds
+                ),
                 on_ready=lambda: print(
                     "TRACKRELAY_RUNTIME_SAMPLING_READY",
                     flush=True,

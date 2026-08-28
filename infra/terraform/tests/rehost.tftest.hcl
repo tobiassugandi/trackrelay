@@ -112,12 +112,17 @@ variables {
   session_id       = "cloud-session-4-20260824T090000Z"
 }
 
-run "vertical_scaling_control_is_fixed_and_disposable" {
+run "economical_baseline_is_burstable_and_disposable" {
   command = plan
 
   assert {
-    condition     = aws_instance.rehost.instance_type == "c8g.large"
-    error_message = "The vertical-scaling control must use c8g.large."
+    condition     = aws_instance.rehost.instance_type == "t4g.small"
+    error_message = "The economical baseline must use t4g.small."
+  }
+
+  assert {
+    condition     = aws_instance.rehost.credit_specification[0].cpu_credits == "standard"
+    error_message = "The burstable baseline must not incur unlimited-credit charges."
   }
 
   assert {
@@ -161,7 +166,25 @@ run "vertical_scaling_control_is_fixed_and_disposable" {
   }
 }
 
-run "vertical_scaling_treatment_is_the_only_larger_option" {
+run "workload_fit_tier_uses_c8g_large_without_cpu_credits" {
+  command = plan
+
+  variables {
+    rehost_instance_type = "c8g.large"
+  }
+
+  assert {
+    condition     = aws_instance.rehost.instance_type == "c8g.large"
+    error_message = "The workload-fit tier must use c8g.large."
+  }
+
+  assert {
+    condition     = length(aws_instance.rehost.credit_specification) == 0
+    error_message = "The non-burstable workload-fit tier must have no credit configuration."
+  }
+}
+
+run "within_family_scale_tier_uses_c8g_4xlarge" {
   command = plan
 
   variables {
@@ -170,7 +193,12 @@ run "vertical_scaling_treatment_is_the_only_larger_option" {
 
   assert {
     condition     = aws_instance.rehost.instance_type == "c8g.4xlarge"
-    error_message = "The vertical-scaling treatment must use c8g.4xlarge."
+    error_message = "The within-family scale tier must use c8g.4xlarge."
+  }
+
+  assert {
+    condition     = length(aws_instance.rehost.credit_specification) == 0
+    error_message = "The non-burstable scale tier must have no credit configuration."
   }
 }
 

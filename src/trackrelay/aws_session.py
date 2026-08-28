@@ -18,7 +18,7 @@ from trackrelay.aws_teardown import (
 )
 from trackrelay.experiments.vertical_scaling import (
     ALLOWED_INSTANCE_TYPES,
-    CONTROL_INSTANCE_TYPE,
+    ECONOMICAL_BASELINE_INSTANCE_TYPE,
 )
 
 SESSION_ID_PATTERN = compile_pattern(
@@ -42,7 +42,7 @@ class AwsSession:
     api_ingress_cidr: str
     terraform_dir: Path
     evidence_root: Path
-    rehost_instance_type: str = CONTROL_INSTANCE_TYPE
+    rehost_instance_type: str = ECONOMICAL_BASELINE_INSTANCE_TYPE
 
     def __post_init__(self) -> None:
         if SESSION_ID_PATTERN.fullmatch(self.session_id) is None:
@@ -57,7 +57,7 @@ class AwsSession:
         if self.rehost_instance_type not in ALLOWED_INSTANCE_TYPES:
             raise AwsSessionError(
                 "rehost instance type must be one of the frozen "
-                f"treatments: {ALLOWED_INSTANCE_TYPES}"
+                f"hardware tiers: {ALLOWED_INSTANCE_TYPES}"
             )
         try:
             ingress_network = IPv4Network(self.api_ingress_cidr, strict=True)
@@ -452,7 +452,7 @@ def add_shared_arguments(parser: ArgumentParser) -> None:
     parser.add_argument(
         "--rehost-instance-type",
         choices=ALLOWED_INSTANCE_TYPES,
-        default=CONTROL_INSTANCE_TYPE,
+        default=ECONOMICAL_BASELINE_INSTANCE_TYPE,
     )
     parser.add_argument("--terraform-dir", type=Path, required=True)
     parser.add_argument("--evidence-root", type=Path, required=True)

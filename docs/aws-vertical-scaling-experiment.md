@@ -1,58 +1,65 @@
-# Stage 9.3 synchronous vertical-scaling experiment
+# Stage 9.3 synchronous infrastructure-scaling experiment
 
 ## Question
 
 Stage 9.3 asks one deliberately simple question before TrackRelay changes its
 application architecture:
 
-> With the synchronous application and RDS held constant, how much does the
-> healthy-downstream performance envelope change when only EC2 capacity changes?
+> With the synchronous application and RDS held constant, how does the
+> healthy-downstream performance envelope change as TrackRelay moves from an
+> economical EC2 starting point to workload-fit and then larger hardware?
 
-This is a test of rapid vertical scaling and cloud hardware flexibility. It is
-not a test of automatic elasticity, and improvement is not assumed in advance.
-If the API host is not the first constrained resource, a larger instance may
-produce little or no capacity gain.
+This is a test of cloud hardware flexibility and vertical scaling. It is not a
+test of automatic elasticity, and improvement is not assumed in advance. If the
+API host is not the first constrained resource, a different or larger instance
+may produce little or no capacity gain.
 
 The 25 events/s result from cloud session 1 is not the small-capacity control.
-That workload used PostgreSQL on the EC2 host. Both Stage 9.3 treatments must use
+That workload used PostgreSQL on the EC2 host. All three Stage 9.3 tiers must use
 the same private RDS instance so that database placement does not change between
 them.
 
-## Causal comparison
+## Controlled hardware ladder
 
-| Property | Small-capacity control | Large-capacity treatment |
-| --- | --- | --- |
-| Application revision and image digest | Same | Same |
-| Application architecture | Synchronous | Synchronous |
-| EC2 instance type | Approved small type | Approved larger type |
-| API process and connection-pool settings | Same | Same |
-| RDS class, engine, storage, and parameters | Same | Same |
-| Downstream mode and resource allowance | Healthy and fixed | Healthy and fixed |
-| Workload, driver, route, duration, and SLO | Same | Same |
-| Experiment state | Fresh identity namespace | Fresh identity namespace |
+| Property | Economical baseline | Workload-fit migration | Within-family scale-up |
+| --- | --- | --- | --- |
+| Application revision and image digest | Same | Same | Same |
+| Application architecture | Synchronous | Synchronous | Synchronous |
+| EC2 instance type | `t4g.small` | `c8g.large` | `c8g.4xlarge` |
+| API process and connection-pool settings | Same | Same | Same |
+| RDS class, engine, storage, and parameters | Same | Same | Same |
+| Downstream mode and resource allowance | Healthy and fixed | Healthy and fixed | Healthy and fixed |
+| Workload, driver, route, duration, and SLO | Same | Same | Same |
+| Experiment state | Fresh identity namespace | Fresh identity namespace | Fresh identity namespace |
 
-The EC2 instance type is the only treatment variable. Read-only EC2 and Price
-List API queries on 2026-08-28 selected this pair:
+The EC2 instance type is the only deployment input changed between runs, but the
+first transition intentionally changes several hardware properties together.
+Read-only EC2 and Price List API queries on 2026-08-28 selected this ladder:
 
-- control: `c8g.large`, 2 vCPUs, 4 GiB, USD 0.09163 per hour;
-- treatment: `c8g.4xlarge`, 16 vCPUs, 32 GiB, USD 0.73304 per hour.
+- economical baseline: `t4g.small`, 2 vCPUs, 2 GiB, burstable Graviton2,
+  USD 0.02120 per hour;
+- workload-fit migration: `c8g.large`, 2 vCPUs, 4 GiB, non-burstable
+  Graviton4, USD 0.09163 per hour;
+- within-family scale-up: `c8g.4xlarge`, 16 vCPUs, 32 GiB, non-burstable
+  Graviton4, USD 0.73304 per hour.
 
-Both are current Jakarta offerings from the same non-burstable Graviton4
-compute-optimized family. The treatment provides eight times the vCPUs and
-memory without introducing CPU-credit or processor-generation differences.
-The price is public On-Demand Linux instance time only; it is not the complete
-session estimate. The catalog facts and their timestamps are frozen in
+The first transition demonstrates the ability to choose a hardware profile that
+better fits an observed workload; it must not be attributed to CPU count alone.
+The second transition is the cleaner vertical-scaling comparison: the same
+non-burstable Graviton4 family gains eight times the vCPUs and memory. Prices are
+public On-Demand Linux instance time only, not the complete session estimate.
+Catalog facts and timestamps are frozen in
 `results/aws-vertical-scaling/ec2-capacity-selection.json`.
 
-Terraform defaults to the `c8g.large` control and rejects every instance type
-except the two frozen treatments. Because neither is burstable, the old T-family
-credit configuration is absent rather than being conditionally carried into the
-new experiment. The guarded lifecycle passes the selected type as an explicit
-Terraform command-line variable, records it in the session manifest, and rejects
-later commands that identify a different treatment.
+Terraform defaults to the `t4g.small` baseline and rejects every instance type
+outside the three frozen tiers. It configures standard CPU credits for the
+burstable baseline and no credit block for either C8g tier. The guarded lifecycle
+passes the selected type as an explicit Terraform command-line variable, records
+it in the session manifest, and rejects later commands that identify a different
+tier.
 
 The healthy downstream simulator shares the EC2 host with the API, but Compose
-now fixes it at one CPU and 1 GiB in both treatments. Resizing the host
+now fixes it at one CPU and 1 GiB in all three tiers. Changing the host
 therefore does not silently give the simulated dependency additional compute or
 memory. The experiment is valid only while its observed CPU, memory, latency,
 and error evidence confirms that it retains headroom. Simulator saturation makes
@@ -67,7 +74,7 @@ rate cannot restore the performance envelope after the first failing rate.
 
 The exact tier duration may be longer than the ten-second portability rehearsal.
 It must provide at least three samples at the slowest required resource-metric
-interval. The same frozen duration is used for both treatments.
+interval. The same frozen duration is used for all three tiers.
 
 A rate passes only when all of these remain true:
 
@@ -95,6 +102,11 @@ unrelated summaries.
 
 ## Interpretation and stopping rules
 
+- The `t4g.small` to `c8g.large` result may be described only as a workload-fit
+  hardware migration. Family, processor generation, memory, network profile,
+  and burstability change together, so CPU alone cannot receive causal credit.
+- The `c8g.large` to `c8g.4xlarge` result is the cleaner within-family vertical
+  comparison because processor generation and burstability remain unchanged.
 - High EC2 pressure with healthy RDS, pool, and downstream evidence supports an
   EC2-compute bottleneck. A substantial envelope increase then demonstrates
   useful vertical scaling without application changes.
@@ -118,13 +130,17 @@ need a separate single-variable plan and explicit cloud-session approval.
 Cloud session 2 will be prepared locally and must receive its own explicit cost
 approval before any resource is created:
 
-1. Provision the approved small EC2 capacity and fixed private RDS configuration.
+1. Provision the `t4g.small` baseline and fixed private RDS configuration.
 2. Deploy one immutable application image and verify RDS correctness.
-3. Run and freeze the small-capacity envelope and aligned resource evidence.
+3. Run and freeze the economical baseline envelope and aligned evidence,
+   including CPU-credit behavior.
 4. Reset synthetic application and simulator state without changing controls.
-5. Stop the EC2 instance, change only its approved instance type, and restart it.
-6. Verify the same image and controls, then replay the identical envelope.
-7. Build the comparison and bottleneck report while the evidence is available.
+5. Stop the EC2 instance, switch to `c8g.large`, verify the unchanged image and
+   controls, and replay the identical envelope.
+6. Preserve that result, reset state, switch to `c8g.4xlarge`, verify the same
+   controls, and replay the envelope again.
+7. Build both transition comparisons and the bottleneck report while the
+   evidence is available.
 8. Destroy every session resource and verify empty Terraform state plus empty
    native service inventories.
 

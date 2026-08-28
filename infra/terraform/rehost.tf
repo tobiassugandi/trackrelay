@@ -139,6 +139,14 @@ resource "aws_instance" "rehost" {
   user_data_replace_on_change          = true
   vpc_security_group_ids               = [aws_security_group.rehost.id]
 
+  dynamic "credit_specification" {
+    for_each = var.rehost_instance_type == "t4g.small" ? [true] : []
+
+    content {
+      cpu_credits = "standard"
+    }
+  }
+
   metadata_options {
     http_endpoint               = "enabled"
     http_protocol_ipv6          = "disabled"

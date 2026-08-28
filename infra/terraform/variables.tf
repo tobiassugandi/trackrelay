@@ -49,17 +49,17 @@ variable "api_ingress_cidr" {
 }
 
 variable "rehost_instance_type" {
-  description = "Frozen EC2 treatment for the synchronous vertical-scaling experiment."
+  description = "Frozen EC2 tier for the synchronous infrastructure-scaling experiment."
   type        = string
-  default     = "c8g.large"
+  default     = "t4g.small"
 
   validation {
     condition = contains(
-      ["c8g.large", "c8g.4xlarge"],
+      ["t4g.small", "c8g.large", "c8g.4xlarge"],
       var.rehost_instance_type,
     )
     error_message = (
-      "rehost_instance_type must be c8g.large or c8g.4xlarge."
+      "rehost_instance_type must be t4g.small, c8g.large, or c8g.4xlarge."
     )
   }
 }

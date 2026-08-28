@@ -392,16 +392,18 @@ Goal: demonstrate two progressively stronger cloud capabilities:
    capacity as demand changes while continuing to meet its latency, completion,
    and correctness requirements?
 
-The first supporting result will be:
+The first supporting result will be a three-tier hardware story:
 
-> **With the application and RDS configuration held constant, changing only the
-> EC2 capacity changed the synchronous system's sustainable healthy-downstream
-> rate from X to Y events/s.**
+> **With the application and RDS configuration held constant, TrackRelay moved
+> from a small economical instance to workload-fit compute and then a larger
+> instance, changing its sustainable healthy-downstream rate from X to Y to Z
+> events/s without an application redesign.**
 
-This vertical-scaling experiment answers the reasonable question, "Why not just
-use a bigger machine?" It must also identify the observed bottleneck. A larger
-EC2 instance is not assumed to help when the limiting resource is the database,
-the application connection pool, or downstream latency.
+This infrastructure-scaling experiment answers the reasonable question, "Why
+not choose better or bigger hardware first?" The `t4g.small` to `c8g.large`
+transition demonstrates workload-fit flexibility but cannot be attributed to
+CPU alone; the `c8g.large` to `c8g.4xlarge` transition is the cleaner same-family
+vertical comparison. Both must identify observed bottlenecks honestly.
 
 The primary cloud-specific question remains:
 
@@ -415,14 +417,14 @@ The primary figure will be one aligned time-series story: offered load rises and
 
 The causal experiment compares the same modernized AWS deployment with **worker autoscaling off** and **worker autoscaling on**. SQS, ECS task definitions, RDS, fixed API capacity, workload, SLO, and minimum worker count must remain the same. Only the worker-capacity policy changes. The asynchronous architecture is a prerequisite that makes delivery independently scalable; access to additional on-demand compute is the cloud capability being tested.
 
-The local legacy baseline remains important as the starting point and benchmark rehearsal, but it is not the denominator for either cloud claim. The vertical-scaling control must be rerun against RDS because the earlier 25 events/s cloud portability result used host-local PostgreSQL. A local asynchronous implementation is optional and is not required for the elasticity experiment.
+The local legacy baseline remains important as the starting point and benchmark rehearsal, but it is not the denominator for either cloud claim. The `t4g.small` economical baseline must be rerun against RDS because the earlier 25 events/s cloud portability result used host-local PostgreSQL. A local asynchronous implementation is optional and is not required for the elasticity experiment.
 
 ### Phase 9 operating model
 
 AWS is **off by default**. Application code, container builds, experiment automation, and infrastructure definitions are developed and tested locally. AWS is used only for bounded validation or measurement sessions:
 
 1. **Cloud session 1 — synchronous migration:** validate Stages 9.1 and 9.2, collect evidence, then destroy the stack.
-2. **Cloud session 2 — vertical scaling:** run the RDS-backed synchronous system at two EC2 capacities, collect evidence, then destroy the stack.
+2. **Cloud session 2 — infrastructure scaling:** run the RDS-backed synchronous system on `t4g.small`, `c8g.large`, and `c8g.4xlarge`, collect evidence, then destroy the stack.
 3. **Cloud session 3 — asynchronous integration:** validate Stages 9.4 and 9.5 with tiny workloads, collect evidence, then destroy the stack.
 4. **Cloud session 4 — headline experiment:** provision once, run the Stage 9.6 fixed control and Stage 9.7 elastic treatment back-to-back, collect both result sets, then destroy the stack.
 
@@ -439,7 +441,7 @@ Most of Phase 9 remains Codex implementation work. The human owner is needed onl
 | 9.0 | **You + Codex** | You create or secure the AWS account, enable MFA, establish the working identity, receive budget alerts, privately complete authentication, and approve the region and spending ceiling. Codex supplies guidance, repository configuration, checks, and documentation. |
 | 9.1 | **Codex** | No routine input after the Stage 9.0 choices; review only if a deployment choice changes scope or expected cost. |
 | 9.2 | **Codex, with your cloud-session approval** | Before cloud session 1, explicitly authorize the session and its budget and complete MFA or browser sign-in if AWS requests it. Codex provisions, validates, collects evidence, destroys, and verifies teardown. |
-| 9.3 | **Codex, with your cloud-session approval** | Approve cloud session 2 and its vertical-scaling cost ceiling after reviewing both EC2 configurations and complete any private authentication. |
+| 9.3 | **Codex, with your cloud-session approval** | Approve cloud session 2 and its infrastructure-scaling cost ceiling after reviewing all three EC2 configurations and complete any private authentication. |
 | 9.4 | **Codex** | No routine input; this is local application development and testing. |
 | 9.5 | **Codex, with your cloud-session approval** | Provide the same authorization and private authentication handoff for cloud session 3. |
 | 9.6–9.7 | **Codex, with your cloud-session approval** | Approve cloud session 4 and its experiment cost ceiling and complete any private authentication. Codex runs both treatments in the same session and tears everything down only after both result sets are secured. |
@@ -495,26 +497,27 @@ Use cloud session 1 to validate both Stages 9.1 and 9.2:
 
 RDS provides the stable managed data layer for the target architecture; it is setup for the elasticity experiment, not a separately benchmarked intervention.
 
-### Stage 9.3 — Test rapid vertical scaling before redesigning the application
+### Stage 9.3 — Demonstrate rapid infrastructure scaling before redesigning the application
 
 - [x] Define the causal comparison, fixed controls, evidence requirements, bottleneck interpretations, and honest stopping rules in `docs/aws-vertical-scaling-experiment.md`.
-- [x] Select `c8g.large` and `c8g.4xlarge` after confirming current Jakarta availability and public On-Demand Linux prices; freeze the non-burstable Graviton4 specifications, prices, and query timestamps in a validated machine-readable capacity artifact.
-- [x] Fix the co-located healthy downstream simulator at one CPU and 1 GiB in the shared Compose definition so it cannot inherit the larger treatment host's additional capacity; require observed headroom for a valid rate point.
-- [x] Restrict Terraform to the frozen `c8g.large` control and `c8g.4xlarge` treatment, default to the control, and reject unrelated or burstable instance types locally.
-- [x] Pass the selected EC2 treatment explicitly through every guarded cloud-session command, give it command-line precedence over ambient Terraform variables, and bind it into session evidence.
-- [ ] Hold the application image and revision, RDS instance and configuration, API process and connection-pool settings, benchmark driver, workload, and guardrails constant. The EC2 capacity is the only treatment variable.
+- [x] Select the `t4g.small` economical baseline, `c8g.large` workload-fit migration, and `c8g.4xlarge` within-family scale-up after confirming current Jakarta availability and public On-Demand Linux prices; freeze their specifications, burstability, prices, roles, and query timestamps in a validated artifact.
+- [x] Fix the co-located healthy downstream simulator at one CPU and 1 GiB in the shared Compose definition so it cannot inherit additional capacity from the larger host tiers; require observed headroom for a valid rate point.
+- [x] Restrict Terraform to the three frozen tiers, default to `t4g.small` with standard CPU credits, omit credit configuration from both non-burstable C8g tiers, and reject unrelated instance types locally.
+- [x] Pass the selected EC2 tier explicitly through every guarded cloud-session command, give it command-line precedence over ambient Terraform variables, and bind it into session evidence.
+- [ ] Hold the application image and revision, RDS instance and configuration, API process and connection-pool settings, benchmark driver, workload, and guardrails constant. Only the declared EC2 instance type changes; do not misstate the first cross-family transition as a CPU-only causal result.
 - [ ] Add aligned evidence for API process CPU and memory, EC2 CPU and any burst credits, RDS CPU, connections, memory and I/O latency, database-pool pressure, and downstream latency. Use measurement intervals long enough to identify the first constrained resource rather than relying on a short latency curve alone.
-- [ ] Automate the small-capacity run, evidence-preserving application reset, EC2 resize, large-capacity run, comparison report, and unconditional teardown. Do not use the earlier host-local-PostgreSQL result as the small-capacity control.
+- [ ] Automate all three runs, evidence-preserving resets, both EC2 transitions, a two-transition comparison report, and unconditional teardown. Do not use the earlier host-local-PostgreSQL result as the `t4g.small` RDS-backed baseline.
 
 Use cloud session 2 for the vertical-scaling experiment:
 
-- [ ] **You:** Explicitly authorize cloud session 2 after reviewing both EC2 configurations, every other resource, region, estimated duration, cost guardrail, and teardown command.
-- [ ] Provision the synchronous API against the fixed RDS configuration at the approved small EC2 capacity and run the healthy-downstream envelope.
-- [ ] Preserve the first result, reset experiment state, change only EC2 capacity, and replay the identical envelope.
-- [ ] Report the sustainable-rate change and the first observed bottleneck. If EC2 was not the constraint, preserve that result rather than resizing RDS or changing application concurrency inside the same comparison.
+- [ ] **You:** Explicitly authorize cloud session 2 after reviewing all three EC2 configurations, every other resource, region, estimated duration, cost guardrail, and teardown command.
+- [ ] Provision the synchronous API against fixed RDS on `t4g.small` and run the healthy-downstream envelope with CPU-credit evidence.
+- [ ] Preserve and reset experiment state, switch to `c8g.large`, verify unchanged controls, and replay the identical envelope.
+- [ ] Preserve and reset again, switch to `c8g.4xlarge`, verify unchanged controls, and replay the identical envelope.
+- [ ] Report X→Y as workload-fit hardware migration and Y→Z as within-family vertical scaling, alongside the first observed bottleneck at each tier.
 - [ ] Collect the complete comparison evidence, destroy the session-2 stack, and verify empty Terraform state plus zero native resource inventories.
 
-This result demonstrates rapid vertical scaling or hardware flexibility, not automatic elasticity. A separate evidence-backed database-resizing experiment would require its own single-variable plan and approval if RDS proves to be the constraint.
+This result demonstrates rapid hardware flexibility and vertical scaling, not automatic elasticity. A separate evidence-backed database-resizing experiment would require its own single-variable plan and approval if RDS proves to be the constraint.
 
 ### Stage 9.4 — Decouple downstream delivery with SQS and a worker
 

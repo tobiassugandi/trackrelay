@@ -1,10 +1,10 @@
 # TrackRelay AWS infrastructure
 
-This directory is the Terraform root module for TrackRelay's disposable AWS experiment environments. It defines the synchronous host and private RDS data layer first validated in Stages 9.1 and 9.2. For the Stage 9.3 vertical-scaling experiment, the host type is now restricted to the frozen `c8g.large` control and `c8g.4xlarge` treatment. No Stage 9.3 resources have been applied to AWS.
+This directory is the Terraform root module for TrackRelay's disposable AWS experiment environments. It defines the synchronous host and private RDS data layer first validated in Stages 9.1 and 9.2. For Stage 9.3, the host is restricted to the frozen `t4g.small` economical baseline, `c8g.large` workload-fit tier, and `c8g.4xlarge` within-family scale tier. No Stage 9.3 resources have been applied to AWS.
 
 The current module contains:
 
-- one `t4g.small` EC2 instance using the current ARM Amazon Linux 2023 AMI;
+- one EC2 instance using the current ARM Amazon Linux 2023 AMI, defaulting to `t4g.small` and restricted to the three Stage 9.3 tiers;
 - one encrypted 16 GiB gp3 root volume deleted with the instance;
 - one dedicated VPC, one public host subnet, and two isolated database subnets across separate Availability Zones, with an internet gateway but no NAT gateway;
 - one security group exposing only API port `8000` to an explicitly approved IPv4 `/32`, with no SSH ingress;

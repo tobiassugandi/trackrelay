@@ -109,7 +109,7 @@ variables {
   api_ingress_cidr = "203.0.113.10/32"
   aws_profile      = "trackrelay-admin"
   aws_region       = "ap-southeast-3"
-  session_id       = "cloud-session-1-20260824T090000Z"
+  session_id       = "cloud-session-4-20260824T090000Z"
 }
 
 run "rehost_is_small_and_disposable" {

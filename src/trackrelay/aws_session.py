@@ -18,7 +18,7 @@ from trackrelay.aws_teardown import (
 )
 
 SESSION_ID_PATTERN = compile_pattern(
-    r"^cloud-session-[123]-[0-9]{8}T[0-9]{6}Z$"
+    r"^cloud-session-[1234]-[0-9]{8}T[0-9]{6}Z$"
 )
 CommandRunner = Callable[[Sequence[str]], CompletedProcess[str]]
 NativeInventory = Callable[..., dict[str, int]]

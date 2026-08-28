@@ -81,6 +81,21 @@ def test_session_rejects_an_unstructured_identifier(tmp_path: Path) -> None:
         )
 
 
+def test_session_accepts_the_fourth_planned_cloud_session(
+    tmp_path: Path,
+) -> None:
+    session = AwsSession(
+        session_id="cloud-session-4-20260822T090000Z",
+        profile=PROFILE,
+        region=REGION,
+        api_ingress_cidr=API_INGRESS_CIDR,
+        terraform_dir=tmp_path,
+        evidence_root=tmp_path,
+    )
+
+    assert session.session_id == "cloud-session-4-20260822T090000Z"
+
+
 def test_plan_saves_exact_inputs_and_plan_identity(tmp_path: Path) -> None:
     session = make_session(tmp_path)
 

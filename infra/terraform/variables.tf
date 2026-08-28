@@ -25,7 +25,7 @@ variable "session_id" {
   validation {
     condition = can(
       regex(
-        "^cloud-session-[123]-[0-9]{8}T[0-9]{6}Z$",
+        "^cloud-session-[1234]-[0-9]{8}T[0-9]{6}Z$",
         var.session_id,
       )
     )

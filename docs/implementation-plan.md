@@ -384,7 +384,26 @@ The end product is one reproducible legacy curve and capacity number, not a coll
 
 ## Phase 9 — AWS modernization
 
-Goal: answer one cloud-specific question:
+Goal: demonstrate two progressively stronger cloud capabilities:
+
+1. **Rapid infrastructure flexibility:** can TrackRelay gain healthy-downstream
+   capacity by changing compute hardware without changing application code?
+2. **Automatic elasticity:** can TrackRelay acquire and release processing
+   capacity as demand changes while continuing to meet its latency, completion,
+   and correctness requirements?
+
+The first supporting result will be:
+
+> **With the application and RDS configuration held constant, changing only the
+> EC2 capacity changed the synchronous system's sustainable healthy-downstream
+> rate from X to Y events/s.**
+
+This vertical-scaling experiment answers the reasonable question, "Why not just
+use a bigger machine?" It must also identify the observed bottleneck. A larger
+EC2 instance is not assumed to help when the limiting resource is the database,
+the application connection pool, or downstream latency.
+
+The primary cloud-specific question remains:
 
 > **Can TrackRelay automatically acquire and release processing capacity as demand changes while continuing to meet its latency, completion, and correctness requirements?**
 
@@ -396,19 +415,20 @@ The primary figure will be one aligned time-series story: offered load rises and
 
 The causal experiment compares the same modernized AWS deployment with **worker autoscaling off** and **worker autoscaling on**. SQS, ECS task definitions, RDS, fixed API capacity, workload, SLO, and minimum worker count must remain the same. Only the worker-capacity policy changes. The asynchronous architecture is a prerequisite that makes delivery independently scalable; access to additional on-demand compute is the cloud capability being tested.
 
-The local legacy baseline remains important as the starting point and benchmark rehearsal, but it is not the denominator for the final X× elasticity claim. A local asynchronous implementation is optional and is not required for this experiment.
+The local legacy baseline remains important as the starting point and benchmark rehearsal, but it is not the denominator for either cloud claim. The vertical-scaling control must be rerun against RDS because the earlier 25 events/s cloud portability result used host-local PostgreSQL. A local asynchronous implementation is optional and is not required for the elasticity experiment.
 
 ### Phase 9 operating model
 
 AWS is **off by default**. Application code, container builds, experiment automation, and infrastructure definitions are developed and tested locally. AWS is used only for bounded validation or measurement sessions:
 
 1. **Cloud session 1 — synchronous migration:** validate Stages 9.1 and 9.2, collect evidence, then destroy the stack.
-2. **Cloud session 2 — asynchronous integration:** validate Stages 9.3 and 9.4 with tiny workloads, collect evidence, then destroy the stack.
-3. **Cloud session 3 — headline experiment:** provision once, run the Stage 9.5 fixed control and Stage 9.6 elastic treatment back-to-back, collect both result sets, then destroy the stack.
+2. **Cloud session 2 — vertical scaling:** run the RDS-backed synchronous system at two EC2 capacities, collect evidence, then destroy the stack.
+3. **Cloud session 3 — asynchronous integration:** validate Stages 9.4 and 9.5 with tiny workloads, collect evidence, then destroy the stack.
+4. **Cloud session 4 — headline experiment:** provision once, run the Stage 9.6 fixed control and Stage 9.7 elastic treatment back-to-back, collect both result sets, then destroy the stack.
 
 Infrastructure as code is the reproducible source of truth. The AWS console may be used to learn, inspect, and troubleshoot, but repeatable creation and teardown must come from the repository. Synthetic experiment resources are disposable: each cloud session must remove RDS, load balancers, ECS services and tasks, NAT gateways if used, and every other session-owned billable resource. Retain definitions and evidence, not idle infrastructure.
 
-Stages 9.5 and 9.6 are one controlled experiment session. Between them, reset application data and measurements but do not recreate infrastructure, deploy different code, change task definitions, resize the API or database, or move the load generator. The worker autoscaling policy is the only treatment variable.
+Stages 9.6 and 9.7 are one controlled experiment session. Between them, reset application data and measurements but do not recreate infrastructure, deploy different code, change task definitions, resize the API or database, or move the load generator. The worker autoscaling policy is the only treatment variable.
 
 ### Ownership and user handoffs
 
@@ -419,10 +439,11 @@ Most of Phase 9 remains Codex implementation work. The human owner is needed onl
 | 9.0 | **You + Codex** | You create or secure the AWS account, enable MFA, establish the working identity, receive budget alerts, privately complete authentication, and approve the region and spending ceiling. Codex supplies guidance, repository configuration, checks, and documentation. |
 | 9.1 | **Codex** | No routine input after the Stage 9.0 choices; review only if a deployment choice changes scope or expected cost. |
 | 9.2 | **Codex, with your cloud-session approval** | Before cloud session 1, explicitly authorize the session and its budget and complete MFA or browser sign-in if AWS requests it. Codex provisions, validates, collects evidence, destroys, and verifies teardown. |
-| 9.3 | **Codex** | No routine input; this is local application development and testing. |
-| 9.4 | **Codex, with your cloud-session approval** | Provide the same authorization and private authentication handoff for cloud session 2. |
-| 9.5–9.6 | **Codex, with your cloud-session approval** | Approve cloud session 3 and its experiment cost ceiling and complete any private authentication. Codex runs both treatments in the same session and tears everything down only after both result sets are secured. |
-| 9.7 | **Codex** | No required input unless you want to review or revise the final headline and presentation. |
+| 9.3 | **Codex, with your cloud-session approval** | Approve cloud session 2 and its vertical-scaling cost ceiling after reviewing both EC2 configurations and complete any private authentication. |
+| 9.4 | **Codex** | No routine input; this is local application development and testing. |
+| 9.5 | **Codex, with your cloud-session approval** | Provide the same authorization and private authentication handoff for cloud session 3. |
+| 9.6–9.7 | **Codex, with your cloud-session approval** | Approve cloud session 4 and its experiment cost ceiling and complete any private authentication. Codex runs both treatments in the same session and tears everything down only after both result sets are secured. |
+| 9.8 | **Codex** | No required input unless you want to review or revise the final headline and presentation. |
 
 You never need to send Codex an AWS password, MFA code, root credential, secret access key, or payment information. When interactive authentication is necessary, you enter it directly into AWS or the AWS CLI's browser flow. Before each cloud session, Codex must present the intended resources, region, estimated duration, cost guardrail, and teardown command; your ordinary `continue` is not sufficient authorization to begin incurring AWS charges unless it explicitly refers to that prepared session.
 
@@ -474,7 +495,24 @@ Use cloud session 1 to validate both Stages 9.1 and 9.2:
 
 RDS provides the stable managed data layer for the target architecture; it is setup for the elasticity experiment, not a separately benchmarked intervention.
 
-### Stage 9.3 — Decouple downstream delivery with SQS and a worker
+### Stage 9.3 — Test rapid vertical scaling before redesigning the application
+
+- [ ] Define a controlled RDS-backed synchronous experiment using the healthy downstream, the frozen workload semantics and SLO, and two approved EC2 capacities. Select the exact low/high pair only after checking Jakarta availability, non-burstable or CPU-credit behavior, and current price.
+- [ ] Hold the application image and revision, RDS instance and configuration, API process and connection-pool settings, downstream behavior and reserved capacity, benchmark driver, workload, and guardrails constant. The EC2 capacity is the only treatment variable.
+- [ ] Add aligned evidence for API process CPU and memory, EC2 CPU and any burst credits, RDS CPU, connections, memory and I/O latency, database-pool pressure, and downstream latency. Use measurement intervals long enough to identify the first constrained resource rather than relying on a short latency curve alone.
+- [ ] Automate the small-capacity run, evidence-preserving application reset, EC2 resize, large-capacity run, comparison report, and unconditional teardown. Do not use the earlier host-local-PostgreSQL result as the small-capacity control.
+
+Use cloud session 2 for the vertical-scaling experiment:
+
+- [ ] **You:** Explicitly authorize cloud session 2 after reviewing both EC2 configurations, every other resource, region, estimated duration, cost guardrail, and teardown command.
+- [ ] Provision the synchronous API against the fixed RDS configuration at the approved small EC2 capacity and run the healthy-downstream envelope.
+- [ ] Preserve the first result, reset experiment state, change only EC2 capacity, and replay the identical envelope.
+- [ ] Report the sustainable-rate change and the first observed bottleneck. If EC2 was not the constraint, preserve that result rather than resizing RDS or changing application concurrency inside the same comparison.
+- [ ] Collect the complete comparison evidence, destroy the session-2 stack, and verify empty Terraform state plus zero native resource inventories.
+
+This result demonstrates rapid vertical scaling or hardware flexibility, not automatic elasticity. A separate evidence-backed database-resizing experiment would require its own single-variable plan and approval if RDS proves to be the constraint.
+
+### Stage 9.4 — Decouple downstream delivery with SQS and a worker
 
 - [x] Define a small, versioned downstream-delivery job containing only its persisted event ID, a narrow queue publishing interface, and a deterministic recording fake.
 - [ ] Make ingestion persist and enqueue work through that interface.
@@ -484,58 +522,58 @@ RDS provides the stable managed data layer for the target architecture; it is se
 - [ ] Define durable acceptance precisely and confirm that a fast API response cannot hide lost work.
 - [ ] Add processing guardrails: every accepted event is accounted for, duplicate business effects remain zero, final shipment states are correct, and the queue drains by a documented deadline after offered load falls.
 
-### Stage 9.4 — Containerize on ECS/Fargate
+### Stage 9.5 — Containerize on ECS/Fargate
 
 - [ ] Build and test separate API, worker, and simulator images locally.
 - [ ] Define ECS/Fargate, ECR, SQS, dead-letter queue, RDS, networking, load balancing, secrets, and observability as code.
 - [ ] Define CloudWatch metrics for offered load, API p95 latency, request errors, running worker tasks, queue depth, and message age or processing lag.
 - [ ] Configure the API at a fixed, documented capacity with enough headroom that worker delivery capacity is the variable under test.
 
-Use cloud session 2 as a small integration checkpoint:
+Use cloud session 3 as a small integration checkpoint:
 
-- [ ] **You:** Explicitly authorize cloud session 2 after reviewing its resource list, region, estimated duration, cost guardrail, and teardown command.
+- [ ] **You:** Explicitly authorize cloud session 3 after reviewing its resource list, region, estimated duration, cost guardrail, and teardown command.
 - [ ] Provision the complete asynchronous stack and deploy the locally tested artifacts.
 - [ ] Exercise 1-, 10-, and 100-event workloads before attempting a performance experiment.
 - [ ] Verify the full path through the load balancer, API, RDS, SQS, worker, simulator, dead-letter queue, and CloudWatch.
 - [ ] Reconcile every accepted event and confirm that the new processing and drain guardrails work.
-- [ ] Collect integration evidence, destroy the complete session-2 stack, and verify the teardown.
+- [ ] Collect integration evidence, destroy the complete session-3 stack, and verify the teardown.
 
-### Stage 9.5 — Establish the fixed-capacity modernized control
+### Stage 9.6 — Establish the fixed-capacity modernized control
 
 - [ ] Make provision, fixed experiment, application-state reset, elastic experiment, result collection, and teardown reproducible through `make aws-up`, `make experiment-fixed`, `make experiment-reset`, `make experiment-elastic`, `make collect-results`, and `make aws-down` (or clearly documented equivalents).
-- [ ] Test the workload driver, reset procedure, metrics collection, reconciliation, and plot generation locally before starting cloud session 3.
-- [ ] **You:** Explicitly authorize cloud session 3 after reviewing its resource list, region, expected experiment duration, cost ceiling, and teardown command.
+- [ ] Test the workload driver, reset procedure, metrics collection, reconciliation, and plot generation locally before starting cloud session 4.
+- [ ] **You:** Explicitly authorize cloud session 4 after reviewing its resource list, region, expected experiment duration, cost ceiling, and teardown command.
 - [ ] Provision the final experiment environment once and record its immutable application and infrastructure versions.
 - [ ] Disable worker autoscaling and fix the worker tier at its documented minimum task count.
 - [ ] Run a stepped workload that rises beyond fixed worker capacity and later returns to the starting rate.
 - [ ] Define a sustainable end-to-end load using ingestion SLOs plus bounded backlog, completion, drain-deadline, and correctness guardrails; API latency alone is insufficient.
 - [ ] Freeze the fixed-control configuration and aligned time series in `results/aws-fixed-control/`.
-- [ ] Leave the deployment unchanged and continue directly into Stage 9.6; do not tear it down or redeploy it between treatments.
+- [ ] Leave the deployment unchanged and continue directly into Stage 9.7; do not tear it down or redeploy it between treatments.
 
-### Stage 9.6 — Enable and measure worker elasticity
+### Stage 9.7 — Enable and measure worker elasticity
 
 - [ ] Reset application data, queues, simulator state, and measurements without recreating or resizing the infrastructure.
 - [ ] Enable a documented worker scaling policy with the same minimum task count and a bounded maximum; use queue backlog or backlog per task as the demand signal.
 - [ ] Replay the fixed-control workload without changing the application, task definition, API capacity, database, simulator, benchmark driver, SLO, or guardrails.
 - [ ] Verify that workers scale from A to B as load rises, backlog remains bounded and drains, and workers return to A after demand falls.
 - [ ] Freeze the scaling policy, environment, raw aligned time series, reconciliation evidence, and summary in `results/aws-elastic-treatment/`.
-- [ ] Collect both treatments' evidence, destroy the complete session-3 stack, and verify the teardown.
+- [ ] Collect both treatments' evidence, destroy the complete session-4 stack, and verify the teardown.
 
-### Stage 9.7 — Publish the elasticity headline
+### Stage 9.8 — Publish the elasticity headline
 
 - [ ] Analyze the frozen results and build the report locally with AWS off.
 - [ ] Produce one large, aligned time-series figure comparing fixed and elastic runs across offered load, running worker tasks, queue depth or message age, and p95 latency with its 500 ms SLO line.
 - [ ] Report the highest demand step that satisfies every end-to-end guardrail in each run, the load multiplier, worker expansion A→B, time to scale out, backlog drain time, and return to A.
 - [ ] Put the figure and one-sentence elasticity result near the top of the repository README.
 - [ ] Explain the causal chain plainly: SQS exposes pending demand, autoscaling responds, ECS changes the worker count, and AWS supplies and releases compute without TrackRelay owning spare hardware.
-- [ ] Keep migration-stage measurements, fixed-resource architecture effects, and detailed guardrail evidence in the benchmark report rather than competing with the main result.
+- [ ] Present the Stage 9.3 vertical-scaling result as the clear first answer to "why not use a bigger machine?", then keep migration details and extensive guardrail evidence from competing with the primary elasticity result.
 
 ## Deferred follow-up results
 
 Only after the headline elasticity result is published:
 
 - [ ] Measure automatic delivery recovery and backlog drain after a downstream outage.
-- [ ] Compare fixed-resource throughput effects, CPU, memory, database utilization, AWS cost, and operational complexity.
+- [ ] Compare deeper cost efficiency, database scaling, resource utilization, and operational complexity after the controlled vertical and elastic results are established.
 - [ ] Publish secondary resilience and efficiency figures without diluting the primary result.
 
 ## Explicitly out of scope at the beginning

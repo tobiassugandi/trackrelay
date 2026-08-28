@@ -49,7 +49,9 @@ The hero figure will align offered load, running worker tasks, queue depth, and 
 
 The causal comparison will run the same queue-based AWS architecture twice: first with a fixed worker count and then with worker autoscaling enabled. SQS, ECS task definitions, RDS, the API capacity, workload, SLO, and minimum worker count will remain constant. Queue decoupling makes delivery independently scalable and exposes pending demand; autoscaling is the mechanism; AWS supplies and releases the underlying compute. Public cloud is not the only way to build an elastic platform, but it makes that capacity available on demand without TrackRelay's owner procuring and operating spare hardware beforehand.
 
-Phase 8 will still publish the local legacy latency-versus-load curve and capacity number. That is the project's first measurable end product and proves the benchmark and reconciliation machinery, but it is not the causal denominator for the final elasticity claim. Fixed-resource throughput, CPU, memory, cost, and outage recovery remain supporting or follow-up results rather than competing with the main story.
+Before that modernization, TrackRelay will run a smaller controlled cloud experiment: the same synchronous application, RDS configuration, healthy downstream, and workload on two EC2 capacities. This tests how much capacity can be gained by changing hardware without changing application code and identifies whether API compute is actually the bottleneck. It also answers why queue-based modernization is needed if vertical scaling succeeds only under a healthy dependency or fails to address the observed constraint.
+
+Phase 8 will still publish the local legacy latency-versus-load curve and capacity number. That is the project's first measurable end product and proves the benchmark and reconciliation machinery, but it is not the causal denominator for either cloud comparison. The vertical control must be rerun against RDS because the first cloud workload used host-local PostgreSQL.
 
 ### Local fixed-capacity reference
 
@@ -92,13 +94,14 @@ These are Phase 9 tools, not prerequisites for running the completed local synch
 
 ### Phase 9 working model
 
-AWS will remain off during ordinary development. TrackRelay code, container builds, experiment automation, and infrastructure definitions will be prepared locally; infrastructure as code will then create disposable environments for three bounded cloud sessions:
+AWS will remain off during ordinary development. TrackRelay code, container builds, experiment automation, and infrastructure definitions will be prepared locally; infrastructure as code will then create disposable environments for four bounded cloud sessions:
 
 1. Validate the synchronous rehost and RDS setup, then tear it down.
-2. Validate the SQS worker and ECS/Fargate integration with tiny workloads, then tear it down.
-3. Provision once, run the fixed-worker control and autoscaled-worker treatment back-to-back, collect the headline evidence, then tear it down.
+2. Compare the RDS-backed synchronous system at two EC2 capacities, then tear it down.
+3. Validate the SQS worker and ECS/Fargate integration with tiny workloads, then tear it down.
+4. Provision once, run the fixed-worker control and autoscaled-worker treatment back-to-back, collect the headline evidence, then tear it down.
 
-The third session is one controlled experiment: application and infrastructure versions, API and database capacity, task definitions, benchmark driver, workload, and guardrails stay unchanged. Application state is reset between runs, and only the worker autoscaling policy changes. Every cloud session ends by verifying that its RDS instances, load balancers, ECS resources, NAT gateways if used, and other session-owned billable resources were removed.
+The fourth session is one controlled experiment: application and infrastructure versions, API and database capacity, task definitions, benchmark driver, workload, and guardrails stay unchanged. Application state is reset between runs, and only the worker autoscaling policy changes. Every cloud session ends by verifying that its RDS instances, load balancers, ECS resources, NAT gateways if used, and other session-owned billable resources were removed.
 
 Before any infrastructure exists, verify the non-secret local AWS configuration:
 
@@ -176,6 +179,8 @@ The workload command runs all six frozen Step 8.6 rates from the approved local 
 `make aws-rds-correctness` is the next guarded checkpoint. It runs only after the RDS switch, executes the normal, duplicate, out-of-order, and downstream-outage scenarios from a one-off container inside the private Compose network, and saves one compact suite report under the ignored AWS session evidence directory. The report contains deterministic run identities, observed HTTP status codes, and reconciliation counts, but no database endpoint, credential, AWS account ID, or public API address.
 
 Cloud session 1 exercised this complete sequence against AWS in Jakarta. The synchronous rehost sustained 25 events/s under the frozen workload and first failed its SLO at 50 events/s. After the RDS switch, all four core correctness scenarios passed reconciliation. The complete stack was then destroyed; Terraform state and every native resource inventory were empty. These remain cloud-mutating commands and every future session still requires its own explicit approval. The [rehost architecture note](docs/aws-rehost-architecture.md) describes the full sequence and security boundary.
+
+Stage 9.3 will next recreate the synchronous API against the fixed RDS configuration and compare two EC2 capacities under a healthy downstream. The application image, RDS, application concurrency, workload, simulator behavior, driver, and guardrails will remain constant; only EC2 capacity will change. This produces the missing RDS-backed vertical-scaling control and identifies whether compute, database or pool pressure, or downstream waiting is the first constraint before TrackRelay introduces SQS.
 
 The Terraform root module in `infra/terraform` defines the Stage 9.1 rehost host and Stage 9.2 private RDS data layer: one ARM EC2 instance, a private single-AZ PostgreSQL instance, their disposable network, an ECR repository, RDS-managed credentials, and SSM access without SSH. The [rehost architecture note](docs/aws-rehost-architecture.md) explains the boundary and cost choices. Initialize its locked provider and run formatting, validation, and mocked plan assertions with:
 
@@ -560,4 +565,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The local synchronous implementation is complete and measured through Step 8.6. Its frozen reference sustains 250 events/s on the recorded machine and first fails at 500 events/s. Phase 9 begins next with Stage 9.0: prepare safe AWS access, budget guardrails, infrastructure-as-code foundations, and verified teardown before the first short cloud validation session.
+The local synchronous implementation is complete and measured through Step 8.6. Its frozen reference sustains 250 events/s on the recorded machine and first fails at 500 events/s. Phase 9 cloud session 1 has validated the synchronous rehost and RDS correctness and has been fully torn down. Stage 9.3 now prepares the controlled RDS-backed vertical-scaling experiment; the first queue boundary for Stage 9.4 is also complete.

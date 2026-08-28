@@ -1,6 +1,6 @@
 # AWS cloud-session checklist
 
-TrackRelay uses AWS only for three bounded validation or experiment sessions. This checklist is the contract for starting, operating, and closing each session. It applies even when a run fails or is interrupted.
+TrackRelay uses AWS only for four bounded validation or experiment sessions. This checklist is the contract for starting, operating, and closing each session. It applies even when a run fails or is interrupted.
 
 ## Ownership and approval gate
 
@@ -24,7 +24,7 @@ Approval must identify the session and its cost ceiling. A generic `continue` do
 Create one ID before planning infrastructure:
 
 ```text
-cloud-session-<1|2|3>-<UTC timestamp>
+cloud-session-<1|2|3|4>-<UTC timestamp>
 
 example: cloud-session-1-20260822T090000Z
 ```

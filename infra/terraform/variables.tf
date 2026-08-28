@@ -49,9 +49,19 @@ variable "api_ingress_cidr" {
 }
 
 variable "rehost_instance_type" {
-  description = "Cost-bounded ARM instance type for synchronous rehost validation."
+  description = "Frozen EC2 treatment for the synchronous vertical-scaling experiment."
   type        = string
-  default     = "t4g.small"
+  default     = "c8g.large"
+
+  validation {
+    condition = contains(
+      ["c8g.large", "c8g.4xlarge"],
+      var.rehost_instance_type,
+    )
+    error_message = (
+      "rehost_instance_type must be c8g.large or c8g.4xlarge."
+    )
+  }
 }
 
 variable "rehost_root_volume_gib" {

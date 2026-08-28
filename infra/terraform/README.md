@@ -1,6 +1,6 @@
 # TrackRelay AWS infrastructure
 
-This directory is the Terraform root module for TrackRelay's disposable AWS experiment environments. It currently defines the Stage 9.1 synchronous-rehost host and the private Stage 9.2 RDS data layer. It has not been applied to AWS.
+This directory is the Terraform root module for TrackRelay's disposable AWS experiment environments. It defines the synchronous host and private RDS data layer first validated in Stages 9.1 and 9.2. For the Stage 9.3 vertical-scaling experiment, the host type is now restricted to the frozen `c8g.large` control and `c8g.4xlarge` treatment. No Stage 9.3 resources have been applied to AWS.
 
 The current module contains:
 

@@ -139,10 +139,6 @@ resource "aws_instance" "rehost" {
   user_data_replace_on_change          = true
   vpc_security_group_ids               = [aws_security_group.rehost.id]
 
-  credit_specification {
-    cpu_credits = "standard"
-  }
-
   metadata_options {
     http_endpoint               = "enabled"
     http_protocol_ipv6          = "disabled"

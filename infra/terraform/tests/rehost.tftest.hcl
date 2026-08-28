@@ -112,17 +112,12 @@ variables {
   session_id       = "cloud-session-4-20260824T090000Z"
 }
 
-run "rehost_is_small_and_disposable" {
+run "vertical_scaling_control_is_fixed_and_disposable" {
   command = plan
 
   assert {
-    condition     = aws_instance.rehost.instance_type == "t4g.small"
-    error_message = "The rehost must use the cost-bounded ARM instance type."
-  }
-
-  assert {
-    condition     = aws_instance.rehost.credit_specification[0].cpu_credits == "standard"
-    error_message = "Burst-credit charges must be disabled."
+    condition     = aws_instance.rehost.instance_type == "c8g.large"
+    error_message = "The vertical-scaling control must use c8g.large."
   }
 
   assert {
@@ -164,4 +159,27 @@ run "rehost_is_small_and_disposable" {
     condition     = strcontains(aws_instance.rehost.user_data, "sha256sum --check")
     error_message = "The downloaded Compose binary must be checksum verified."
   }
+}
+
+run "vertical_scaling_treatment_is_the_only_larger_option" {
+  command = plan
+
+  variables {
+    rehost_instance_type = "c8g.4xlarge"
+  }
+
+  assert {
+    condition     = aws_instance.rehost.instance_type == "c8g.4xlarge"
+    error_message = "The vertical-scaling treatment must use c8g.4xlarge."
+  }
+}
+
+run "unapproved_instance_type_is_rejected" {
+  command = plan
+
+  variables {
+    rehost_instance_type = "c7g.4xlarge"
+  }
+
+  expect_failures = [var.rehost_instance_type]
 }

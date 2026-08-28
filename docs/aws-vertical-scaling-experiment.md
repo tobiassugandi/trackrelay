@@ -44,6 +44,11 @@ The price is public On-Demand Linux instance time only; it is not the complete
 session estimate. The catalog facts and their timestamps are frozen in
 `results/aws-vertical-scaling/ec2-capacity-selection.json`.
 
+Terraform defaults to the `c8g.large` control and rejects every instance type
+except the two frozen treatments. Because neither is burstable, the old T-family
+credit configuration is absent rather than being conditionally carried into the
+new experiment.
+
 The healthy downstream simulator shares the EC2 host with the API, but Compose
 now fixes it at one CPU and 1 GiB in both treatments. Resizing the host
 therefore does not silently give the simulated dependency additional compute or

@@ -202,6 +202,16 @@ need a separate single-variable plan and explicit cloud-session approval.
 Cloud session 2 will be prepared locally and must receive its own explicit cost
 approval before any resource is created:
 
+After the approved baseline deployment has passed RDS correctness,
+`make aws-scaling-prepare` performs no AWS API operation. It reads the guarded
+session record and clean Git revision, validates the deployed image and RDS
+facts against the committed controls, and writes a self-contained experiment
+definition. That definition embeds the full hardware selection and control
+models plus hashes of their source artifacts. Later tier runners must also save
+the exact driver-side start and end of each k6 execution; setup, reconciliation,
+CloudWatch publication waits, and other evidence collection are outside that
+load window.
+
 1. Provision the `t4g.small` baseline and fixed private RDS configuration.
 2. Deploy one immutable application image and verify RDS correctness.
 3. Run and freeze the economical baseline envelope and aligned evidence,

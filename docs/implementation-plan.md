@@ -498,7 +498,7 @@ RDS provides the stable managed data layer for the target architecture; it is se
 ### Stage 9.3 — Test rapid vertical scaling before redesigning the application
 
 - [x] Define the causal comparison, fixed controls, evidence requirements, bottleneck interpretations, and honest stopping rules in `docs/aws-vertical-scaling-experiment.md`.
-- [ ] Select the exact low/high EC2 pair only after checking current Jakarta availability, non-burstable or CPU-credit behavior, and price; freeze those facts in a machine-readable experiment definition.
+- [x] Select `c8g.large` and `c8g.4xlarge` after confirming current Jakarta availability and public On-Demand Linux prices; freeze the non-burstable Graviton4 specifications, prices, and query timestamps in a validated machine-readable capacity artifact.
 - [ ] Hold the application image and revision, RDS instance and configuration, API process and connection-pool settings, downstream behavior and reserved capacity, benchmark driver, workload, and guardrails constant. The EC2 capacity is the only treatment variable.
 - [ ] Add aligned evidence for API process CPU and memory, EC2 CPU and any burst credits, RDS CPU, connections, memory and I/O latency, database-pool pressure, and downstream latency. Use measurement intervals long enough to identify the first constrained resource rather than relying on a short latency curve alone.
 - [ ] Automate the small-capacity run, evidence-preserving application reset, EC2 resize, large-capacity run, comparison report, and unconditional teardown. Do not use the earlier host-local-PostgreSQL result as the small-capacity control.

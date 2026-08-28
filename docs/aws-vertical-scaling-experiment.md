@@ -31,11 +31,18 @@ them.
 | Workload, driver, route, duration, and SLO | Same | Same |
 | Experiment state | Fresh identity namespace | Fresh identity namespace |
 
-The EC2 instance type is the only treatment variable. The exact pair remains
-unset until a read-only AWS query confirms current Jakarta availability and a
-current price check supports the session proposal. The pair should avoid
-burst-credit ambiguity where practical. If a burstable control is retained,
-credit balance and credit use become required evidence.
+The EC2 instance type is the only treatment variable. Read-only EC2 and Price
+List API queries on 2026-08-28 selected this pair:
+
+- control: `c8g.large`, 2 vCPUs, 4 GiB, USD 0.09163 per hour;
+- treatment: `c8g.4xlarge`, 16 vCPUs, 32 GiB, USD 0.73304 per hour.
+
+Both are current Jakarta offerings from the same non-burstable Graviton4
+compute-optimized family. The treatment provides eight times the vCPUs and
+memory without introducing CPU-credit or processor-generation differences.
+The price is public On-Demand Linux instance time only; it is not the complete
+session estimate. The catalog facts and their timestamps are frozen in
+`results/aws-vertical-scaling/ec2-capacity-selection.json`.
 
 The healthy downstream simulator currently shares the EC2 host with the API.
 Before measurement, its CPU and memory allowance must be fixed identically in
@@ -112,4 +119,6 @@ approval before any resource is created:
 
 AWS remains off during ordinary implementation. Read-only availability and price
 queries do not authorize provisioning, and an ordinary `continue` does not
-authorize cloud session 2.
+authorize cloud session 2. Region-level offering evidence also does not guarantee
+that EC2 will have capacity in a particular Availability Zone when the approved
+session begins.

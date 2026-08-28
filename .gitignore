@@ -32,6 +32,8 @@ crash.*.log
 results/*
 !results/legacy-baseline/
 !results/legacy-baseline/**
+!results/aws-vertical-scaling/
+!results/aws-vertical-scaling/**
 
 # Operating-system metadata
 .DS_Store

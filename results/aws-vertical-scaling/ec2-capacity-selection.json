@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "name": "aws-synchronous-vertical-scaling-capacity-v1",
+  "aws_region": "ap-southeast-3",
+  "pricing_location": "Asia Pacific (Jakarta)",
+  "operating_system": "Linux",
+  "tenancy": "Shared",
+  "purchase_option": "OnDemand",
+  "availability_source": "ec2:DescribeInstanceTypeOfferings",
+  "pricing_source": "pricing:GetProducts",
+  "availability_checked_at": "2026-08-28T15:13:51Z",
+  "price_catalog_publication_at": "2026-08-27T17:45:43Z",
+  "price_catalog_version": "20260827174543",
+  "control": {
+    "instance_type": "c8g.large",
+    "architecture": "arm64",
+    "processor": "AWS Graviton4 Processor",
+    "vcpu_count": 2,
+    "memory_mib": 4096,
+    "network_performance": "Up to 12.5 Gigabit",
+    "burstable_performance": false,
+    "on_demand_linux_price_usd_per_hour": "0.0916300000"
+  },
+  "treatment": {
+    "instance_type": "c8g.4xlarge",
+    "architecture": "arm64",
+    "processor": "AWS Graviton4 Processor",
+    "vcpu_count": 16,
+    "memory_mib": 32768,
+    "network_performance": "Up to 15 Gigabit",
+    "burstable_performance": false,
+    "on_demand_linux_price_usd_per_hour": "0.7330400000"
+  }
+}

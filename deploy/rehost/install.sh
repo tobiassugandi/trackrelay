@@ -50,6 +50,8 @@ runtime_environment_temporary="$(mktemp "${deployment_directory}/.env.XXXXXX")"
     printf 'POSTGRES_USER=trackrelay\n'
     printf 'POSTGRES_PASSWORD=%s\n' "${database_password}"
     printf 'TRACKRELAY_DATABASE_URL=postgresql+psycopg://trackrelay:%s@postgres:5432/trackrelay\n' "${database_password}"
+    printf 'TRACKRELAY_DATABASE_POOL_SIZE=5\n'
+    printf 'TRACKRELAY_DATABASE_MAX_OVERFLOW=10\n'
     printf 'TRACKRELAY_DOWNSTREAM_TIMEOUT_SECONDS=5.0\n'
 } >"${runtime_environment_temporary}"
 chmod 0600 "${runtime_environment_temporary}"

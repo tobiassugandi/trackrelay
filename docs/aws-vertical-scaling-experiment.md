@@ -65,6 +65,15 @@ memory. The experiment is valid only while its observed CPU, memory, latency,
 and error evidence confirms that it retains headroom. Simulator saturation makes
 a rate diagnostic rather than evidence of the API host's capacity.
 
+Every non-hardware control is frozen in the validated
+`results/aws-vertical-scaling/experiment-controls.json` artifact. The deployed
+API uses one process, disables access logging, and explicitly configures a
+five-connection SQLAlchemy pool with ten overflow connections and connection
+pre-ping. The simulator also disables access logging. The deployment scripts
+write those values into the private runtime environment instead of inheriting
+library defaults. RDS remains `db.t4g.micro`, PostgreSQL 17, single-AZ, with
+20 GiB of gp3 storage and one unchanged session parameter group.
+
 ## Workload and acceptance
 
 The experiment reuses the Step 8.6 workload shape, offered-rate ladder,
@@ -72,9 +81,13 @@ reconciliation invariants, and initial SLO. Every request represents one unique
 shipment in the `CREATED` state. Each rate is evaluated independently; a higher
 rate cannot restore the performance envelope after the first failing rate.
 
-The exact tier duration may be longer than the ten-second portability rehearsal.
-It must provide at least three samples at the slowest required resource-metric
-interval. The same frozen duration is used for all three tiers.
+The ten-second portability rehearsal is too short for aligned AWS resource
+metrics. Stage 9.3 freezes each rate at 180 seconds, providing at least three
+samples even when the slowest accepted measurement period is one minute. The
+same duration, rate ladder, random seed, k6 image, driver placement, workload
+shape, and guardrails apply to all three tiers. The control loader also hashes
+the committed Step 8.6 benchmark definition and refuses to run against a changed
+source artifact.
 
 A rate passes only when all of these remain true:
 

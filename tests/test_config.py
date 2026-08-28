@@ -10,6 +10,8 @@ def test_settings_load_prefixed_environment_variables(monkeypatch: MonkeyPatch) 
     monkeypatch.setenv("TRACKRELAY_ENVIRONMENT", "test")
     monkeypatch.setenv("TRACKRELAY_DEBUG", "true")
     monkeypatch.setenv("TRACKRELAY_DATABASE_URL", "sqlite+pysqlite:///:memory:")
+    monkeypatch.setenv("TRACKRELAY_DATABASE_POOL_SIZE", "7")
+    monkeypatch.setenv("TRACKRELAY_DATABASE_MAX_OVERFLOW", "3")
     monkeypatch.setenv("TRACKRELAY_DOWNSTREAM_URL", "http://downstream.test")
     monkeypatch.setenv("TRACKRELAY_DOWNSTREAM_TIMEOUT_SECONDS", "2.5")
 
@@ -19,5 +21,7 @@ def test_settings_load_prefixed_environment_variables(monkeypatch: MonkeyPatch) 
     assert settings.environment == "test"
     assert settings.debug is True
     assert settings.database_url == "sqlite+pysqlite:///:memory:"
+    assert settings.database_pool_size == 7
+    assert settings.database_max_overflow == 3
     assert settings.downstream_url == "http://downstream.test"
     assert settings.downstream_timeout_seconds == 2.5

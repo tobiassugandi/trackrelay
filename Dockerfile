@@ -49,4 +49,4 @@ HEALTHCHECK --interval=10s --timeout=2s --start-period=5s --retries=3 \
 
 STOPSIGNAL SIGTERM
 
-CMD ["uvicorn", "trackrelay.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "trackrelay.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]

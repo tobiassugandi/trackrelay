@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "name": "aws-synchronous-infrastructure-scaling-controls-v1",
+  "only_changed_deployment_input": "ec2-instance-type",
+  "tier_order": [
+    "t4g.small",
+    "c8g.large",
+    "c8g.4xlarge"
+  ],
+  "experiment_state": "fresh-identity-namespace-per-tier",
+  "application": {
+    "revision_identity": "same-committed-git-revision",
+    "image_identity": "same-ecr-sha256-digest",
+    "architecture": "synchronous",
+    "api_process_count": 1,
+    "api_access_log_enabled": false,
+    "database_pool_size": 5,
+    "database_max_overflow": 10,
+    "database_pool_pre_ping": true,
+    "downstream_timeout_seconds": 5.0
+  },
+  "rds": {
+    "placement": "same-private-rds-instance",
+    "engine_major_version": "17",
+    "instance_class": "db.t4g.micro",
+    "allocated_storage_gib": 20,
+    "storage_type": "gp3",
+    "multi_az": false,
+    "parameter_group_identity": "same-session-parameter-group"
+  },
+  "downstream": {
+    "mode": "healthy",
+    "process_count": 1,
+    "cpu_limit": 1.0,
+    "memory_limit_mib": 1024,
+    "access_log_enabled": false
+  },
+  "workload": {
+    "source_workload": "legacy-local-baseline-v1",
+    "source_benchmark_definition_sha256": "ff381408bd5f53a6a1632f4a3fec6b648af2bccd4a781b53b738e2fab90039ee",
+    "shape": "one-created-event-per-shipment",
+    "offered_rates_per_second": [
+      10,
+      25,
+      50,
+      100,
+      250,
+      500
+    ],
+    "tier_duration_seconds": 180,
+    "random_seed": 20260806,
+    "partner_id": "load-alpha",
+    "k6_image": "grafana/k6:2.1.0",
+    "benchmark_driver_identity": "same-host-and-container-image",
+    "p95_latency_limit_ms": 500.0,
+    "request_error_rate_limit": 0.01,
+    "unaccounted_events_required": 0,
+    "duplicate_business_effects_required": 0,
+    "final_shipment_states_must_match": true
+  }
+}

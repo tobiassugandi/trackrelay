@@ -33,9 +33,13 @@ COMMAND_ID = "11111111-2222-3333-4444-555555555555"
 RDS_INSTALLER = (
     Path(__file__).resolve().parents[1] / "deploy" / "rehost" / "install-rds.sh"
 )
+REHOST_INSTALLER = (
+    Path(__file__).resolve().parents[1] / "deploy" / "rehost" / "install.sh"
+)
 REHOST_COMPOSE = (
     Path(__file__).resolve().parents[1] / "deploy" / "rehost" / "compose.yaml"
 )
+DOCKERFILE = Path(__file__).resolve().parents[1] / "Dockerfile"
 
 
 def completed(
@@ -89,6 +93,23 @@ def test_downstream_capacity_is_fixed_independently_of_the_ec2_host() -> None:
 
     assert "\n    cpus: 1.0\n" in downstream_service
     assert "\n    mem_limit: 1g\n" in downstream_service
+
+
+def test_scaling_runtime_controls_are_explicit_in_deployment_files() -> None:
+    compose = REHOST_COMPOSE.read_text(encoding="utf-8")
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+
+    assert "TRACKRELAY_DATABASE_POOL_SIZE: ${TRACKRELAY_DATABASE_POOL_SIZE:-5}" in compose
+    assert (
+        "TRACKRELAY_DATABASE_MAX_OVERFLOW: "
+        "${TRACKRELAY_DATABASE_MAX_OVERFLOW:-10}"
+    ) in compose
+    assert compose.count("--no-access-log") == 1
+    assert '"--no-access-log"]' in dockerfile
+    for installer_path in (REHOST_INSTALLER, RDS_INSTALLER):
+        installer = installer_path.read_text(encoding="utf-8")
+        assert "TRACKRELAY_DATABASE_POOL_SIZE=5" in installer
+        assert "TRACKRELAY_DATABASE_MAX_OVERFLOW=10" in installer
 
 
 def test_rds_installer_waits_for_readiness_after_api_restart() -> None:

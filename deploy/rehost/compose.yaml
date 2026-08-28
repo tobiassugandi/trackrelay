@@ -13,6 +13,8 @@ x-application: &application
 
 x-application-environment: &application-environment
   TRACKRELAY_DATABASE_URL: ${TRACKRELAY_DATABASE_URL:?TRACKRELAY_DATABASE_URL must be set}
+  TRACKRELAY_DATABASE_MAX_OVERFLOW: ${TRACKRELAY_DATABASE_MAX_OVERFLOW:-10}
+  TRACKRELAY_DATABASE_POOL_SIZE: ${TRACKRELAY_DATABASE_POOL_SIZE:-5}
   TRACKRELAY_DEBUG: "false"
   TRACKRELAY_ENVIRONMENT: production
 
@@ -63,6 +65,7 @@ services:
       - 0.0.0.0
       - --port
       - "8001"
+      - --no-access-log
     healthcheck:
       test:
         - CMD

@@ -13,9 +13,20 @@ class Base(DeclarativeBase):
     """Base class whose metadata Alembic uses for migrations."""
 
 
-def create_database_engine(database_url: str) -> Engine:
+def create_database_engine(
+    database_url: str,
+    *,
+    pool_size: int = 5,
+    max_overflow: int = 10,
+) -> Engine:
     """Create an engine without opening a database connection yet."""
-    return create_engine(database_url, pool_pre_ping=True)
+    engine_arguments: dict[str, object] = {"pool_pre_ping": True}
+    if database_url.startswith("postgresql"):
+        engine_arguments.update(
+            pool_size=pool_size,
+            max_overflow=max_overflow,
+        )
+    return create_engine(database_url, **engine_arguments)
 
 
 def create_session_factory(database_engine: Engine) -> sessionmaker[Session]:
@@ -24,7 +35,11 @@ def create_session_factory(database_engine: Engine) -> sessionmaker[Session]:
 
 
 settings = Settings()
-engine = create_database_engine(settings.database_url)
+engine = create_database_engine(
+    settings.database_url,
+    pool_size=settings.database_pool_size,
+    max_overflow=settings.database_max_overflow,
+)
 session_factory = create_session_factory(engine)
 
 

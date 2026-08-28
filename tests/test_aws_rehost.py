@@ -87,7 +87,7 @@ def test_downstream_capacity_is_fixed_independently_of_the_ec2_host() -> None:
     )[0]
 
     assert "\n    cpus: 1.0\n" in downstream_service
-    assert "\n    mem_limit: 256m\n" in downstream_service
+    assert "\n    mem_limit: 1g\n" in downstream_service
 
 
 def test_rds_installer_waits_for_readiness_after_api_restart() -> None:

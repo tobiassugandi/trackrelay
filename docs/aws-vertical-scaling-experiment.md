@@ -45,10 +45,11 @@ session estimate. The catalog facts and their timestamps are frozen in
 `results/aws-vertical-scaling/ec2-capacity-selection.json`.
 
 The healthy downstream simulator shares the EC2 host with the API, but Compose
-now fixes it at one CPU and 256 MiB in both treatments. Resizing the host
+now fixes it at one CPU and 1 GiB in both treatments. Resizing the host
 therefore does not silently give the simulated dependency additional compute or
-memory. Its behavior, resource use, and observed response latency must still be
-recorded so simulator saturation cannot be mistaken for an API limit.
+memory. The experiment is valid only while its observed CPU, memory, latency,
+and error evidence confirms that it retains headroom. Simulator saturation makes
+a rate diagnostic rather than evidence of the API host's capacity.
 
 ## Workload and acceptance
 
@@ -99,6 +100,8 @@ unrelated summaries.
   synchronous downstream waiting as the architectural constraint.
 - Ambiguous or missing resource evidence makes the run diagnostic, not a
   publishable causal result.
+- Downstream simulator saturation invalidates attribution at that rate; adding
+  EC2 capacity to TrackRelay cannot be credited for a constrained dependency.
 
 An evidence-backed RDS-resizing experiment may be proposed later, but it would
 need a separate single-variable plan and explicit cloud-session approval.

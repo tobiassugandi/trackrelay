@@ -29,3 +29,8 @@ output "rds_resolved_engine_version" {
   description = "Concrete PostgreSQL minor selected by the saved Terraform plan."
   value       = data.aws_rds_engine_version.postgres.version_actual
 }
+
+output "rds_identifier" {
+  description = "Non-secret RDS identifier used to select CloudWatch metrics."
+  value       = aws_db_instance.postgres.identifier
+}

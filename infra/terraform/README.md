@@ -4,7 +4,7 @@ This directory is the Terraform root module for TrackRelay's disposable AWS expe
 
 The current module contains:
 
-- one EC2 instance using the current ARM Amazon Linux 2023 AMI, defaulting to `t4g.small` and restricted to the three Stage 9.3 tiers;
+- one EC2 instance using the current ARM Amazon Linux 2023 AMI, defaulting to `t4g.small`, restricted to the three Stage 9.3 tiers, and using detailed monitoring for one-minute experiment evidence;
 - one encrypted 16 GiB gp3 root volume deleted with the instance;
 - one dedicated VPC, one public host subnet, and two isolated database subnets across separate Availability Zones, with an internet gateway but no NAT gateway;
 - one security group exposing only API port `8000` to an explicitly approved IPv4 `/32`, with no SSH ingress;
@@ -57,5 +57,10 @@ After an approved `aws-up`, `make aws-rehost-publish` builds and pushes only Lin
 After the host-local frozen workload is collected, `make aws-rds-deploy` discovers the private endpoint and RDS-managed secret from the EC2 instance, builds a TLS-required database URL in host memory, migrates RDS, recreates the API, and verifies ingestion plus persistence across an API restart. The SSM payload and local session evidence contain neither the endpoint nor credential. The on-host runtime env file is mode `0600`.
 
 The provider reads credentials from the private AWS CLI profile selected by Terraform input. Credentials and local `*.tfvars` files must not be committed. Terraform state can contain sensitive values and is also excluded from Git.
+
+EC2 detailed monitoring is a deliberate Stage 9.3 measurement input and must be
+included in the cloud-session cost review. CPU-credit metrics retain their
+native five-minute resolution; enabling detailed monitoring does not justify
+reporting them as one-minute data.
 
 Every future resource inherits `Project=TrackRelay`, `Environment=experiment`, `ManagedBy=terraform`, and a unique `SessionId` tag. The session ID connects the Terraform state, AWS-side inventory, experiment evidence, and teardown proof for one bounded cloud session. See the [cloud-session checklist](../../docs/aws-cloud-session-checklist.md) for the required lifecycle.

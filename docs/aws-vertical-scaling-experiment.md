@@ -149,6 +149,29 @@ outcome counts, p95 latency, and maximum latency. This distinguishes simulator
 pressure from API work while keeping the measurement interval fixed across all
 hardware tiers.
 
+AWS documents that [EC2 detailed monitoring](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/manage-detailed-monitoring.html)
+provides one-minute metrics and incurs metric charges. It is enabled for Stage
+9.3 so host CPU and network data can be queried at 60-second resolution. The
+same batched CloudWatch query also
+collects 60-second RDS CPU, connection, minimum-free-memory, read/write latency,
+and read/write IOPS series. Each saved series carries the experiment run ID,
+hardware treatment, UTC load boundaries, statistic, unit, native period, and
+the number of seconds each AWS bucket actually overlaps the load. EC2 and RDS
+resource identifiers are used only as query dimensions and are not persisted in
+the portable evidence.
+
+AWS publishes [T-family CPU-credit metrics](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/viewing_metrics_with_cloudwatch.html#ec2-cloudwatch-metrics)
+in five-minute buckets, even when EC2 detailed monitoring is enabled. The
+`t4g.small` treatment therefore collects
+`CPUCreditUsage` and `CPUCreditBalance` at their native 300-second period and
+records their exact overlap with the 180-second load window. It does not
+mislabel those buckets as per-minute observations or apportion a whole-bucket
+credit value to only its overlapping seconds. Both C8g treatments omit credit
+queries because they are non-burstable. The collector polls for a bounded ten
+minutes after a load so the final five-minute bucket can close and be published;
+it rejects the rate as incomplete evidence if any required series remains
+absent.
+
 ## Interpretation and stopping rules
 
 - The `t4g.small` to `c8g.large` result may be described only as a workload-fit

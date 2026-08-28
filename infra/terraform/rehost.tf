@@ -133,7 +133,7 @@ resource "aws_instance" "rehost" {
   iam_instance_profile                 = aws_iam_instance_profile.rehost.name
   instance_initiated_shutdown_behavior = "terminate"
   instance_type                        = var.rehost_instance_type
-  monitoring                           = false
+  monitoring                           = true
   subnet_id                            = aws_subnet.rehost_public.id
   user_data                            = file("${path.module}/bootstrap/rehost.sh")
   user_data_replace_on_change          = true

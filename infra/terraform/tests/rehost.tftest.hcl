@@ -126,6 +126,11 @@ run "economical_baseline_is_burstable_and_disposable" {
   }
 
   assert {
+    condition     = aws_instance.rehost.monitoring
+    error_message = "Stage 9.3 requires one-minute EC2 resource evidence."
+  }
+
+  assert {
     condition     = aws_instance.rehost.root_block_device[0].volume_size == 16
     error_message = "The ephemeral root volume must stay at 16 GiB."
   }

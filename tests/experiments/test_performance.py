@@ -1,5 +1,6 @@
 """Tests for local performance-experiment preparation."""
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
 
@@ -13,9 +14,16 @@ from trackrelay.experiments.performance import (
     PerformanceExperimentConfiguration,
     build_k6_command,
     build_performance_manifest,
+    derive_performance_result,
     prepare_load_partner,
 )
+from trackrelay.experiments.reconciliation import ReconciliationReport
 from trackrelay.models import Partner
+from trackrelay.runtime_metrics import (
+    DatabasePoolMetrics,
+    LogicalCpuTimes,
+    RuntimeMetricsSnapshot,
+)
 
 TEST_RUN_ID = UUID("00000000-0000-0000-0000-000000000805")
 
@@ -192,3 +200,126 @@ def test_k6_command_mounts_the_manifest_and_run_directory() -> None:
     assert f"{manifest_path.resolve()}:/input-manifest.json:ro" in command
     assert f"{run_directory.resolve()}:/results" in command
     assert command[-2:] == ("run", "/scripts/fixed-rate.js")
+
+
+def runtime_sample(
+    *,
+    captured_at: datetime,
+    process_cpu_seconds: float,
+    checked_out: int,
+    available_memory: int,
+    cpu0_total: float,
+    cpu0_idle: float,
+    cpu1_total: float,
+    cpu1_idle: float,
+) -> RuntimeMetricsSnapshot:
+    return RuntimeMetricsSnapshot(
+        captured_at=captured_at,
+        process_id=7,
+        process_cpu_seconds=process_cpu_seconds,
+        process_max_rss_bytes=1024,
+        python_thread_count=7,
+        logical_cpu_count_available=2,
+        gil_enabled=True,
+        host_logical_cpu_times=(
+            LogicalCpuTimes(
+                cpu_index=0,
+                total_seconds=cpu0_total,
+                idle_seconds=cpu0_idle,
+            ),
+            LogicalCpuTimes(
+                cpu_index=1,
+                total_seconds=cpu1_total,
+                idle_seconds=cpu1_idle,
+            ),
+        ),
+        host_memory_total_bytes=2000,
+        host_memory_available_bytes=available_memory,
+        database_pool=DatabasePoolMetrics(
+            checked_out=checked_out,
+            checked_in=5,
+            pool_size=5,
+            overflow=max(0, checked_out - 5),
+            max_overflow=10,
+        ),
+    )
+
+
+def test_result_distinguishes_productive_throughput_from_resource_work() -> None:
+    started_at = datetime(2026, 8, 29, tzinfo=UTC)
+    samples = (
+        runtime_sample(
+            captured_at=started_at,
+            process_cpu_seconds=1,
+            checked_out=1,
+            available_memory=1000,
+            cpu0_total=100,
+            cpu0_idle=80,
+            cpu1_total=100,
+            cpu1_idle=90,
+        ),
+        runtime_sample(
+            captured_at=started_at + timedelta(seconds=10),
+            process_cpu_seconds=5,
+            checked_out=5,
+            available_memory=800,
+            cpu0_total=110,
+            cpu0_idle=84,
+            cpu1_total=110,
+            cpu1_idle=99,
+        ),
+    )
+    configuration = PerformanceExperimentConfiguration(
+        scenario=LoadScenario.HEALTHY,
+        request_rate_per_second=10,
+        duration_seconds=10,
+    )
+    reconciliation = ReconciliationReport(
+        test_run_id=TEST_RUN_ID,
+        generated=100,
+        accepted=100,
+        rejected=0,
+        unique=100,
+        processed=100,
+        failed=0,
+        pending=0,
+        unaccounted=0,
+        simulator_receipts=100,
+        simulator_unique_events=100,
+    )
+    summary = {
+        "metrics": {
+            "http_req_duration": {"values": {"p(95)": 20}},
+            "http_req_failed": {"values": {"rate": 0}},
+            "http_reqs": {"values": {"count": 100, "rate": 10}},
+            "dropped_iterations": {"values": {"count": 0}},
+        }
+    }
+
+    passing = derive_performance_result(
+        configuration,
+        test_run_id=TEST_RUN_ID,
+        k6_exit_code=0,
+        k6_summary=summary,
+        resource_samples=samples,
+        reconciliation=reconciliation,
+    )
+    overloaded = derive_performance_result(
+        configuration,
+        test_run_id=TEST_RUN_ID,
+        k6_exit_code=99,
+        k6_summary=summary,
+        resource_samples=samples,
+        reconciliation=reconciliation,
+    )
+
+    assert passing.process_average_cpu_cores_used == 0.4
+    assert passing.process_average_cpu_capacity_utilization == 0.2
+    assert passing.host_per_cpu_average_utilization == (0.6, 0.1)
+    assert passing.host_average_cpu_utilization == 0.35
+    assert passing.host_minimum_memory_available_bytes == 800
+    assert passing.maximum_database_pool_capacity == 15
+    assert passing.maximum_database_pool_utilization == 1 / 3
+    assert passing.productive_throughput_per_second == 10
+    assert overloaded.process_average_cpu_cores_used == 0.4
+    assert overloaded.productive_throughput_per_second == 0

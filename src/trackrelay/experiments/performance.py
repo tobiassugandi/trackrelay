@@ -57,6 +57,7 @@ PositiveInteger = Annotated[int, Field(gt=0)]
 PositiveFloat = Annotated[float, Field(gt=0)]
 NonNegativeFloat = Annotated[float, Field(ge=0)]
 NonNegativeInteger = Annotated[int, Field(ge=0)]
+Rate = Annotated[float, Field(ge=0, le=1)]
 
 
 class LoadScenario(StrEnum):
@@ -140,7 +141,7 @@ class RuntimeMetricsSamples(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     test_run_id: UUID
     samples: tuple[RuntimeMetricsSnapshot, ...]
 
@@ -150,7 +151,7 @@ class PerformanceExperimentResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     test_run_id: UUID
     configuration: PerformanceExperimentConfiguration
     k6_exit_code: int
@@ -159,10 +160,21 @@ class PerformanceExperimentResult(BaseModel):
     observed_request_rate_per_second: NonNegativeFloat
     p95_response_latency_ms: NonNegativeFloat
     request_error_rate: Annotated[float, Field(ge=0, le=1)]
+    process_id: PositiveInteger
     process_cpu_seconds_used: NonNegativeFloat
+    process_average_cpu_cores_used: NonNegativeFloat
+    process_available_cpu_count: PositiveInteger
+    process_average_cpu_capacity_utilization: Rate
+    maximum_python_thread_count: PositiveInteger
+    gil_enabled: bool
     process_max_rss_bytes_observed: NonNegativeInteger
+    host_per_cpu_average_utilization: tuple[Rate, ...]
+    host_average_cpu_utilization: Rate | None
+    host_minimum_memory_available_bytes: NonNegativeInteger | None
     maximum_database_connections_open: NonNegativeInteger
     maximum_database_connections_checked_out: NonNegativeInteger
+    maximum_database_pool_capacity: NonNegativeInteger | None
+    maximum_database_pool_utilization: Rate | None
     downstream_delivery_rate_per_second: NonNegativeFloat
     downstream_delivery_receipts_per_accepted_event: NonNegativeFloat
     reconciliation: ReconciliationReport
@@ -182,6 +194,16 @@ class PerformanceExperimentResult(BaseModel):
     @property
     def complete_experiment_passed(self) -> bool:
         return self.execution_valid and self.slo.experiment_passed
+
+    @computed_field
+    @property
+    def productive_throughput_per_second(self) -> float:
+        """Count throughput only when every execution and SLO guardrail passes."""
+        return (
+            self.observed_request_rate_per_second
+            if self.complete_experiment_passed
+            else 0.0
+        )
 
 
 @dataclass(frozen=True)
@@ -370,6 +392,23 @@ def derive_performance_result(
     """Interpret portable k6, runtime, and reconciliation evidence."""
     if not resource_samples:
         raise ValueError("at least one runtime metrics sample is required")
+    process_ids = {sample.process_id for sample in resource_samples}
+    if len(process_ids) != 1:
+        raise ValueError("runtime samples must come from one API process")
+    available_cpu_counts = {
+        sample.logical_cpu_count_available for sample in resource_samples
+    }
+    if len(available_cpu_counts) != 1:
+        raise ValueError("available CPU count changed during the experiment")
+    gil_states = {sample.gil_enabled for sample in resource_samples}
+    if len(gil_states) != 1:
+        raise ValueError("Python GIL state changed during the experiment")
+    elapsed_seconds = (
+        resource_samples[-1].captured_at
+        - resource_samples[0].captured_at
+    ).total_seconds()
+    if elapsed_seconds <= 0:
+        raise ValueError("runtime samples must span a positive duration")
 
     p95_response_latency_ms = _k6_metric_value(
         k6_summary,
@@ -388,6 +427,14 @@ def derive_performance_result(
     )
     cpu_start = resource_samples[0].process_cpu_seconds
     cpu_end = resource_samples[-1].process_cpu_seconds
+    process_cpu_seconds_used = max(0, cpu_end - cpu_start)
+    process_average_cpu_cores_used = (
+        process_cpu_seconds_used / elapsed_seconds
+    )
+    process_available_cpu_count = available_cpu_counts.pop()
+    host_cpu_utilizations = _host_cpu_utilizations(resource_samples)
+    pool_capacity = _maximum_pool_capacity(resource_samples)
+    maximum_checked_out = _maximum_checked_out_connections(resource_samples)
     return PerformanceExperimentResult(
         test_run_id=test_run_id,
         configuration=configuration,
@@ -410,15 +457,39 @@ def derive_performance_result(
         ),
         p95_response_latency_ms=p95_response_latency_ms,
         request_error_rate=request_error_rate,
-        process_cpu_seconds_used=max(0, cpu_end - cpu_start),
+        process_id=process_ids.pop(),
+        process_cpu_seconds_used=process_cpu_seconds_used,
+        process_average_cpu_cores_used=process_average_cpu_cores_used,
+        process_available_cpu_count=process_available_cpu_count,
+        process_average_cpu_capacity_utilization=min(
+            1.0,
+            process_average_cpu_cores_used / process_available_cpu_count,
+        ),
+        maximum_python_thread_count=max(
+            sample.python_thread_count for sample in resource_samples
+        ),
+        gil_enabled=gil_states.pop(),
         process_max_rss_bytes_observed=max(
             sample.process_max_rss_bytes for sample in resource_samples
+        ),
+        host_per_cpu_average_utilization=host_cpu_utilizations,
+        host_average_cpu_utilization=(
+            sum(host_cpu_utilizations) / len(host_cpu_utilizations)
+            if host_cpu_utilizations
+            else None
+        ),
+        host_minimum_memory_available_bytes=_minimum_available_memory(
+            resource_samples
         ),
         maximum_database_connections_open=(
             _maximum_open_connections(resource_samples)
         ),
-        maximum_database_connections_checked_out=(
-            _maximum_checked_out_connections(resource_samples)
+        maximum_database_connections_checked_out=maximum_checked_out,
+        maximum_database_pool_capacity=pool_capacity,
+        maximum_database_pool_utilization=(
+            min(1.0, maximum_checked_out / pool_capacity)
+            if pool_capacity
+            else None
         ),
         downstream_delivery_rate_per_second=(
             reconciliation.simulator_receipts
@@ -499,6 +570,67 @@ def _maximum_open_connections(
         ),
         default=0,
     )
+
+
+def _maximum_pool_capacity(
+    samples: Sequence[RuntimeMetricsSnapshot],
+) -> int | None:
+    capacities = {
+        sample.database_pool.pool_size
+        + sample.database_pool.max_overflow
+        for sample in samples
+        if sample.database_pool.pool_size is not None
+        and sample.database_pool.max_overflow is not None
+    }
+    if not capacities:
+        return None
+    if len(capacities) != 1:
+        raise ValueError("database pool capacity changed during the experiment")
+    return capacities.pop()
+
+
+def _minimum_available_memory(
+    samples: Sequence[RuntimeMetricsSnapshot],
+) -> int | None:
+    observations = [
+        sample.host_memory_available_bytes
+        for sample in samples
+        if sample.host_memory_available_bytes is not None
+    ]
+    return min(observations) if observations else None
+
+
+def _host_cpu_utilizations(
+    samples: Sequence[RuntimeMetricsSnapshot],
+) -> tuple[float, ...]:
+    first = {
+        cpu.cpu_index: cpu for cpu in samples[0].host_logical_cpu_times
+    }
+    last = {
+        cpu.cpu_index: cpu for cpu in samples[-1].host_logical_cpu_times
+    }
+    if not first and not last:
+        return ()
+    if first.keys() != last.keys():
+        raise ValueError(
+            "host logical CPU identities changed during the experiment"
+        )
+
+    utilizations = []
+    for cpu_index in sorted(first):
+        total_delta = (
+            last[cpu_index].total_seconds - first[cpu_index].total_seconds
+        )
+        idle_delta = (
+            last[cpu_index].idle_seconds - first[cpu_index].idle_seconds
+        )
+        if total_delta <= 0:
+            raise ValueError(
+                "host CPU counters must increase during the experiment"
+            )
+        busy_delta = max(0.0, total_delta - max(0.0, idle_delta))
+        utilizations.append(min(1.0, busy_delta / total_delta))
+    return tuple(utilizations)
 
 
 def _receipts_for_run(

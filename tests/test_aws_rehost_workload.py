@@ -155,18 +155,32 @@ def test_workload_saves_all_frozen_points_without_the_temporary_endpoint(
         rate = int(next(value for value in command if value.startswith("LOAD_RATE=")).split("=")[1])
         duration = int(next(value for value in command if value.startswith("LOAD_DURATION_SECONDS=")).split("=")[1])
         expected = rate * duration
-        sample = RuntimeMetricsSnapshot(
+        first_sample = RuntimeMetricsSnapshot(
             captured_at=datetime(2026, 8, 26, tzinfo=UTC),
+            process_id=7,
             process_cpu_seconds=1,
             process_max_rss_bytes=1024,
+            python_thread_count=1,
+            logical_cpu_count_available=2,
+            gil_enabled=True,
+            host_logical_cpu_times=(),
+            host_memory_total_bytes=None,
+            host_memory_available_bytes=None,
             database_pool=DatabasePoolMetrics(
                 checked_out=0,
                 checked_in=1,
                 pool_size=5,
                 overflow=0,
+                max_overflow=10,
             ),
         )
-        return 0, (sample, sample), {
+        last_sample = first_sample.model_copy(
+            update={
+                "captured_at": datetime(2026, 8, 26, 0, 0, 1, tzinfo=UTC),
+                "process_cpu_seconds": 1.5,
+            }
+        )
+        return 0, (first_sample, last_sample), {
             "metrics": {
                 "http_req_duration": {"values": {"p(95)": 10}},
                 "http_req_failed": {"values": {"rate": 0}},

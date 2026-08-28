@@ -113,6 +113,30 @@ Measurements must share UTC timestamps and treatment/run identifiers so the
 load, latency, and resource evidence can be aligned rather than compared as
 unrelated summaries.
 
+The API runtime snapshot records its process ID, Python thread count, GIL state,
+available logical CPUs, cumulative Linux scheduler counters for every logical
+CPU, host memory, and SQLAlchemy pool capacity and occupancy. Each result derives
+the API process's average cores used, the fraction of its available CPU capacity,
+per-core host utilization, minimum available memory, and maximum pool pressure.
+This is necessary because one fully occupied core appears as only 6.25% aggregate
+CPU on a 16-vCPU host.
+
+The current image intentionally remains a one-worker Uvicorn deployment. A local
+qualification probe showed that it can benefit from more than one CPU because
+synchronous FastAPI handlers overlap native database and HTTP work in a thread
+pool, even though Python bytecode remains GIL-constrained. It did not demonstrate
+efficient use of 16 CPUs: an unrestricted 50 events/s point passed while a
+one-CPU-capped replay dropped work, but both two- and eight-CPU treatments failed
+at 100 events/s. These local results are process-model diagnostics, not AWS
+performance claims. Stage 9.3 therefore measures the current deployment without
+promising a large scale-up gain.
+
+Resource consumption is not itself useful throughput. A rate contributes its
+observed completed rate to `productive_throughput_per_second` only when execution,
+latency, error, completeness, and reconciliation guardrails all pass. A failed
+overload point reports zero productive throughput even if native threads consume
+several cores while draining abandoned work.
+
 ## Interpretation and stopping rules
 
 - The `t4g.small` to `c8g.large` result may be described only as a workload-fit

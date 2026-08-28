@@ -508,7 +508,7 @@ RDS provides the stable managed data layer for the target architecture; it is se
 - [ ] Add aligned evidence for API process CPU and memory, EC2 CPU and any burst credits, RDS CPU, connections, memory and I/O latency, database-pool pressure, and downstream latency. Use measurement intervals long enough to identify the first constrained resource rather than relying on a short latency curve alone.
   - [x] Capture process identity, Python threads, GIL state, available CPUs, cumulative per-core Linux CPU time, host memory, and configured database-pool capacity; derive actual average cores used, per-core utilization, memory headroom, and pool pressure.
   - [x] Define productive throughput as zero for every rate that fails execution, SLO, or reconciliation guardrails, even when the failed run consumed substantial CPU.
-  - [ ] Collect aligned downstream-process resource and delivery-latency measurements throughout each rate.
+  - [x] Collect aligned downstream-process resource measurements every five seconds throughout each rate and aggregate persisted delivery outcomes and p95 latency into matching UTC intervals.
   - [ ] Collect aligned EC2 and RDS CloudWatch measurements, including burst-credit evidence for `t4g.small`.
 - [ ] Automate all three runs, evidence-preserving resets, both EC2 transitions, a two-transition comparison report, and unconditional teardown. Do not use the earlier host-local-PostgreSQL result as the `t4g.small` RDS-backed baseline.
 

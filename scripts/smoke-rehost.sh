@@ -122,6 +122,50 @@ fi
 api_url="$(discover_api_url)"
 wait_for_api_readiness "${api_url}"
 
+printf 'Sampling both private application processes...\n'
+runtime_evidence="$(
+    compose run --rm --no-deps api \
+        python -m trackrelay.experiments.rehost \
+        sample-runtime \
+        --test-run-id 00000000-0000-0000-0000-000000000923 \
+        --rate 1 \
+        --duration-seconds 1 \
+        --seed 20260806 \
+        --partner-id smoke-alpha \
+        --start-at 2026-08-06T00:00:00Z \
+        --settle-timeout-seconds 30 \
+        --stable-window-seconds 2
+)"
+printf '%s\n' "${runtime_evidence}" | \
+    "${uv_command}" run --locked python -c '
+import base64
+import gzip
+import json
+import sys
+
+prefix = "TRACKRELAY_RUNTIME_EVIDENCE="
+evidence_lines = [
+    line.removeprefix(prefix)
+    for line in sys.stdin.read().splitlines()
+    if line.startswith(prefix)
+]
+assert len(evidence_lines) == 1
+timeline = json.loads(
+    gzip.decompress(
+        base64.b64decode(evidence_lines[0], validate=True)
+    )
+)
+assert len(timeline["samples"]) == 2
+assert all(
+    sample["api"]["database_pool"] is not None
+    for sample in timeline["samples"]
+)
+assert all(
+    sample["downstream"]["database_pool"] is None
+    for sample in timeline["samples"]
+)
+'
+
 api_uid="$(compose exec -T api id -u)"
 downstream_uid="$(compose exec -T downstream id -u)"
 if [[ "${api_uid}" != "10001" || "${downstream_uid}" != "10001" ]]; then

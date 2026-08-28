@@ -40,6 +40,19 @@ def test_liveness(client: TestClient) -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_runtime_metrics_describe_the_downstream_process_only(
+    client: TestClient,
+) -> None:
+    response = client.get("/experiments/runtime-metrics")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["schema_version"] == 2
+    assert body["process_id"] > 0
+    assert body["python_thread_count"] > 0
+    assert body["database_pool"] is None
+
+
 def test_simulator_accepts_and_exposes_a_normalized_event(
     client: TestClient,
 ) -> None:

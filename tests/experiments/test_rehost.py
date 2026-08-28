@@ -1,20 +1,32 @@
 """Tests for the private synchronous-rehost experiment helper."""
 
 from base64 import b64decode
+from datetime import UTC, datetime, timedelta
+from gzip import decompress
 from uuid import UUID
 
 import httpx
 
 from trackrelay.database import Base, create_database_engine, create_session_factory
+from trackrelay.domain import (
+    DeliveryAttemptResult,
+    EventProcessingStatus,
+    ShipmentStatus,
+)
 from trackrelay.experiments.reconciliation import ReconciliationReport
 from trackrelay.experiments.rehost import (
     EVIDENCE_PREFIX,
+    RUNTIME_EVIDENCE_PREFIX,
+    RehostRuntimeTimeline,
     RehostServerEvidence,
     RehostWorkloadPoint,
+    collect_downstream_delivery_intervals,
     encoded_evidence,
+    encoded_runtime_evidence,
     prepare_rehost_workload_point,
+    sample_rehost_runtime_timeline,
 )
-from trackrelay.models import Partner
+from trackrelay.models import DeliveryAttempt, Event, Partner, Shipment
 from trackrelay.models import TestRun as ExperimentRunModel
 
 TEST_RUN_ID = UUID("00000000-0000-0000-0000-000000000901")
@@ -108,3 +120,162 @@ def test_evidence_line_round_trips_one_compact_json_object() -> None:
     decoded = b64decode(line.removeprefix(EVIDENCE_PREFIX)).decode("utf-8")
 
     assert RehostServerEvidence.model_validate_json(decoded) == evidence
+
+
+def runtime_response(*, process_id: int, database_pool: object) -> dict:
+    return {
+        "schema_version": 2,
+        "captured_at": "2026-08-29T00:00:00Z",
+        "process_id": process_id,
+        "process_cpu_seconds": 1,
+        "process_max_rss_bytes": 1024,
+        "python_thread_count": 2,
+        "logical_cpu_count_available": 2,
+        "gil_enabled": True,
+        "host_logical_cpu_times": [],
+        "host_memory_total_bytes": 2048,
+        "host_memory_available_bytes": 1024,
+        "database_pool": database_pool,
+    }
+
+
+def test_runtime_timeline_samples_both_private_processes_and_compresses() -> None:
+    point = RehostWorkloadPoint(
+        test_run_id=TEST_RUN_ID,
+        request_rate_per_second=1,
+        duration_seconds=10,
+        partner_id="load-alpha",
+    )
+    sleeps: list[float] = []
+    ready_samples: list[str] = []
+    api_transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            json=runtime_response(
+                process_id=7,
+                database_pool={
+                    "checked_out": 1,
+                    "checked_in": 4,
+                    "pool_size": 5,
+                    "overflow": 0,
+                    "max_overflow": 10,
+                },
+            ),
+        )
+    )
+    downstream_transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            json=runtime_response(process_id=8, database_pool=None),
+        )
+    )
+    with (
+        httpx.Client(
+            base_url="http://api:8000",
+            transport=api_transport,
+        ) as api_client,
+        httpx.Client(
+            base_url="http://downstream:8001",
+            transport=downstream_transport,
+        ) as downstream_client,
+    ):
+        timeline = sample_rehost_runtime_timeline(
+            point,
+            api_client=api_client,
+            downstream_client=downstream_client,
+            sleeper=sleeps.append,
+            on_ready=lambda: ready_samples.append("ready"),
+        )
+
+    assert len(timeline.samples) == 3
+    assert sleeps == [5, 5]
+    assert ready_samples == ["ready"]
+    assert {sample.api.process_id for sample in timeline.samples} == {7}
+    assert {sample.downstream.process_id for sample in timeline.samples} == {8}
+    line = encoded_runtime_evidence(timeline)
+    decoded = decompress(
+        b64decode(line.removeprefix(RUNTIME_EVIDENCE_PREFIX))
+    ).decode("utf-8")
+    assert RehostRuntimeTimeline.model_validate_json(decoded) == timeline
+
+
+def test_delivery_attempts_are_aggregated_into_aligned_intervals() -> None:
+    engine, sessions = create_test_database()
+    started_at = datetime(2026, 8, 29, tzinfo=UTC)
+    with sessions.begin() as session:
+        session.add(
+            Partner(
+                id="load-alpha",
+                name="Load Alpha",
+                adapter_type="courier-alpha",
+            )
+        )
+        session.add(
+            ExperimentRunModel(
+                id=TEST_RUN_ID,
+                scenario_name="healthy-baseline",
+                random_seed=20260806,
+                configuration={},
+                expected_event_count=3,
+                started_at=started_at,
+            )
+        )
+        for index, (offset, result, latency) in enumerate(
+            (
+                (1, DeliveryAttemptResult.DELIVERED, 10),
+                (4, DeliveryAttemptResult.HTTP_ERROR, 30),
+                (6, DeliveryAttemptResult.TRANSPORT_ERROR, 50),
+            ),
+            start=1,
+        ):
+            tracking_number = f"TRK-{index}"
+            session.add(
+                Shipment(
+                    tracking_number=tracking_number,
+                    current_status=ShipmentStatus.CREATED,
+                    current_status_occurred_at=started_at,
+                )
+            )
+            session.flush()
+            event = Event(
+                partner_id="load-alpha",
+                partner_event_id=f"EVT-{index}",
+                tracking_number=tracking_number,
+                status=ShipmentStatus.CREATED,
+                occurred_at=started_at,
+                received_at=started_at,
+                raw_payload={},
+                test_run_id=TEST_RUN_ID,
+                processing_status=EventProcessingStatus.PROCESSED,
+                state_applied=True,
+            )
+            session.add(event)
+            session.flush()
+            attempt_started_at = started_at + timedelta(seconds=offset)
+            session.add(
+                DeliveryAttempt(
+                    event_id=event.id,
+                    attempt_number=1,
+                    result=result,
+                    response_code=202 if result is DeliveryAttemptResult.DELIVERED else None,
+                    latency_ms=latency,
+                    error=None if result is DeliveryAttemptResult.DELIVERED else "test",
+                    started_at=attempt_started_at,
+                    completed_at=attempt_started_at
+                    + timedelta(milliseconds=latency),
+                )
+            )
+
+    intervals = collect_downstream_delivery_intervals(
+        TEST_RUN_ID,
+        sessions=sessions,
+    )
+
+    assert len(intervals) == 2
+    assert intervals[0].attempt_count == 2
+    assert intervals[0].delivered_count == 1
+    assert intervals[0].http_error_count == 1
+    assert intervals[0].p95_latency_ms == 30
+    assert intervals[1].transport_error_count == 1
+    assert intervals[1].maximum_latency_ms == 50
+    engine.dispose()

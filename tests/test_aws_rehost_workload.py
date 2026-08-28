@@ -17,14 +17,18 @@ from tests.test_aws_rehost import (
 )
 from trackrelay.aws_rehost_workload import (
     build_remote_action_payload,
+    build_runtime_sampling_payload,
     execute_rehost_workload,
     frozen_rehost_definition,
 )
 from trackrelay.experiments.reconciliation import ReconciliationReport
 from trackrelay.experiments.rehost import (
+    DeploymentRuntimeSample,
+    RehostRuntimeTimeline,
     RehostServerEvidence,
     RehostWorkloadPoint,
     encoded_evidence,
+    encoded_runtime_evidence,
 )
 from trackrelay.runtime_metrics import (
     DatabasePoolMetrics,
@@ -66,6 +70,12 @@ def test_remote_payload_uses_private_compose_services_without_secrets() -> None:
     assert "POSTGRES_PASSWORD" not in command
     assert "http://" not in command
     assert payload["executionTimeout"] == ["120"]
+
+    runtime_payload = build_runtime_sampling_payload(point)
+    runtime_command = runtime_payload["commands"][0]
+    assert "trackrelay.experiments.rehost sample-runtime" in runtime_command
+    assert "http://" not in runtime_command
+    assert runtime_payload["executionTimeout"] == ["130"]
 
 
 def point_from_payload(path: Path) -> tuple[str, RehostWorkloadPoint]:
@@ -125,6 +135,37 @@ def test_workload_saves_all_frozen_points_without_the_temporary_endpoint(
             query = call[call.index("--query") + 1]
             if query == "[Status,ResponseCode]":
                 return completed(call, stdout="Success\t0")
+            if active_action == "sample-runtime":
+                assert active_point is not None
+                sample = RuntimeMetricsSnapshot(
+                    captured_at=datetime(2026, 8, 26, tzinfo=UTC),
+                    process_id=7,
+                    process_cpu_seconds=1,
+                    process_max_rss_bytes=1024,
+                    python_thread_count=1,
+                    logical_cpu_count_available=2,
+                    gil_enabled=True,
+                    host_logical_cpu_times=(),
+                    host_memory_total_bytes=None,
+                    host_memory_available_bytes=None,
+                    database_pool=None,
+                )
+                timeline = RehostRuntimeTimeline(
+                    test_run_id=active_point.test_run_id,
+                    samples=(
+                        DeploymentRuntimeSample(
+                            api=sample,
+                            downstream=sample,
+                        ),
+                    ),
+                )
+                return completed(
+                    call,
+                    stdout=(
+                        "TRACKRELAY_RUNTIME_SAMPLING_READY\n"
+                        f"{encoded_runtime_evidence(timeline)}\n"
+                    ),
+                )
             assert active_action == "collect"
             assert active_point is not None
             expected = (
@@ -204,6 +245,13 @@ def test_workload_saves_all_frozen_points_without_the_temporary_endpoint(
     assert saved_session["rehost_workload"]["result"] == (
         "rehost-workload/summary.json"
     )
+    assert len(
+        tuple(
+            (session.evidence_dir / "rehost-workload").rglob(
+                "deployment-runtime-timeline.json"
+            )
+        )
+    ) == 6
     saved_evidence = "\n".join(
         path.read_text(encoding="utf-8")
         for path in (session.evidence_dir / "rehost-workload").rglob("*.json")

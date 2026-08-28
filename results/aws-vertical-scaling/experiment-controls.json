@@ -48,6 +48,7 @@
       500
     ],
     "tier_duration_seconds": 180,
+    "runtime_sample_interval_seconds": 5,
     "random_seed": 20260806,
     "partner_id": "load-alpha",
     "k6_image": "grafana/k6:2.1.0",

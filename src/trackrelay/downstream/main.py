@@ -13,6 +13,7 @@ from trackrelay.downstream.control import (
     simulator_delay_seconds,
 )
 from trackrelay.downstream.store import DownstreamEventStore
+from trackrelay.runtime_metrics import RuntimeMetricsSnapshot, capture_runtime_metrics
 
 app = FastAPI(title="TrackRelay Downstream Simulator")
 event_store = DownstreamEventStore()
@@ -46,6 +47,16 @@ def simulator_status(mode: SimulatorMode) -> SimulatorStatusResponse:
 def liveness() -> dict[str, str]:
     """Report that the downstream simulator process is running."""
     return {"status": "ok"}
+
+
+@app.get(
+    "/experiments/runtime-metrics",
+    response_model=RuntimeMetricsSnapshot,
+    tags=["experiments"],
+)
+def get_runtime_metrics() -> RuntimeMetricsSnapshot:
+    """Expose simulator-process measurements without a database-pool claim."""
+    return capture_runtime_metrics(database_engine=None)
 
 
 @app.put("/control/mode", response_model=SimulatorStatusResponse)

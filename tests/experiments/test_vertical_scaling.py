@@ -100,6 +100,7 @@ def test_committed_controls_freeze_every_non_hardware_input() -> None:
         500,
     )
     assert controls.workload.tier_duration_seconds == 180
+    assert controls.workload.runtime_sample_interval_seconds == 5
 
 
 def test_controls_reject_a_changed_workload_rate() -> None:

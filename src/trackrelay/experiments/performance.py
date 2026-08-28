@@ -403,6 +403,8 @@ def derive_performance_result(
     gil_states = {sample.gil_enabled for sample in resource_samples}
     if len(gil_states) != 1:
         raise ValueError("Python GIL state changed during the experiment")
+    if any(sample.database_pool is None for sample in resource_samples):
+        raise ValueError("API runtime samples must include database-pool metrics")
     elapsed_seconds = (
         resource_samples[-1].captured_at
         - resource_samples[0].captured_at
@@ -553,7 +555,8 @@ def _maximum_checked_out_connections(
         (
             sample.database_pool.checked_out
             for sample in samples
-            if sample.database_pool.checked_out is not None
+            if sample.database_pool is not None
+            and sample.database_pool.checked_out is not None
         ),
         default=0,
     )
@@ -567,6 +570,7 @@ def _maximum_open_connections(
             (sample.database_pool.checked_out or 0)
             + (sample.database_pool.checked_in or 0)
             for sample in samples
+            if sample.database_pool is not None
         ),
         default=0,
     )
@@ -579,7 +583,8 @@ def _maximum_pool_capacity(
         sample.database_pool.pool_size
         + sample.database_pool.max_overflow
         for sample in samples
-        if sample.database_pool.pool_size is not None
+        if sample.database_pool is not None
+        and sample.database_pool.pool_size is not None
         and sample.database_pool.max_overflow is not None
     }
     if not capacities:

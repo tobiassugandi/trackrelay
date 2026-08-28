@@ -137,6 +137,18 @@ latency, error, completeness, and reconciliation guardrails all pass. A failed
 overload point reports zero productive throughput even if native threads consume
 several cores while draining abandoned work.
 
+A private SSM command now starts before each load point and runs a sampler in a
+one-off container on the existing Compose network. Every five seconds it reads
+the API and downstream runtime endpoints, preserving both processes' CPU, thread,
+memory, and host-counter snapshots without publishing the simulator or adding an
+API proxy path. The resulting timeline is gzip-compressed beneath a strict SSM
+output-size limit, decoded locally, validated against the run identity, and
+saved with the other raw rate evidence. Independently, persisted delivery
+attempts are aggregated into the same five-second UTC intervals with attempt and
+outcome counts, p95 latency, and maximum latency. This distinguishes simulator
+pressure from API work while keeping the measurement interval fixed across all
+hardware tiers.
+
 ## Interpretation and stopping rules
 
 - The `t4g.small` to `c8g.large` result may be described only as a workload-fit

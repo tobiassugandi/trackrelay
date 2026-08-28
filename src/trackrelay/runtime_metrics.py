@@ -56,7 +56,7 @@ class RuntimeMetricsSnapshot(BaseModel):
     host_logical_cpu_times: tuple[LogicalCpuTimes, ...]
     host_memory_total_bytes: NonNegativeInteger | None
     host_memory_available_bytes: NonNegativeInteger | None
-    database_pool: DatabasePoolMetrics
+    database_pool: DatabasePoolMetrics | None
 
 
 def _pool_value(database_engine: Engine, method_name: str) -> int | None:
@@ -172,7 +172,7 @@ def _host_measurements(
 
 
 def capture_runtime_metrics(
-    database_engine: Engine = default_engine,
+    database_engine: Engine | None = default_engine,
 ) -> RuntimeMetricsSnapshot:
     """Capture one aligned process, host, and SQLAlchemy-pool sample."""
     process_usage = resource.getrusage(resource.RUSAGE_SELF)
@@ -190,11 +190,15 @@ def capture_runtime_metrics(
         host_logical_cpu_times=cpu_times,
         host_memory_total_bytes=total_memory,
         host_memory_available_bytes=available_memory,
-        database_pool=DatabasePoolMetrics(
-            checked_out=_pool_value(database_engine, "checkedout"),
-            checked_in=_pool_value(database_engine, "checkedin"),
-            pool_size=_pool_value(database_engine, "size"),
-            overflow=_pool_value(database_engine, "overflow"),
-            max_overflow=_pool_max_overflow(database_engine),
+        database_pool=(
+            DatabasePoolMetrics(
+                checked_out=_pool_value(database_engine, "checkedout"),
+                checked_in=_pool_value(database_engine, "checkedin"),
+                pool_size=_pool_value(database_engine, "size"),
+                overflow=_pool_value(database_engine, "overflow"),
+                max_overflow=_pool_max_overflow(database_engine),
+            )
+            if database_engine is not None
+            else None
         ),
     )

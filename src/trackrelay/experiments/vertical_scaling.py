@@ -91,6 +91,7 @@ class WorkloadControls(BaseModel):
     shape: Literal["one-created-event-per-shipment"]
     offered_rates_per_second: tuple[PositiveInteger, ...]
     tier_duration_seconds: Literal[180]
+    runtime_sample_interval_seconds: Literal[5]
     random_seed: Literal[20260806]
     partner_id: Literal["load-alpha"]
     k6_image: Literal["grafana/k6:2.1.0"]

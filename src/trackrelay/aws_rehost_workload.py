@@ -7,9 +7,11 @@ from argparse import Namespace
 from base64 import b64decode
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
+from gzip import decompress
 from ipaddress import IPv4Address
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from time import sleep
 from typing import Annotated, Literal
 from uuid import uuid4
 
@@ -50,6 +52,8 @@ from trackrelay.experiments.performance import (
 )
 from trackrelay.experiments.rehost import (
     EVIDENCE_PREFIX,
+    RUNTIME_EVIDENCE_PREFIX,
+    RehostRuntimeTimeline,
     RehostServerEvidence,
     RehostWorkloadPoint,
 )
@@ -71,6 +75,7 @@ LocalLoadExecutor = Callable[
     [Sequence[str], httpx.Client, float, Path],
     tuple[int, tuple[RuntimeMetricsSnapshot, ...], dict[str, object]],
 ]
+Sleeper = Callable[[float], None]
 
 
 class BenchmarkDriverEnvironment(BaseModel):
@@ -234,6 +239,188 @@ def build_remote_action_payload(
     if len(json.dumps(payload).encode("utf-8")) > 20_000:
         raise AwsRehostError("SSM workload payload exceeds the safety limit")
     return payload
+
+
+def build_runtime_sampling_payload(
+    point: RehostWorkloadPoint,
+) -> dict[str, list[str]]:
+    """Build the private five-second API/downstream sampling command."""
+    command = " ".join(
+        (
+            "docker compose",
+            "--project-name trackrelay-rehost",
+            "--env-file /opt/trackrelay/.env",
+            "--file /opt/trackrelay/compose.yaml",
+            "run --rm --no-deps api",
+            "python -m trackrelay.experiments.rehost",
+            "sample-runtime",
+            f"--test-run-id {point.test_run_id}",
+            f"--rate {point.request_rate_per_second}",
+            f"--duration-seconds {point.duration_seconds}",
+            f"--seed {point.random_seed}",
+            f"--partner-id {point.partner_id}",
+            f"--start-at {point.start_at.isoformat()}",
+            (
+                "--settle-timeout-seconds "
+                f"{point.post_load_settle_timeout_seconds}"
+            ),
+            (
+                "--stable-window-seconds "
+                f"{point.post_load_stable_window_seconds}"
+            ),
+        )
+    )
+    payload = {
+        "commands": [f"set -euo pipefail\n{command}"],
+        "executionTimeout": [str(point.duration_seconds + 120)],
+    }
+    if len(json.dumps(payload).encode("utf-8")) > 20_000:
+        raise AwsRehostError("SSM runtime-sampling payload exceeds the safety limit")
+    return payload
+
+
+def start_remote_runtime_sampling(
+    session: AwsSession,
+    *,
+    instance_id: str,
+    point: RehostWorkloadPoint,
+    runner: ProcessRunner,
+    sleeper: Sleeper = sleep,
+) -> str:
+    """Start private sampling and wait until its first process reads succeed."""
+    payload = build_runtime_sampling_payload(point)
+    with NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        prefix="trackrelay-runtime-ssm-",
+        suffix=".json",
+    ) as payload_file:
+        payload_file.write(json.dumps(payload))
+        payload_file.flush()
+        command_id = invoke(
+            runner,
+            (
+                *aws_prefix(session),
+                "ssm",
+                "send-command",
+                "--instance-ids",
+                instance_id,
+                "--document-name",
+                "AWS-RunShellScript",
+                "--comment",
+                "TrackRelay private runtime sampling",
+                "--parameters",
+                f"file://{payload_file.name}",
+                "--query",
+                "Command.CommandId",
+                "--output",
+                "text",
+            ),
+            action="SSM runtime sampling start",
+        ).stdout.strip()
+    if COMMAND_ID_PATTERN.fullmatch(command_id) is None:
+        raise AwsRehostError("SSM returned an invalid runtime command ID")
+
+    output_command = (
+        *aws_prefix(session),
+        "ssm",
+        "get-command-invocation",
+        "--command-id",
+        command_id,
+        "--instance-id",
+        instance_id,
+        "--query",
+        "StandardOutputContent",
+        "--output",
+        "text",
+    )
+    for _ in range(40):
+        result = runner(output_command, None)
+        if (
+            result.returncode == 0
+            and "TRACKRELAY_RUNTIME_SAMPLING_READY" in result.stdout
+        ):
+            return command_id
+        sleeper(0.5)
+    raise AwsRehostError("private runtime sampling did not become ready")
+
+
+def collect_remote_runtime_sampling(
+    session: AwsSession,
+    *,
+    instance_id: str,
+    command_id: str,
+    point: RehostWorkloadPoint,
+    runner: ProcessRunner,
+) -> RehostRuntimeTimeline:
+    """Wait for and decode one compressed private process timeline."""
+    invoke(
+        runner,
+        (
+            *aws_prefix(session),
+            "ssm",
+            "wait",
+            "command-executed",
+            "--command-id",
+            command_id,
+            "--instance-id",
+            instance_id,
+        ),
+        action="SSM runtime sampling completion",
+    )
+    status = invoke(
+        runner,
+        (
+            *aws_prefix(session),
+            "ssm",
+            "get-command-invocation",
+            "--command-id",
+            command_id,
+            "--instance-id",
+            instance_id,
+            "--query",
+            "[Status,ResponseCode]",
+            "--output",
+            "text",
+        ),
+        action="SSM runtime sampling status",
+    ).stdout.split()
+    if status != ["Success", "0"]:
+        raise AwsRehostError("SSM runtime sampling did not report success")
+    output = invoke(
+        runner,
+        (
+            *aws_prefix(session),
+            "ssm",
+            "get-command-invocation",
+            "--command-id",
+            command_id,
+            "--instance-id",
+            instance_id,
+            "--query",
+            "StandardOutputContent",
+            "--output",
+            "text",
+        ),
+        action="SSM runtime evidence collection",
+    ).stdout
+    evidence_lines = [
+        line.removeprefix(RUNTIME_EVIDENCE_PREFIX)
+        for line in output.splitlines()
+        if line.startswith(RUNTIME_EVIDENCE_PREFIX)
+    ]
+    if len(evidence_lines) != 1:
+        raise AwsRehostError("SSM returned ambiguous runtime evidence")
+    try:
+        evidence_json = decompress(
+            b64decode(evidence_lines[0], validate=True)
+        ).decode("utf-8")
+        timeline = RehostRuntimeTimeline.model_validate_json(evidence_json)
+    except (OSError, UnicodeDecodeError, ValueError) as error:
+        raise AwsRehostError("SSM returned invalid runtime evidence") from error
+    if timeline.test_run_id != point.test_run_id:
+        raise AwsRehostError("runtime evidence identity differs from the workload")
+    return timeline
 
 
 def run_remote_action(
@@ -456,6 +643,9 @@ def execute_rehost_workload(
             manifest_path = run_directory / "input-manifest.json"
             k6_summary_path = run_directory / "k6-summary.json"
             runtime_samples_path = run_directory / "runtime-metrics-samples.json"
+            deployment_runtime_path = (
+                run_directory / "deployment-runtime-timeline.json"
+            )
             server_evidence_path = run_directory / "server-evidence.json"
             rate_result_path = run_directory / "rate-result.json"
             write_input_manifest(point.manifest(), manifest_path)
@@ -492,12 +682,27 @@ def execute_rehost_workload(
                 manifest_path=manifest_path,
                 run_directory=run_directory,
             )
-            k6_exit_code, samples, k6_summary = load_executor(
-                command,
-                client,
-                definition.resource_sample_interval_seconds,
-                k6_summary_path,
+            runtime_command_id = start_remote_runtime_sampling(
+                session,
+                instance_id=instance_id,
+                point=point,
+                runner=runner,
             )
+            try:
+                k6_exit_code, samples, k6_summary = load_executor(
+                    command,
+                    client,
+                    definition.resource_sample_interval_seconds,
+                    k6_summary_path,
+                )
+            finally:
+                runtime_timeline = collect_remote_runtime_sampling(
+                    session,
+                    instance_id=instance_id,
+                    command_id=runtime_command_id,
+                    point=point,
+                    runner=runner,
+                )
             server_evidence = run_remote_action(
                 session,
                 instance_id=instance_id,
@@ -515,6 +720,7 @@ def execute_rehost_workload(
                 ),
                 runtime_samples_path,
             )
+            _write_model(runtime_timeline, deployment_runtime_path)
             _write_model(server_evidence, server_evidence_path)
             if not k6_summary_path.exists():
                 k6_summary_path.write_text(

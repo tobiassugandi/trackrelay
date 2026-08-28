@@ -35,6 +35,12 @@ class SimulatorStatusResponse(BaseModel):
     delay_seconds: float
 
 
+class SimulatorResetResponse(BaseModel):
+    """Receipt count removed between isolated experiment treatments."""
+
+    cleared_event_count: int
+
+
 def simulator_status(mode: SimulatorMode) -> SimulatorStatusResponse:
     """Describe one mode including its deterministic delay."""
     return SimulatorStatusResponse(
@@ -70,6 +76,14 @@ def set_simulator_mode(request: SimulatorModeRequest) -> SimulatorStatusResponse
 def get_simulator_status() -> SimulatorStatusResponse:
     """Report the currently active downstream behavior."""
     return simulator_status(simulator_control.get_mode())
+
+
+@app.delete("/control/events", response_model=SimulatorResetResponse)
+def clear_simulator_events() -> SimulatorResetResponse:
+    """Clear private synthetic receipts between experiment treatments."""
+    return SimulatorResetResponse(
+        cleared_event_count=event_store.clear(),
+    )
 
 
 @app.post("/events", status_code=status.HTTP_202_ACCEPTED)

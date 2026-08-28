@@ -99,6 +99,18 @@ def test_simulator_filters_receipts_by_test_run_id(client: TestClient) -> None:
     ]
 
 
+def test_private_control_clears_and_counts_all_receipts(
+    client: TestClient,
+) -> None:
+    assert client.post("/events", json=normalized_event_data()).status_code == 202
+
+    response = client.delete("/control/events")
+
+    assert response.status_code == 200
+    assert response.json() == {"cleared_event_count": 1}
+    assert client.get("/events").json() == []
+
+
 def test_simulator_rejects_an_invalid_event_without_recording_it(
     client: TestClient,
 ) -> None:

@@ -222,6 +222,43 @@ to `vertical_scaling_tier_collected` only after all six rate directories and the
 tier summary have been written; incomplete CloudWatch or reconciliation
 evidence aborts the tier instead of silently producing a publishable result.
 
+After a tier has been collected, `make aws-scaling-transition` is the only
+supported way to move to the next frozen treatment. The command requires the
+session ID and target instance type twice: once as the requested change and
+once as an explicit approval. It rejects skipped or repeated tiers.
+
+For example, the first transition in an approved cloud session is:
+
+```shell
+make aws-scaling-transition \
+  SESSION_ID=cloud-session-2-YYYYMMDDTHHMMSSZ \
+  APPROVED_SESSION_ID=cloud-session-2-YYYYMMDDTHHMMSSZ \
+  REHOST_INSTANCE_TYPE=t4g.small \
+  TARGET_INSTANCE_TYPE=c8g.large \
+  APPROVED_TARGET_INSTANCE_TYPE=c8g.large \
+  API_INGRESS_CIDR=YOUR_CURRENT_PUBLIC_IP/32
+```
+
+Before resizing, the controller deletes only synthetic `delivery_attempts`,
+`events`, `shipments`, and `test_runs` rows, returns the downstream simulator to
+healthy mode, clears its receipts, and verifies both stores are empty. Partner
+configuration is deliberately preserved. It saves row and receipt counts as
+portable reset evidence.
+
+The controller then saves a new Terraform plan and inspects its JSON before
+apply. Exactly one meaningful resource change is accepted: an in-place update
+of `aws_instance.rehost` from the completed tier to the next tier. A database,
+network, image, or unrelated EC2 change aborts before apply. The session record
+is journaled before and after apply so an interrupted transition is visible.
+After the restart, the controller requires the same EC2 instance identity, the
+same RDS identifier, the requested instance type, the same digest-pinned image,
+an RDS TLS connection string, and a ready API. Only then does the next tier
+become runnable.
+
+This transition command is stateful and can incur AWS charges. Its existence is
+not authorization to run it: cloud session 2 still needs the separately
+reviewed resource list, duration, cost ceiling, and explicit user approval.
+
 The private five-second process sampler runs for 15 seconds beyond the scheduled
 load duration. That margin covers local container startup and the final load
 seconds without expanding the CloudWatch load window: AWS metrics remain aligned

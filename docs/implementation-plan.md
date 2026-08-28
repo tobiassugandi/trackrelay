@@ -513,7 +513,8 @@ RDS provides the stable managed data layer for the target architecture; it is se
 - [ ] Automate all three runs, evidence-preserving resets, both EC2 transitions, a two-transition comparison report, and unconditional teardown. Do not use the earlier host-local-PostgreSQL result as the `t4g.small` RDS-backed baseline.
   - [x] Bind the applied image, verified RDS deployment, hardware catalog, frozen controls, and starting tier into one self-contained experiment definition before traffic begins; record exact driver-side load windows separately from setup and metric polling.
   - [x] Run and preserve one complete RDS-backed rate ladder for the current hardware tier, including exact load windows and complete process, downstream, reconciliation, and CloudWatch evidence at every rate.
-  - [ ] Reset experiment state and perform both guarded EC2 transitions while preserving the image, RDS, controls, and prior evidence.
+  - [x] Implement and locally test evidence-preserving synthetic-state reset plus the guarded, exact-next-tier EC2 transition workflow. Require a saved plan that changes only the EC2 host in place, then revalidate the instance identity, RDS identity, image digest, TLS configuration, and API readiness.
+  - [ ] Execute both approved EC2 transitions in cloud session 2 while preserving the image, RDS, controls, and prior evidence.
   - [ ] Produce the two-transition comparison and bottleneck report, then guarantee teardown and native empty-inventory verification.
 
 Use cloud session 2 for the vertical-scaling experiment:

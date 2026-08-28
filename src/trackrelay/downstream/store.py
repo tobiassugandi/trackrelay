@@ -23,7 +23,9 @@ class DownstreamEventStore:
         with self._lock:
             return tuple(self._events)
 
-    def clear(self) -> None:
-        """Remove all events, primarily to isolate tests."""
+    def clear(self) -> int:
+        """Remove all events and report how many receipts were discarded."""
         with self._lock:
+            cleared_count = len(self._events)
             self._events.clear()
+            return cleared_count

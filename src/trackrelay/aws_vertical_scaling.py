@@ -2,11 +2,14 @@
 
 import json
 from argparse import ArgumentParser, Namespace
+from base64 import b64decode
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from ipaddress import IPv4Address
 from pathlib import Path
+from shlex import quote
+from time import sleep
 from typing import Literal
 from uuid import UUID, uuid4
 
@@ -18,15 +21,21 @@ from trackrelay.aws_cloudwatch import (
     collect_cloudwatch_evidence,
 )
 from trackrelay.aws_rehost import (
+    COMMAND_ID_PATTERN,
     IMAGE_DIGEST_PATTERN,
     INSTANCE_ID_PATTERN,
     RDS_ENGINE_VERSION_PATTERN,
     RDS_IDENTIFIER_PATTERN,
     AwsRehostError,
     ProcessRunner,
+    aws_prefix,
+    deployed_image_reference,
+    invoke,
     require_applied_clean_revision,
     run_process,
+    run_ssm_payload,
     terraform_output,
+    wait_for_ssm_online,
 )
 from trackrelay.aws_rehost_workload import (
     BenchmarkDriverEnvironment,
@@ -42,6 +51,7 @@ from trackrelay.aws_session import (
     add_shared_arguments,
     file_sha256,
     session_from_arguments,
+    write_command_log,
     write_manifest,
 )
 from trackrelay.experiments.baseline import (
@@ -58,11 +68,14 @@ from trackrelay.experiments.performance import (
     derive_performance_result,
 )
 from trackrelay.experiments.rehost import (
+    RESET_EVIDENCE_PREFIX,
+    RehostExperimentResetEvidence,
     RehostRuntimeTimeline,
     RehostServerEvidence,
     RehostWorkloadPoint,
 )
 from trackrelay.experiments.vertical_scaling import (
+    ALLOWED_INSTANCE_TYPES,
     DEFAULT_CAPACITY_SELECTION_PATH,
     DEFAULT_EXPERIMENT_CONTROLS_PATH,
     ECONOMICAL_BASELINE_INSTANCE_TYPE,
@@ -94,6 +107,9 @@ TimedLocalLoadExecutor = Callable[
     ...,
     "TimedLoadResult[TimedLocalLoadValue]",
 ]
+RemoteResetter = Callable[..., RehostExperimentResetEvidence]
+SsmWaiter = Callable[..., None]
+DeploymentValidator = Callable[..., str]
 
 
 class VerticalScalingExperimentDefinition(BaseModel):
@@ -198,6 +214,58 @@ class VerticalScalingTierSummary(BaseModel):
     first_failing_rate_per_second: int | None
     capacity_is_at_least_highest_tested_rate: bool
     rate_results: tuple[LegacyBaselineRateResult, ...]
+
+
+class InfrastructureTransitionPlanEvidence(BaseModel):
+    """Sanitized proof that one saved plan changes only the EC2 host."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    source_instance_type: str
+    target_instance_type: str
+    plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    changed_resource_address: Literal["aws_instance.rehost"] = (
+        "aws_instance.rehost"
+    )
+    actions: tuple[Literal["update"], ...]
+    changed_attributes: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def require_one_in_place_update(self) -> "InfrastructureTransitionPlanEvidence":
+        if self.actions != ("update",):
+            raise ValueError("EC2 transition must be one in-place update")
+        if "instance_type" not in self.changed_attributes:
+            raise ValueError("EC2 transition must change the instance type")
+        return self
+
+
+class VerticalScalingTransitionEvidence(BaseModel):
+    """Portable reset, plan, apply, and validation proof for one transition."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    source_instance_type: str
+    target_instance_type: str
+    reset: RehostExperimentResetEvidence
+    plan: InfrastructureTransitionPlanEvidence
+    applied_at: AwareDatetime
+    validated_at: AwareDatetime
+    observed_instance_type: str
+    instance_identity_preserved: Literal[True] = True
+    rds_identity_preserved: Literal[True] = True
+    deployment_validation_command_id: str = Field(
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    )
+
+    @model_validator(mode="after")
+    def require_the_observed_target(self) -> "VerticalScalingTransitionEvidence":
+        if self.observed_instance_type != self.target_instance_type:
+            raise ValueError("observed EC2 type differs from the transition target")
+        if self.validated_at < self.applied_at:
+            raise ValueError("transition validation cannot precede apply")
+        return self
 
 
 @dataclass(frozen=True)
@@ -386,6 +454,7 @@ def _load_prepared_definition(
     *,
     manifest: dict[str, object],
     revision: str,
+    require_current_incomplete: bool = True,
 ) -> tuple[VerticalScalingExperimentDefinition, Path]:
     """Revalidate the immutable preparation artifact before a tier runs."""
     scaling = manifest.get("vertical_scaling")
@@ -398,7 +467,10 @@ def _load_prepared_definition(
         not isinstance(tier, str) for tier in completed_tiers
     ):
         raise AwsRehostError("completed Stage 9.3 tiers are invalid")
-    if session.rehost_instance_type in completed_tiers:
+    if (
+        require_current_incomplete
+        and session.rehost_instance_type in completed_tiers
+    ):
         raise AwsRehostError("the current hardware tier is already complete")
     expected_relative_path = "vertical-scaling/experiment-definition.json"
     if scaling.get("definition") != expected_relative_path:
@@ -740,12 +812,423 @@ def run_current_vertical_scaling_tier(
     return summary
 
 
+def build_remote_reset_payload() -> dict[str, list[str]]:
+    """Build the private synthetic-state reset command."""
+    command = (
+        "docker compose --project-name trackrelay-rehost "
+        "--env-file /opt/trackrelay/.env "
+        "--file /opt/trackrelay/compose.yaml run --rm --no-deps api "
+        "python -m trackrelay.experiments.rehost reset"
+    )
+    payload = {
+        "commands": [f"set -euo pipefail\n{command}"],
+        "executionTimeout": ["300"],
+    }
+    if len(json.dumps(payload).encode("utf-8")) > 20_000:
+        raise AwsRehostError("SSM reset payload exceeds the safety limit")
+    return payload
+
+
+def run_remote_experiment_reset(
+    session: AwsSession,
+    *,
+    instance_id: str,
+    runner: ProcessRunner,
+) -> RehostExperimentResetEvidence:
+    """Clear and read back compact treatment-reset evidence through SSM."""
+    command_id = run_ssm_payload(
+        session,
+        instance_id=instance_id,
+        payload=build_remote_reset_payload(),
+        comment="TrackRelay Stage 9.3 treatment reset",
+        runner=runner,
+    )
+    output = invoke(
+        runner,
+        (
+            *aws_prefix(session),
+            "ssm",
+            "get-command-invocation",
+            "--command-id",
+            command_id,
+            "--instance-id",
+            instance_id,
+            "--query",
+            "StandardOutputContent",
+            "--output",
+            "text",
+        ),
+        action="SSM treatment-reset evidence collection",
+    ).stdout
+    evidence_lines = [
+        line.removeprefix(RESET_EVIDENCE_PREFIX)
+        for line in output.splitlines()
+        if line.startswith(RESET_EVIDENCE_PREFIX)
+    ]
+    if len(evidence_lines) != 1:
+        raise AwsRehostError("SSM returned ambiguous treatment-reset evidence")
+    try:
+        decoded = b64decode(evidence_lines[0], validate=True).decode("utf-8")
+        return RehostExperimentResetEvidence.model_validate_json(decoded)
+    except (UnicodeDecodeError, ValueError) as error:
+        raise AwsRehostError("SSM returned invalid treatment-reset evidence") from error
+
+
+def validate_transition_plan(
+    plan_json: str,
+    *,
+    source_instance_type: str,
+    target_instance_type: str,
+    plan_sha256: str,
+) -> InfrastructureTransitionPlanEvidence:
+    """Reject any saved plan that changes more than the one EC2 host."""
+    try:
+        document = json.loads(plan_json)
+        resource_changes = document["resource_changes"]
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        raise AwsRehostError("Terraform returned an invalid transition plan") from error
+    if not isinstance(resource_changes, list):
+        raise AwsRehostError("Terraform transition changes must be a list")
+    meaningful_changes = []
+    for resource in resource_changes:
+        try:
+            actions = resource["change"]["actions"]
+        except (KeyError, TypeError) as error:
+            raise AwsRehostError("Terraform transition change is invalid") from error
+        if actions != ["no-op"]:
+            meaningful_changes.append(resource)
+    if len(meaningful_changes) != 1:
+        raise AwsRehostError("transition plan must change exactly one resource")
+    resource = meaningful_changes[0]
+    try:
+        address = resource["address"]
+        change = resource["change"]
+        actions = tuple(change["actions"])
+        before = change["before"]
+        after = change["after"]
+    except (KeyError, TypeError) as error:
+        raise AwsRehostError("Terraform EC2 transition is incomplete") from error
+    if address != "aws_instance.rehost" or actions != ("update",):
+        raise AwsRehostError("transition plan is not an in-place EC2 update")
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        raise AwsRehostError("Terraform EC2 values are invalid")
+    if before.get("instance_type") != source_instance_type:
+        raise AwsRehostError("transition plan source type differs from the session")
+    if after.get("instance_type") != target_instance_type:
+        raise AwsRehostError("transition plan target type differs from approval")
+    changed_attributes = tuple(
+        sorted(
+            key
+            for key in before.keys() | after.keys()
+            if before.get(key) != after.get(key)
+        )
+    )
+    permitted_changes = {
+        "instance_type",
+        "credit_specification",
+        "cpu_options",
+        "ebs_optimized",
+    }
+    unexpected_changes = set(changed_attributes) - permitted_changes
+    if unexpected_changes:
+        raise AwsRehostError(
+            "transition plan changes unexpected EC2 attributes: "
+            f"{sorted(unexpected_changes)}"
+        )
+    try:
+        return InfrastructureTransitionPlanEvidence(
+            source_instance_type=source_instance_type,
+            target_instance_type=target_instance_type,
+            plan_sha256=plan_sha256,
+            actions=actions,
+            changed_attributes=changed_attributes,
+        )
+    except ValueError as error:
+        raise AwsRehostError("Terraform transition plan is invalid") from error
+
+
+def build_transition_validation_payload(
+    *,
+    image_reference: str,
+) -> dict[str, list[str]]:
+    """Require the unchanged image and healthy RDS-backed API after restart."""
+    if "@sha256:" not in image_reference:
+        raise AwsRehostError("transition validation image is not digest pinned")
+    expected_image = quote(image_reference)
+    command = "\n".join(
+        (
+            "set -euo pipefail",
+            (
+                "actual_image=\"$(docker inspect --format "
+                "'{{.Config.Image}}' trackrelay-rehost-api-1)\""
+            ),
+            f"test \"${{actual_image}}\" = {expected_image}",
+            (
+                "grep --quiet "
+                "'^TRACKRELAY_DATABASE_URL=.*sslmode=require$' "
+                "/opt/trackrelay/.env"
+            ),
+            (
+                "test \"$(curl --silent --fail --max-time 5 "
+                "http://127.0.0.1:8000/health/ready)\" "
+                "= '{\"status\":\"ready\"}'"
+            ),
+        )
+    )
+    payload = {"commands": [command], "executionTimeout": ["120"]}
+    if len(json.dumps(payload).encode("utf-8")) > 20_000:
+        raise AwsRehostError("SSM transition validation exceeds the safety limit")
+    return payload
+
+
+def validate_transition_deployment(
+    session: AwsSession,
+    *,
+    instance_id: str,
+    image_reference: str,
+    runner: ProcessRunner,
+) -> str:
+    """Verify containers, immutable image, and RDS readiness after resize."""
+    return run_ssm_payload(
+        session,
+        instance_id=instance_id,
+        payload=build_transition_validation_payload(
+            image_reference=image_reference
+        ),
+        comment="TrackRelay Stage 9.3 transition validation",
+        runner=runner,
+    )
+
+
+def transition_to_next_vertical_scaling_tier(
+    session: AwsSession,
+    *,
+    target_instance_type: str,
+    approved_session_id: str,
+    approved_target_instance_type: str,
+    runner: ProcessRunner = run_process,
+    resetter: RemoteResetter = run_remote_experiment_reset,
+    ssm_waiter: SsmWaiter = wait_for_ssm_online,
+    deployment_validator: DeploymentValidator = validate_transition_deployment,
+    sleeper: Callable[[float], None] = sleep,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> VerticalScalingTransitionEvidence:
+    """Reset state and apply only the saved, single-host next-tier plan."""
+    if approved_session_id != session.session_id:
+        raise AwsRehostError("approved transition session ID does not match")
+    if approved_target_instance_type != target_instance_type:
+        raise AwsRehostError("approved transition target does not match")
+    manifest, revision = require_applied_clean_revision(session, runner=runner)
+    if manifest.get("status") != "vertical_scaling_tier_collected":
+        raise AwsRehostError("the current Stage 9.3 tier is not complete")
+    definition, _ = _load_prepared_definition(
+        session,
+        manifest=manifest,
+        revision=revision,
+        require_current_incomplete=False,
+    )
+    tiers = definition.controls.tier_order
+    try:
+        source_index = tiers.index(session.rehost_instance_type)
+    except ValueError as error:
+        raise AwsRehostError("current tier is outside the experiment order") from error
+    if source_index + 1 >= len(tiers):
+        raise AwsRehostError("the final hardware tier has no next transition")
+    expected_target = tiers[source_index + 1]
+    if target_instance_type != expected_target:
+        raise AwsRehostError("transition target must be the next frozen tier")
+    scaling = manifest["vertical_scaling"]
+    if scaling["completed_tiers"] != list(tiers[: source_index + 1]):
+        raise AwsRehostError("completed tiers are not the expected ordered prefix")
+
+    source_instance_id = terraform_output(
+        session,
+        "rehost_instance_id",
+        runner=runner,
+    )
+    if INSTANCE_ID_PATTERN.fullmatch(source_instance_id) is None:
+        raise AwsRehostError("Terraform returned an invalid EC2 instance ID")
+    source_rds_identifier = terraform_output(
+        session,
+        "rds_identifier",
+        runner=runner,
+    )
+    if RDS_IDENTIFIER_PATTERN.fullmatch(source_rds_identifier) is None:
+        raise AwsRehostError("Terraform returned an invalid RDS identifier")
+
+    transition_name = f"{session.rehost_instance_type}-to-{target_instance_type}"
+    transition_root = (
+        session.evidence_dir
+        / "vertical-scaling"
+        / "transitions"
+        / transition_name
+    )
+    transition_root.mkdir(parents=True, exist_ok=False)
+    reset_evidence = resetter(
+        session,
+        instance_id=source_instance_id,
+        runner=runner,
+    )
+    _write_model(reset_evidence, transition_root / "reset-evidence.json")
+
+    target_session = replace(
+        session,
+        rehost_instance_type=target_instance_type,
+    )
+    plan_path = transition_root / "terraform-transition.tfplan"
+    plan_result = invoke(
+        runner,
+        target_session.terraform_command(
+            "plan",
+            "-input=false",
+            f"-out={plan_path.resolve()}",
+            *target_session.terraform_variables(),
+        ),
+        action="Terraform EC2 transition plan",
+    )
+    write_command_log(transition_root / "terraform-plan.log", plan_result)
+    if not plan_path.is_file():
+        raise AwsRehostError("Terraform did not save the transition plan")
+    plan_digest = file_sha256(plan_path)
+    plan_json = invoke(
+        runner,
+        target_session.terraform_command(
+            "show",
+            "-json",
+            plan_path.resolve().as_posix(),
+        ),
+        action="Terraform EC2 transition inspection",
+    ).stdout
+    plan_evidence = validate_transition_plan(
+        plan_json,
+        source_instance_type=session.rehost_instance_type,
+        target_instance_type=target_instance_type,
+        plan_sha256=plan_digest,
+    )
+    _write_model(plan_evidence, transition_root / "plan-evidence.json")
+    manifest["status"] = "vertical_scaling_transition_planned"
+    scaling["pending_transition"] = {
+        "plan_sha256": plan_digest,
+        "source_instance_type": session.rehost_instance_type,
+        "target_instance_type": target_instance_type,
+    }
+    write_manifest(session, manifest)
+
+    apply_result = invoke(
+        runner,
+        target_session.terraform_command(
+            "apply",
+            "-input=false",
+            plan_path.resolve().as_posix(),
+        ),
+        action="Terraform EC2 transition apply",
+    )
+    write_command_log(transition_root / "terraform-apply.log", apply_result)
+    applied_at = now()
+    manifest["rehost_instance_type"] = target_instance_type
+    manifest["status"] = "vertical_scaling_transition_applied_pending_validation"
+    scaling["current_tier"] = target_instance_type
+    scaling["pending_transition"]["applied_at"] = applied_at.isoformat()
+    write_manifest(target_session, manifest)
+
+    target_instance_id = terraform_output(
+        target_session,
+        "rehost_instance_id",
+        runner=runner,
+    )
+    if target_instance_id != source_instance_id:
+        raise AwsRehostError("EC2 transition replaced the host identity")
+    target_rds_identifier = terraform_output(
+        target_session,
+        "rds_identifier",
+        runner=runner,
+    )
+    if target_rds_identifier != source_rds_identifier:
+        raise AwsRehostError("EC2 transition changed the RDS identity")
+    observed_instance_type = invoke(
+        runner,
+        (
+            *aws_prefix(target_session),
+            "ec2",
+            "describe-instances",
+            "--instance-ids",
+            target_instance_id,
+            "--query",
+            "Reservations[0].Instances[0].InstanceType",
+            "--output",
+            "text",
+        ),
+        action="EC2 transition type verification",
+    ).stdout.strip()
+    if observed_instance_type != target_instance_type:
+        raise AwsRehostError("EC2 reports a different transition target")
+    ssm_waiter(
+        target_session,
+        target_instance_id,
+        runner=runner,
+        sleeper=sleeper,
+    )
+    image_reference = deployed_image_reference(
+        target_session,
+        manifest=manifest,
+        revision=revision,
+        runner=runner,
+    )
+    validation_command_id = deployment_validator(
+        target_session,
+        instance_id=target_instance_id,
+        image_reference=image_reference,
+        runner=runner,
+    )
+    if COMMAND_ID_PATTERN.fullmatch(validation_command_id) is None:
+        raise AwsRehostError("transition validation returned an invalid command ID")
+    validated_at = now()
+    evidence = VerticalScalingTransitionEvidence(
+        source_instance_type=session.rehost_instance_type,
+        target_instance_type=target_instance_type,
+        reset=reset_evidence,
+        plan=plan_evidence,
+        applied_at=applied_at,
+        validated_at=validated_at,
+        observed_instance_type=observed_instance_type,
+        deployment_validation_command_id=validation_command_id,
+    )
+    evidence_path = transition_root / "transition-evidence.json"
+    _write_model(evidence, evidence_path)
+    transitions = scaling.setdefault("transitions", [])
+    transitions.append(
+        {
+            "evidence": str(evidence_path.relative_to(session.evidence_dir)),
+            "source_instance_type": session.rehost_instance_type,
+            "target_instance_type": target_instance_type,
+            "validated_at": validated_at.isoformat(),
+        }
+    )
+    scaling.pop("pending_transition")
+    manifest["status"] = "vertical_scaling_ready"
+    write_manifest(target_session, manifest)
+    return evidence
+
+
 def build_parser() -> ArgumentParser:
     """Build the Stage 9.3 controller without embedding credentials."""
     parser = ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     add_shared_arguments(subparsers.add_parser("prepare"))
     add_shared_arguments(subparsers.add_parser("run-tier"))
+    transition_parser = subparsers.add_parser("transition")
+    add_shared_arguments(transition_parser)
+    transition_parser.add_argument(
+        "--target-instance-type",
+        required=True,
+        choices=ALLOWED_INSTANCE_TYPES,
+    )
+    transition_parser.add_argument("--approved-session-id", required=True)
+    transition_parser.add_argument(
+        "--approved-target-instance-type",
+        required=True,
+        choices=ALLOWED_INSTANCE_TYPES,
+    )
     return parser
 
 
@@ -762,7 +1245,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             definition = prepare_from_arguments(arguments)
             print("prepared the frozen Stage 9.3 experiment definition")
             print(f"starting tier: {definition.starting_instance_type}")
-        else:
+        elif arguments.command == "run-tier":
             summary = run_current_vertical_scaling_tier(
                 session_from_arguments(arguments)
             )
@@ -771,6 +1254,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(
                 "maximum sustainable rate: "
                 f"{summary.maximum_sustainable_rate_per_second} events/s"
+            )
+        else:
+            evidence = transition_to_next_vertical_scaling_tier(
+                session_from_arguments(arguments),
+                target_instance_type=arguments.target_instance_type,
+                approved_session_id=arguments.approved_session_id,
+                approved_target_instance_type=(
+                    arguments.approved_target_instance_type
+                ),
+            )
+            print("completed the guarded Stage 9.3 hardware transition")
+            print(
+                f"instance type: {evidence.source_instance_type} -> "
+                f"{evidence.target_instance_type}"
             )
     except (AwsRehostError, AwsSessionError) as error:
         raise SystemExit(f"AWS vertical-scaling command failed: {error}") from error

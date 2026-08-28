@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from json import loads
+from json import dumps, loads
 from pathlib import Path
 from subprocess import CompletedProcess
 from uuid import UUID
@@ -14,6 +14,7 @@ from tests.test_aws_rehost import (
     COMMAND_ID,
     GIT_REVISION,
     INSTANCE_ID,
+    REPOSITORY_URL,
     completed,
     make_session,
     terraform_output_name,
@@ -31,12 +32,18 @@ from trackrelay.aws_vertical_scaling import (
     execute_with_load_window,
     prepare_vertical_scaling_experiment,
     run_current_vertical_scaling_tier,
+    run_remote_experiment_reset,
+    transition_to_next_vertical_scaling_tier,
+    validate_transition_plan,
 )
 from trackrelay.experiments.reconciliation import ReconciliationReport
 from trackrelay.experiments.rehost import (
     DeploymentRuntimeSample,
+    ExperimentTableCounts,
+    RehostExperimentResetEvidence,
     RehostRuntimeTimeline,
     RehostServerEvidence,
+    encoded_reset_evidence,
 )
 from trackrelay.runtime_metrics import (
     DatabasePoolMetrics,
@@ -474,3 +481,283 @@ def test_current_tier_runner_preserves_every_rate_and_evidence_source(
     assert PUBLIC_IP not in portable_evidence
     assert INSTANCE_ID not in portable_evidence
     assert RDS_IDENTIFIER not in portable_evidence
+
+
+def prepared_completed_baseline_session(tmp_path: Path):
+    """Prepare a session whose first RDS-backed hardware tier is complete."""
+    session = prepare_rds_session(tmp_path)
+    prepare_vertical_scaling_experiment(
+        session,
+        runner=clean_revision_runner,
+        now=lambda: datetime(2026, 8, 29, 13, tzinfo=UTC),
+    )
+    manifest = load_manifest(session)
+    manifest["status"] = "vertical_scaling_tier_collected"
+    manifest["vertical_scaling"]["completed_tiers"] = ["t4g.small"]
+    write_manifest(session, manifest)
+    return session
+
+
+def reset_evidence() -> RehostExperimentResetEvidence:
+    empty = ExperimentTableCounts(
+        delivery_attempts=0,
+        events=0,
+        shipments=0,
+        test_runs=0,
+    )
+    return RehostExperimentResetEvidence(
+        completed_at=datetime(2026, 8, 29, 21, tzinfo=UTC),
+        database_rows_removed=ExperimentTableCounts(
+            delivery_attempts=4,
+            events=3,
+            shipments=2,
+            test_runs=1,
+        ),
+        database_rows_remaining=empty,
+        downstream_receipts_removed=3,
+    )
+
+
+def test_remote_reset_reads_only_the_framed_ssm_evidence(tmp_path: Path) -> None:
+    session = prepare_rds_session(tmp_path)
+    expected = reset_evidence()
+
+    def runner(
+        arguments: Sequence[str],
+        input_text: str | None,
+    ) -> CompletedProcess[str]:
+        del input_text
+        call = tuple(arguments)
+        if "send-command" in call:
+            return completed(call, stdout=COMMAND_ID)
+        if "wait" in call and "command-executed" in call:
+            return completed(call)
+        if "get-command-invocation" in call and "[Status,ResponseCode]" in call:
+            return completed(call, stdout="Success\t0")
+        if "get-command-invocation" in call and "StandardOutputContent" in call:
+            return completed(
+                call,
+                stdout=(
+                    "ordinary compose output\n"
+                    f"{encoded_reset_evidence(expected)}\n"
+                ),
+            )
+        raise AssertionError(f"unexpected external command: {call}")
+
+    observed = run_remote_experiment_reset(
+        session,
+        instance_id=INSTANCE_ID,
+        runner=runner,
+    )
+
+    assert observed == expected
+
+
+def test_transition_applies_only_saved_next_tier_plan_and_revalidates(
+    tmp_path: Path,
+) -> None:
+    session = prepared_completed_baseline_session(tmp_path)
+    calls: list[tuple[str, ...]] = []
+    applied_plan_paths: list[str] = []
+
+    def runner(
+        arguments: Sequence[str],
+        input_text: str | None,
+    ) -> CompletedProcess[str]:
+        del input_text
+        call = tuple(arguments)
+        calls.append(call)
+        if call == ("git", "status", "--porcelain"):
+            return completed(call)
+        if call == ("git", "rev-parse", "HEAD"):
+            return completed(call, stdout=GIT_REVISION)
+        output_name = terraform_output_name(call)
+        if output_name == "rehost_instance_id":
+            return completed(call, stdout=INSTANCE_ID)
+        if output_name == "rds_identifier":
+            return completed(call, stdout=RDS_IDENTIFIER)
+        if output_name == "rehost_ecr_repository_url":
+            return completed(call, stdout=REPOSITORY_URL)
+        if "plan" in call:
+            assert "-var=rehost_instance_type=c8g.large" in call
+            output_argument = next(value for value in call if value.startswith("-out="))
+            Path(output_argument.removeprefix("-out=")).write_bytes(b"saved plan")
+            return completed(call, stdout="one resource changed")
+        if "show" in call and "-json" in call:
+            plan = {
+                "resource_changes": [
+                    {
+                        "address": "aws_db_instance.postgres",
+                        "change": {"actions": ["no-op"]},
+                    },
+                    {
+                        "address": "aws_instance.rehost",
+                        "change": {
+                            "actions": ["update"],
+                            "before": {
+                                "instance_type": "t4g.small",
+                                "credit_specification": [
+                                    {"cpu_credits": "standard"}
+                                ],
+                            },
+                            "after": {
+                                "instance_type": "c8g.large",
+                                "credit_specification": [],
+                            },
+                        },
+                    },
+                ]
+            }
+            return completed(call, stdout=dumps(plan))
+        if "apply" in call:
+            assert "-var=rehost_instance_type=c8g.large" not in call
+            applied_plan_paths.append(call[-1])
+            return completed(call, stdout="apply complete")
+        if "ec2" in call and "describe-instances" in call:
+            return completed(call, stdout="c8g.large")
+        raise AssertionError(f"unexpected external command: {call}")
+
+    reset_calls: list[tuple[str, str]] = []
+
+    def resetter(reset_session, *, instance_id, **_kwargs):
+        reset_calls.append((reset_session.rehost_instance_type, instance_id))
+        return reset_evidence()
+
+    wait_calls: list[tuple[str, str]] = []
+
+    def waiter(wait_session, instance_id, **_kwargs):
+        wait_calls.append((wait_session.rehost_instance_type, instance_id))
+
+    validation_calls: list[tuple[str, str, str]] = []
+
+    def validator(
+        validation_session,
+        *,
+        instance_id,
+        image_reference,
+        **_kwargs,
+    ):
+        validation_calls.append(
+            (
+                validation_session.rehost_instance_type,
+                instance_id,
+                image_reference,
+            )
+        )
+        return COMMAND_ID
+
+    clock = iter(
+        (
+            datetime(2026, 8, 29, 21, 5, tzinfo=UTC),
+            datetime(2026, 8, 29, 21, 7, tzinfo=UTC),
+        )
+    )
+    evidence = transition_to_next_vertical_scaling_tier(
+        session,
+        target_instance_type="c8g.large",
+        approved_session_id=session.session_id,
+        approved_target_instance_type="c8g.large",
+        runner=runner,
+        resetter=resetter,
+        ssm_waiter=waiter,
+        deployment_validator=validator,
+        now=lambda: next(clock),
+    )
+
+    assert evidence.source_instance_type == "t4g.small"
+    assert evidence.target_instance_type == "c8g.large"
+    assert evidence.plan.changed_attributes == (
+        "credit_specification",
+        "instance_type",
+    )
+    assert reset_calls == [("t4g.small", INSTANCE_ID)]
+    assert wait_calls == [("c8g.large", INSTANCE_ID)]
+    assert validation_calls == [
+        ("c8g.large", INSTANCE_ID, f"{REPOSITORY_URL}@{IMAGE_DIGEST}")
+    ]
+    assert applied_plan_paths == [
+        str(
+            session.evidence_dir
+            / "vertical-scaling"
+            / "transitions"
+            / "t4g.small-to-c8g.large"
+            / "terraform-transition.tfplan"
+        )
+    ]
+    target_session = session.__class__(
+        **{
+            **session.__dict__,
+            "rehost_instance_type": "c8g.large",
+        }
+    )
+    manifest = load_manifest(target_session)
+    assert manifest["status"] == "vertical_scaling_ready"
+    assert manifest["rehost_instance_type"] == "c8g.large"
+    assert manifest["vertical_scaling"]["current_tier"] == "c8g.large"
+    assert manifest["vertical_scaling"]["completed_tiers"] == ["t4g.small"]
+    assert "pending_transition" not in manifest["vertical_scaling"]
+    assert len(manifest["vertical_scaling"]["transitions"]) == 1
+    transition_root = (
+        session.evidence_dir
+        / "vertical-scaling"
+        / "transitions"
+        / "t4g.small-to-c8g.large"
+    )
+    assert (transition_root / "reset-evidence.json").is_file()
+    assert (transition_root / "plan-evidence.json").is_file()
+    assert (transition_root / "transition-evidence.json").is_file()
+    portable_evidence = (transition_root / "transition-evidence.json").read_text(
+        encoding="utf-8"
+    )
+    assert INSTANCE_ID not in portable_evidence
+    assert RDS_IDENTIFIER not in portable_evidence
+    assert REPOSITORY_URL not in portable_evidence
+    assert not any("ssm" in call for call in calls)
+
+
+def test_transition_rejects_mismatched_approval_before_external_work(
+    tmp_path: Path,
+) -> None:
+    session = prepared_completed_baseline_session(tmp_path)
+    external_work: list[object] = []
+
+    with raises(AwsRehostError, match="approved transition target"):
+        transition_to_next_vertical_scaling_tier(
+            session,
+            target_instance_type="c8g.large",
+            approved_session_id=session.session_id,
+            approved_target_instance_type="c8g.4xlarge",
+            runner=lambda *_args, **_kwargs: external_work.append("runner"),
+            resetter=lambda *_args, **_kwargs: external_work.append("reset"),
+        )
+
+    assert external_work == []
+
+
+def test_transition_plan_rejects_an_unrelated_resource_change() -> None:
+    resource_changes = [
+        {
+            "address": "aws_instance.rehost",
+            "change": {
+                "actions": ["update"],
+                "before": {"instance_type": "t4g.small"},
+                "after": {"instance_type": "c8g.large"},
+            },
+        },
+        {
+            "address": "aws_db_instance.postgres",
+            "change": {
+                "actions": ["update"],
+                "before": {"instance_class": "db.t4g.micro"},
+                "after": {"instance_class": "db.t4g.small"},
+            },
+        },
+    ]
+
+    with raises(AwsRehostError, match="exactly one resource"):
+        validate_transition_plan(
+            dumps({"resource_changes": resource_changes}),
+            source_instance_type="t4g.small",
+            target_instance_type="c8g.large",
+            plan_sha256="a" * 64,
+        )

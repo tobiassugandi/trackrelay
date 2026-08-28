@@ -11,8 +11,8 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 import httpx
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from trackrelay.config import Settings
@@ -35,13 +35,14 @@ from trackrelay.experiments.scenarios import (
     complete_database_run,
     prepare_database_for_run,
 )
-from trackrelay.models import DeliveryAttempt, Event
+from trackrelay.models import DeliveryAttempt, Event, Shipment, TestRun
 from trackrelay.runtime_metrics import RuntimeMetricsSnapshot
 
 PositiveInteger = Annotated[int, Field(gt=0)]
 NonNegativeInteger = Annotated[int, Field(ge=0)]
 EVIDENCE_PREFIX = "TRACKRELAY_REHOST_EVIDENCE="
 RUNTIME_EVIDENCE_PREFIX = "TRACKRELAY_RUNTIME_EVIDENCE="
+RESET_EVIDENCE_PREFIX = "TRACKRELAY_RESET_EVIDENCE="
 RUNTIME_SAMPLE_INTERVAL_SECONDS = 5
 RUNTIME_SAMPLING_MARGIN_SECONDS = 15
 
@@ -131,6 +132,92 @@ class RehostRuntimeTimeline(BaseModel):
     sample_interval_seconds: Literal[5] = 5
     sampling_duration_seconds: PositiveInteger
     samples: tuple[DeploymentRuntimeSample, ...]
+
+
+class ExperimentTableCounts(BaseModel):
+    """Synthetic rows present before or after a treatment reset."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    delivery_attempts: NonNegativeInteger
+    events: NonNegativeInteger
+    shipments: NonNegativeInteger
+    test_runs: NonNegativeInteger
+
+
+class RehostExperimentResetEvidence(BaseModel):
+    """Proof that only synthetic treatment state was cleared."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    completed_at: AwareDatetime
+    database_rows_removed: ExperimentTableCounts
+    database_rows_remaining: ExperimentTableCounts
+    downstream_receipts_removed: NonNegativeInteger
+    downstream_receipts_remaining: Literal[0] = 0
+
+    @model_validator(mode="after")
+    def require_an_empty_database(self) -> "RehostExperimentResetEvidence":
+        if any(self.database_rows_remaining.model_dump().values()):
+            raise ValueError("experiment reset left synthetic database rows")
+        return self
+
+
+def _experiment_table_counts(session: Session) -> ExperimentTableCounts:
+    return ExperimentTableCounts(
+        delivery_attempts=session.scalar(
+            select(func.count()).select_from(DeliveryAttempt)
+        )
+        or 0,
+        events=session.scalar(select(func.count()).select_from(Event)) or 0,
+        shipments=session.scalar(select(func.count()).select_from(Shipment)) or 0,
+        test_runs=session.scalar(select(func.count()).select_from(TestRun)) or 0,
+    )
+
+
+def reset_rehost_experiment_state(
+    *,
+    sessions: sessionmaker[Session] = default_session_factory,
+    downstream_client: httpx.Client,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> RehostExperimentResetEvidence:
+    """Clear synthetic rows and receipts while preserving configuration."""
+    with sessions.begin() as session:
+        before = _experiment_table_counts(session)
+        if session.get_bind().dialect.name == "postgresql":
+            session.execute(
+                text(
+                    "TRUNCATE TABLE delivery_attempts, events, shipments, "
+                    "test_runs"
+                )
+            )
+        else:
+            for model in (DeliveryAttempt, Event, Shipment, TestRun):
+                session.execute(delete(model))
+        after = _experiment_table_counts(session)
+
+    mode_response = downstream_client.put(
+        "/control/mode",
+        json={"mode": SimulatorMode.HEALTHY.value},
+    )
+    mode_response.raise_for_status()
+    clear_response = downstream_client.delete("/control/events")
+    clear_response.raise_for_status()
+    cleared_receipts = clear_response.json().get("cleared_event_count")
+    remaining_response = downstream_client.get("/events")
+    remaining_response.raise_for_status()
+    remaining_receipts = remaining_response.json()
+    if not isinstance(cleared_receipts, int) or cleared_receipts < 0:
+        raise ValueError("downstream reset returned an invalid receipt count")
+    if remaining_receipts != []:
+        raise ValueError("downstream reset left synthetic receipts")
+    return RehostExperimentResetEvidence(
+        completed_at=now(),
+        database_rows_removed=before,
+        database_rows_remaining=after,
+        downstream_receipts_removed=cleared_receipts,
+    )
 
 
 def prepare_rehost_workload_point(
@@ -315,36 +402,56 @@ def encoded_runtime_evidence(evidence: RehostRuntimeTimeline) -> str:
     return f"{RUNTIME_EVIDENCE_PREFIX}{encoded}"
 
 
+def encoded_reset_evidence(evidence: RehostExperimentResetEvidence) -> str:
+    """Encode compact treatment-reset proof for SSM collection."""
+    encoded = b64encode(evidence.model_dump_json().encode("utf-8")).decode(
+        "ascii"
+    )
+    return f"{RESET_EVIDENCE_PREFIX}{encoded}"
+
+
 def build_parser() -> ArgumentParser:
     """Build the private helper's deliberately narrow command line."""
     parser = ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "action",
-        choices=("prepare", "collect", "sample-runtime"),
-    )
-    parser.add_argument("--test-run-id", type=UUID, required=True)
-    parser.add_argument("--rate", type=int, required=True)
-    parser.add_argument("--duration-seconds", type=int, required=True)
-    parser.add_argument("--sampling-duration-seconds", type=int)
-    parser.add_argument("--seed", type=int, required=True)
-    parser.add_argument("--partner-id", required=True)
-    parser.add_argument("--start-at", required=True)
-    parser.add_argument(
-        "--settle-timeout-seconds",
-        type=float,
-        required=True,
-    )
-    parser.add_argument(
-        "--stable-window-seconds",
-        type=float,
-        required=True,
-    )
+    subparsers = parser.add_subparsers(dest="action", required=True)
+    subparsers.add_parser("reset")
+    for action in ("prepare", "collect", "sample-runtime"):
+        action_parser = subparsers.add_parser(action)
+        action_parser.add_argument("--test-run-id", type=UUID, required=True)
+        action_parser.add_argument("--rate", type=int, required=True)
+        action_parser.add_argument("--duration-seconds", type=int, required=True)
+        action_parser.add_argument("--sampling-duration-seconds", type=int)
+        action_parser.add_argument("--seed", type=int, required=True)
+        action_parser.add_argument("--partner-id", required=True)
+        action_parser.add_argument("--start-at", required=True)
+        action_parser.add_argument(
+            "--settle-timeout-seconds",
+            type=float,
+            required=True,
+        )
+        action_parser.add_argument(
+            "--stable-window-seconds",
+            type=float,
+            required=True,
+        )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run within the deployed Compose network, normally through SSM."""
     arguments = build_parser().parse_args(argv)
+    settings = Settings()
+    if arguments.action == "reset":
+        with httpx.Client(
+            base_url=settings.downstream_url,
+            timeout=settings.downstream_timeout_seconds,
+        ) as downstream_client:
+            evidence = reset_rehost_experiment_state(
+                downstream_client=downstream_client,
+            )
+        print(encoded_reset_evidence(evidence))
+        return 0
+
     point = RehostWorkloadPoint(
         test_run_id=arguments.test_run_id,
         request_rate_per_second=arguments.rate,
@@ -355,7 +462,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         post_load_settle_timeout_seconds=arguments.settle_timeout_seconds,
         post_load_stable_window_seconds=arguments.stable_window_seconds,
     )
-    settings = Settings()
     if arguments.action == "sample-runtime":
         with (
             httpx.Client(

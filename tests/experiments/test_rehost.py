@@ -16,14 +16,18 @@ from trackrelay.domain import (
 from trackrelay.experiments.reconciliation import ReconciliationReport
 from trackrelay.experiments.rehost import (
     EVIDENCE_PREFIX,
+    RESET_EVIDENCE_PREFIX,
     RUNTIME_EVIDENCE_PREFIX,
+    RehostExperimentResetEvidence,
     RehostRuntimeTimeline,
     RehostServerEvidence,
     RehostWorkloadPoint,
     collect_downstream_delivery_intervals,
     encoded_evidence,
+    encoded_reset_evidence,
     encoded_runtime_evidence,
     prepare_rehost_workload_point,
+    reset_rehost_experiment_state,
     sample_rehost_runtime_timeline,
 )
 from trackrelay.models import DeliveryAttempt, Event, Partner, Shipment
@@ -89,6 +93,111 @@ def test_prepare_creates_private_run_state_and_sets_healthy_mode() -> None:
         assert partner.adapter_type == "courier-alpha"
         assert test_run is not None
         assert test_run.expected_event_count == 6
+    engine.dispose()
+
+
+def test_reset_clears_only_synthetic_treatment_state() -> None:
+    engine, sessions = create_test_database()
+    started_at = datetime(2026, 8, 29, tzinfo=UTC)
+    with sessions.begin() as session:
+        session.add(
+            Partner(
+                id="load-alpha",
+                name="Load Alpha",
+                adapter_type="courier-alpha",
+                is_active=True,
+            )
+        )
+        session.add(
+            ExperimentRunModel(
+                id=TEST_RUN_ID,
+                scenario_name="reset-test",
+                random_seed=1,
+                configuration={},
+                expected_event_count=1,
+                started_at=started_at,
+            )
+        )
+        session.add(
+            Shipment(
+                tracking_number="TRK-RESET",
+                current_status=ShipmentStatus.CREATED,
+                current_status_occurred_at=started_at,
+            )
+        )
+        session.flush()
+        event = Event(
+            partner_id="load-alpha",
+            partner_event_id="EVT-RESET",
+            tracking_number="TRK-RESET",
+            status=ShipmentStatus.CREATED,
+            occurred_at=started_at,
+            received_at=started_at,
+            raw_payload={},
+            test_run_id=TEST_RUN_ID,
+            processing_status=EventProcessingStatus.PROCESSED,
+            state_applied=True,
+        )
+        session.add(event)
+        session.flush()
+        session.add(
+            DeliveryAttempt(
+                event_id=event.id,
+                attempt_number=1,
+                result=DeliveryAttemptResult.DELIVERED,
+                response_code=202,
+                latency_ms=10,
+                started_at=started_at,
+                completed_at=started_at,
+            )
+        )
+
+    requests: list[tuple[str, str]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        if request.method == "PUT":
+            return httpx.Response(
+                200,
+                json={"mode": "HEALTHY", "delay_seconds": 0},
+            )
+        if request.method == "DELETE":
+            return httpx.Response(200, json={"cleared_event_count": 1})
+        return httpx.Response(200, json=[])
+
+    with httpx.Client(
+        base_url="http://downstream:8001",
+        transport=httpx.MockTransport(respond),
+    ) as client:
+        evidence = reset_rehost_experiment_state(
+            sessions=sessions,
+            downstream_client=client,
+            now=lambda: started_at + timedelta(minutes=1),
+        )
+
+    assert evidence.database_rows_removed.model_dump() == {
+        "delivery_attempts": 1,
+        "events": 1,
+        "shipments": 1,
+        "test_runs": 1,
+    }
+    assert evidence.database_rows_remaining.model_dump() == {
+        "delivery_attempts": 0,
+        "events": 0,
+        "shipments": 0,
+        "test_runs": 0,
+    }
+    assert evidence.downstream_receipts_removed == 1
+    assert requests == [
+        ("PUT", "/control/mode"),
+        ("DELETE", "/control/events"),
+        ("GET", "/events"),
+    ]
+    with sessions() as session:
+        assert session.get(Partner, "load-alpha") is not None
+    encoded = encoded_reset_evidence(evidence)
+    decoded = b64decode(encoded.removeprefix(RESET_EVIDENCE_PREFIX)).decode()
+    assert RehostExperimentResetEvidence.model_validate_json(decoded) == evidence
     engine.dispose()
 
 

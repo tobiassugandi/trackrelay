@@ -61,10 +61,12 @@ Store the compact, non-secret session record under `results/aws-sessions/<sessio
 - [ ] Run the exact frozen Step 8.6 workload from the approved benchmark machine with `make aws-rehost-workload SESSION_ID=<session ID> API_INGRESS_CIDR=<approved IPv4>/32`; confirm that all six rate points and their reconciliation evidence were saved under the session evidence directory.
 - [ ] Switch the deployed API to private RDS with `make aws-rds-deploy SESSION_ID=<session ID> API_INGRESS_CIDR=<approved IPv4>/32`; confirm that the session record contains the resolved PostgreSQL minor and non-secret RDS configuration, never its endpoint or credential.
 - [ ] Run `make aws-rds-correctness SESSION_ID=<session ID> API_INGRESS_CIDR=<approved IPv4>/32`; confirm that all four scenario results and their passing reconciliation counts were saved in `rds-correctness/suite.json` without endpoints or credentials.
+- [ ] For cloud session 2 only, arm `make aws-scaling-session` after the RDS correctness checkpoint by repeating the approved session ID, recorded cost ceiling, exact `t4g.small,c8g.large,c8g.4xlarge` tier order, and unconditional-teardown session ID. From that point, let this single runner own all three treatments, both transitions, reporting, destroy, and native absence verification; do not run a competing controller.
 - [ ] Do not create untracked resources in the AWS console. If emergency diagnosis creates or changes anything, record it immediately and bring it under Terraform or remove it before continuing.
 - [ ] Run only the validation or experiment named in the approved proposal.
 - [ ] Collect evidence continuously so an interrupted run can still be diagnosed.
 - [ ] If validation fails, costs approach the ceiling, or the session exceeds its approved duration, stop experimentation and begin teardown.
+- [ ] A normal experiment error, `SIGINT`, or `SIGTERM` should be allowed to reach the runner's cleanup path. If the local process or host disappears abruptly, recover `rehost_instance_type` from the session manifest and manually run `make aws-down` followed by `make aws-verify-down` with that exact tier.
 
 ## Teardown
 

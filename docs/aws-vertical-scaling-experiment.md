@@ -286,6 +286,54 @@ simulator reaches its CPU or memory allowance, attribution is invalidated rather
 than credited to the EC2 treatment. These labels summarize evidence; they do
 not replace the recorded measurements.
 
+## Failure-safe session runner
+
+After an approved cloud session has reached `rds_correctness_collected` on
+`t4g.small`, the preferred Stage 9.3 entry point is the explicitly armed session
+runner:
+
+```shell
+make aws-scaling-session \
+  SESSION_ID=cloud-session-2-YYYYMMDDTHHMMSSZ \
+  APPROVED_SESSION_ID=cloud-session-2-YYYYMMDDTHHMMSSZ \
+  APPROVED_COST_CEILING_USD=REVIEWED_CEILING \
+  APPROVED_TIER_ORDER='t4g.small,c8g.large,c8g.4xlarge' \
+  APPROVED_UNCONDITIONAL_TEARDOWN_SESSION_ID=cloud-session-2-YYYYMMDDTHHMMSSZ \
+  REHOST_INSTANCE_TYPE=t4g.small \
+  API_INGRESS_CIDR=YOUR_CURRENT_PUBLIC_IP/32
+```
+
+The repeated session ID, recorded cost ceiling, exact tier order, and
+unconditional-teardown session ID are mechanical arming controls. All must
+match the approved apply and frozen experiment. A generic request to continue
+does not supply them and cannot start this command.
+
+After the approval gate passes, the runner prepares the control artifact, runs
+the three rate ladders and two guarded transitions, generates the comparison
+report, and then attempts full-stack destroy and native absence verification.
+Destroy and verification run after success, an experiment failure, `SIGINT`, or
+`SIGTERM`; verification is still attempted if destroy itself raises an error.
+Cleanup derives the current or pending EC2 tier from the manifest journal rather
+than from an earlier caller assumption and journals that cleanup choice before
+destroy. A cleanup error retains the original workflow error for diagnosis.
+
+No in-process cleanup can survive `SIGKILL`, a local power loss, destruction of
+the benchmark host, or loss of local Terraform state. Keep the Terraform state
+and ignored session evidence on durable storage. After an abrupt interruption,
+read `rehost_instance_type` from the session's `session.json`, then recover with
+the same journaled tier:
+
+```shell
+make aws-down \
+  SESSION_ID=cloud-session-2-YYYYMMDDTHHMMSSZ \
+  REHOST_INSTANCE_TYPE=JOURNALED_INSTANCE_TYPE \
+  API_INGRESS_CIDR=YOUR_CURRENT_PUBLIC_IP/32
+make aws-verify-down \
+  SESSION_ID=cloud-session-2-YYYYMMDDTHHMMSSZ \
+  REHOST_INSTANCE_TYPE=JOURNALED_INSTANCE_TYPE \
+  API_INGRESS_CIDR=YOUR_CURRENT_PUBLIC_IP/32
+```
+
 The private five-second process sampler runs for 15 seconds beyond the scheduled
 load duration. That margin covers local container startup and the final load
 seconds without expanding the CloudWatch load window: AWS metrics remain aligned

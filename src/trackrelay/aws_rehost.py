@@ -215,6 +215,8 @@ def publish_image(
                 "build",
                 "--platform",
                 "linux/arm64",
+                "--provenance=false",
+                "--sbom=false",
                 "--file",
                 "Dockerfile",
                 "--tag",

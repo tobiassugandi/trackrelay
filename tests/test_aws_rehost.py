@@ -155,6 +155,8 @@ def test_publish_pushes_only_arm64_and_records_digest_without_credentials(
 
     build_call = next(call for call, _ in calls if "buildx" in call)
     assert "linux/arm64" in build_call
+    assert "--provenance=false" in build_call
+    assert "--sbom=false" in build_call
     assert "--push" in build_call
     assert f"{REPOSITORY_URL}:git-{GIT_REVISION[:12]}" in build_call
     login_call, login_input = next(

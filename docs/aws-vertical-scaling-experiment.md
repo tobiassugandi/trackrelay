@@ -210,6 +210,40 @@ need a separate single-variable plan and explicit cloud-session approval.
 Cloud session 2 will be prepared locally and must receive its own explicit cost
 approval before any resource is created:
 
+### Detached-sampler cloud canary
+
+Before another full Stage 9.3 attempt, use a separately planned and approved
+canary session on `t4g.small` with the same private RDS deployment. The canary
+is intentionally not a performance result: it sends only 10 events/s for 30
+seconds, omits CloudWatch collection and EC2 transitions, and cannot contribute
+to the final capacity comparison. Its only purpose is to prove the repaired
+cloud-specific lifecycle before committing to all three hardware treatments.
+To keep that purpose narrow, its setup uses `make aws-rds-deploy-canary`
+directly after the deployment smoke. It does not run the unrelated six-point
+host-local portability ladder; normal Stage 9.3 sessions still require that
+checkpoint and use `make aws-rds-deploy`.
+
+After RDS correctness passes, arm the canary with:
+
+```shell
+make aws-scaling-canary \
+  SESSION_ID=cloud-session-2-YYYYMMDDTHHMMSSZ \
+  APPROVED_SESSION_ID=cloud-session-2-YYYYMMDDTHHMMSSZ \
+  APPROVED_COST_CEILING_USD=REVIEWED_CANARY_CEILING \
+  APPROVED_UNCONDITIONAL_TEARDOWN_SESSION_ID=cloud-session-2-YYYYMMDDTHHMMSSZ \
+  REHOST_INSTANCE_TYPE=t4g.small \
+  API_INGRESS_CIDR=YOUR_CURRENT_PUBLIC_IP/32
+```
+
+The gate passes only when all 300 events execute and reconcile, the timestamped
+API and downstream timeline contains the exact driver-side load window, and a
+separate private check proves the detached sampler container no longer exists.
+Success or failure then leads directly to full Terraform destroy and native
+empty-inventory verification. A passing canary is reviewed before a new full
+Stage 9.3 proposal is created; it never rolls directly into that experiment.
+
+### Full Stage 9.3 procedure
+
 After the approved baseline deployment has passed RDS correctness,
 `make aws-scaling-prepare` performs no AWS API operation. It reads the guarded
 session record and clean Git revision, validates the deployed image and RDS

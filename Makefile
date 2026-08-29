@@ -45,7 +45,7 @@ APPROVED_TARGET_INSTANCE_TYPE ?=
 APPROVED_TIER_ORDER ?=
 APPROVED_UNCONDITIONAL_TEARDOWN_SESSION_ID ?=
 
-.PHONY: sync test test-integration lint run run-downstream image-api image-api-smoke rehost-config rehost-smoke generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp load-slow load-outage load-baseline aws-check aws-plan aws-up aws-rehost-publish aws-rehost-deploy aws-rehost-workload aws-rds-deploy aws-rds-correctness aws-scaling-prepare aws-scaling-run-tier aws-scaling-transition aws-scaling-report aws-scaling-session aws-down aws-verify-down infra-init infra-check db-up db-status db-check db-down migrate migration-status
+.PHONY: sync test test-integration lint run run-downstream image-api image-api-smoke rehost-config rehost-smoke generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp load-slow load-outage load-baseline aws-check aws-plan aws-up aws-rehost-publish aws-rehost-deploy aws-rehost-workload aws-rds-deploy aws-rds-deploy-canary aws-rds-correctness aws-scaling-prepare aws-scaling-run-tier aws-scaling-transition aws-scaling-report aws-scaling-canary aws-scaling-session aws-down aws-verify-down infra-init infra-check db-up db-status db-check db-down migrate migration-status
 
 sync:
 	$(UV) sync --locked --python 3.12
@@ -231,6 +231,18 @@ aws-rds-deploy:
 		--compose-file "$(REHOST_COMPOSE_FILE)" \
 		--installer "$(REHOST_RDS_INSTALLER)"
 
+aws-rds-deploy-canary:
+	$(UV) run --locked trackrelay-aws-rehost deploy-rds-canary \
+		--session-id "$(SESSION_ID)" \
+		--profile "$(TRACKRELAY_AWS_PROFILE)" \
+		--region "$(TRACKRELAY_AWS_REGION)" \
+		--api-ingress-cidr "$(API_INGRESS_CIDR)" \
+		--rehost-instance-type "$(REHOST_INSTANCE_TYPE)" \
+		--terraform-dir "$(TERRAFORM_DIR)" \
+		--evidence-root "$(AWS_SESSION_RESULTS)" \
+		--compose-file "$(REHOST_COMPOSE_FILE)" \
+		--installer "$(REHOST_RDS_INSTALLER)"
+
 aws-rds-correctness:
 	$(UV) run --locked trackrelay-aws-rehost correctness-rds \
 		--session-id "$(SESSION_ID)" \
@@ -281,6 +293,19 @@ aws-scaling-report:
 		--region "$(TRACKRELAY_AWS_REGION)" \
 		--api-ingress-cidr "$(API_INGRESS_CIDR)" \
 		--rehost-instance-type "$(REHOST_INSTANCE_TYPE)" \
+		--terraform-dir "$(TERRAFORM_DIR)" \
+		--evidence-root "$(AWS_SESSION_RESULTS)"
+
+aws-scaling-canary:
+	$(UV) run --locked trackrelay-aws-vertical-scaling-canary \
+		--session-id "$(SESSION_ID)" \
+		--profile "$(TRACKRELAY_AWS_PROFILE)" \
+		--region "$(TRACKRELAY_AWS_REGION)" \
+		--api-ingress-cidr "$(API_INGRESS_CIDR)" \
+		--rehost-instance-type "$(REHOST_INSTANCE_TYPE)" \
+		--approved-session-id "$(APPROVED_SESSION_ID)" \
+		--approved-cost-ceiling-usd "$(APPROVED_COST_CEILING_USD)" \
+		--approved-unconditional-teardown-session-id "$(APPROVED_UNCONDITIONAL_TEARDOWN_SESSION_ID)" \
 		--terraform-dir "$(TERRAFORM_DIR)" \
 		--evidence-root "$(AWS_SESSION_RESULTS)"
 

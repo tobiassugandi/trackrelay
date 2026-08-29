@@ -7,7 +7,7 @@ from json import dumps, loads
 from pathlib import Path
 from subprocess import CompletedProcess
 
-from pytest import raises
+from pytest import mark, raises
 
 from trackrelay.aws_rehost import (
     AwsRehostError,
@@ -308,10 +308,20 @@ def test_deploy_refuses_an_image_from_a_different_revision(
     assert not any(call[0] == "aws" for call in calls)
 
 
+@mark.parametrize(
+    ("prior_status", "canary_only", "deployment_purpose"),
+    (
+        ("rehost_workload_collected", False, "stage-9.3"),
+        ("rehost_deployed", True, "sampler-canary"),
+    ),
+)
 def test_rds_deploy_discovers_connection_data_on_host_without_persisting_it(
     tmp_path: Path,
+    prior_status: str,
+    canary_only: bool,
+    deployment_purpose: str,
 ) -> None:
-    session = make_session(tmp_path, status="rehost_workload_collected")
+    session = make_session(tmp_path, status=prior_status)
     manifest = loads(session.manifest_path.read_text(encoding="utf-8"))
     manifest["image"] = {
         "architecture": "linux/arm64",
@@ -360,6 +370,7 @@ def test_rds_deploy_discovers_connection_data_on_host_without_persisting_it(
     deploy_rds_rehost(
         session,
         files=RehostFiles(compose=compose_file, installer=installer),
+        canary_only=canary_only,
         runner=runner,
         sleeper=lambda _: None,
         now=deployed_at,
@@ -384,6 +395,7 @@ def test_rds_deploy_discovers_connection_data_on_host_without_persisting_it(
         "engine": "postgres",
         "engine_version": "17.6",
         "instance_class": "db.t4g.micro",
+        "deployment_purpose": deployment_purpose,
         "storage_type": "encrypted-gp3",
     }
     assert "123456789012" not in saved_text

@@ -538,15 +538,19 @@ def deploy_rds_rehost(
     session: AwsSession,
     *,
     files: RehostFiles,
+    canary_only: bool = False,
     runner: ProcessRunner = run_process,
     sleeper: Sleeper = sleep,
     now: datetime | None = None,
 ) -> None:
     """Switch the deployed rehost to private RDS and smoke-test persistence."""
     manifest, revision = require_applied_clean_revision(session, runner=runner)
-    if manifest.get("status") != "rehost_workload_collected":
+    required_status = (
+        "rehost_deployed" if canary_only else "rehost_workload_collected"
+    )
+    if manifest.get("status") != required_status:
         raise AwsRehostError(
-            "the host-local rehost workload must be collected before RDS"
+            "the required rehost checkpoint is incomplete before RDS"
         )
     image_reference = deployed_image_reference(
         session,
@@ -601,6 +605,9 @@ def deploy_rds_rehost(
                 "engine": "postgres",
                 "engine_version": resolved_engine_version,
                 "instance_class": "db.t4g.micro",
+                "deployment_purpose": (
+                    "sampler-canary" if canary_only else "stage-9.3"
+                ),
                 "storage_type": "encrypted-gp3",
             },
             "rds_deployed_at": deployed_at.isoformat(),
@@ -624,6 +631,10 @@ def build_parser() -> ArgumentParser:
     add_shared_arguments(rds_parser)
     rds_parser.add_argument("--compose-file", type=Path, required=True)
     rds_parser.add_argument("--installer", type=Path, required=True)
+    canary_rds_parser = subparsers.add_parser("deploy-rds-canary")
+    add_shared_arguments(canary_rds_parser)
+    canary_rds_parser.add_argument("--compose-file", type=Path, required=True)
+    canary_rds_parser.add_argument("--installer", type=Path, required=True)
     add_shared_arguments(subparsers.add_parser("correctness-rds"))
     add_shared_arguments(subparsers.add_parser("workload"))
     return parser
@@ -646,13 +657,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
             )
             print("deployed and smoke-tested the synchronous rehost through SSM")
-        elif arguments.command == "deploy-rds":
+        elif arguments.command in {"deploy-rds", "deploy-rds-canary"}:
             deploy_rds_rehost(
                 session,
                 files=RehostFiles(
                     compose=arguments.compose_file,
                     installer=arguments.installer,
                 ),
+                canary_only=arguments.command == "deploy-rds-canary",
             )
             print("switched the synchronous rehost to private RDS")
         elif arguments.command == "correctness-rds":

@@ -55,7 +55,7 @@ from trackrelay.experiments.rehost import (
     EVIDENCE_PREFIX,
     RUNTIME_EVIDENCE_PREFIX,
     RUNTIME_READY_PREFIX,
-    RUNTIME_SAMPLING_MARGIN_SECONDS,
+    RUNTIME_SAMPLING_TIMEOUT_MARGIN_SECONDS,
     RehostRuntimeTimeline,
     RehostServerEvidence,
     RehostWorkloadPoint,
@@ -80,6 +80,7 @@ LocalLoadExecutor = Callable[
 ]
 RUNTIME_SAMPLER_COLLECTION_MAX_WAIT_SECONDS = 120
 RUNTIME_SAMPLER_COLLECTION_EXECUTION_TIMEOUT_SECONDS = 150
+RUNTIME_SAMPLER_STOP_FILE = "/tmp/trackrelay-load-complete"
 
 
 class RemoteRuntimeSampler(BaseModel):
@@ -262,8 +263,8 @@ def runtime_sampler_container_name(point: RehostWorkloadPoint) -> str:
 
 
 def _runtime_sampling_command(point: RehostWorkloadPoint) -> str:
-    sampling_duration = (
-        point.duration_seconds + RUNTIME_SAMPLING_MARGIN_SECONDS
+    sampling_timeout = (
+        point.duration_seconds + RUNTIME_SAMPLING_TIMEOUT_MARGIN_SECONDS
     )
     return " ".join(
         (
@@ -272,7 +273,8 @@ def _runtime_sampling_command(point: RehostWorkloadPoint) -> str:
             f"--test-run-id {point.test_run_id}",
             f"--rate {point.request_rate_per_second}",
             f"--duration-seconds {point.duration_seconds}",
-            f"--sampling-duration-seconds {sampling_duration}",
+            f"--sampling-timeout-seconds {sampling_timeout}",
+            f"--stop-file {RUNTIME_SAMPLER_STOP_FILE}",
             f"--seed {point.random_seed}",
             f"--partner-id {point.partner_id}",
             f"--start-at {point.start_at.isoformat()}",
@@ -404,6 +406,27 @@ def build_runtime_sampling_collect_payload(
             "SSM runtime-sampling collect payload exceeds the safety limit"
         )
     return payload
+
+
+def build_runtime_sampling_stop_payload(
+    point: RehostWorkloadPoint,
+) -> dict[str, list[str]]:
+    """Tell a live sampler to take its final observation and stop."""
+    container_name = runtime_sampler_container_name(point)
+    command = "\n".join(
+        (
+            "set -euo pipefail",
+            f"container_name={quote(container_name)}",
+            (
+                'docker exec "$container_name" sh -c '
+                f"{quote(f'umask 077; : > {RUNTIME_SAMPLER_STOP_FILE}')}"
+            ),
+        )
+    )
+    return {
+        "commands": [command],
+        "executionTimeout": ["30"],
+    }
 
 
 def build_runtime_sampling_cleanup_payload(
@@ -539,6 +562,26 @@ def collect_remote_runtime_sampling(
             "runtime evidence start differs from sampler readiness"
         )
     return timeline
+
+
+def stop_remote_runtime_sampling(
+    session: AwsSession,
+    *,
+    instance_id: str,
+    sampler: RemoteRuntimeSampler,
+    point: RehostWorkloadPoint,
+    runner: ProcessRunner,
+) -> None:
+    """Signal the matching live sampler immediately after k6 exits."""
+    if sampler.container_name != runtime_sampler_container_name(point):
+        raise AwsRehostError("runtime sampler identity differs from the workload")
+    run_ssm_payload(
+        session,
+        instance_id=instance_id,
+        payload=build_runtime_sampling_stop_payload(point),
+        comment="TrackRelay detached runtime sampler stop",
+        runner=runner,
+    )
 
 
 def cleanup_remote_runtime_sampling(
@@ -746,6 +789,7 @@ def execute_rehost_workload(
     *,
     runner: ProcessRunner = run_process,
     load_executor: LocalLoadExecutor = execute_local_load,
+    runtime_stopper: Callable[..., None] = stop_remote_runtime_sampling,
     runtime_cleaner: Callable[..., None] = cleanup_remote_runtime_sampling,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> RehostWorkloadSummary:
@@ -848,19 +892,39 @@ def execute_rehost_workload(
                 runner=runner,
             )
             load_boundaries: list[datetime] = []
+
+            def record_load_started(
+                boundaries: list[datetime] = load_boundaries,
+            ) -> None:
+                boundaries.append(now())
+
+            def record_load_ended(
+                boundaries: list[datetime] = load_boundaries,
+                sampler: RemoteRuntimeSampler = runtime_sampler,
+                active_point: RehostWorkloadPoint = point,
+            ) -> None:
+                boundaries.append(now())
+                runtime_stopper(
+                    session,
+                    instance_id=instance_id,
+                    sampler=sampler,
+                    point=active_point,
+                    runner=runner,
+                )
+
             try:
                 k6_exit_code, samples, k6_summary = load_executor(
                     command,
                     client,
                     definition.resource_sample_interval_seconds,
                     k6_summary_path,
-                    on_load_started=lambda boundaries=load_boundaries: (
-                        boundaries.append(now())
-                    ),
-                    on_load_ended=lambda boundaries=load_boundaries: (
-                        boundaries.append(now())
-                    ),
+                    on_load_started=record_load_started,
+                    on_load_ended=record_load_ended,
                 )
+                if len(load_boundaries) != 2:
+                    raise AwsRehostError(
+                        "load executor did not report exact process boundaries"
+                    )
             except BaseException as load_error:
                 try:
                     runtime_cleaner(
@@ -884,10 +948,6 @@ def execute_rehost_workload(
             )
             if not samples:
                 raise AwsRehostError("local runtime sampling returned no samples")
-            if len(load_boundaries) != 2:
-                raise AwsRehostError(
-                    "load executor did not report exact process boundaries"
-                )
             validate_runtime_timeline_covers_load(
                 runtime_timeline,
                 test_run_id=test_run_id,

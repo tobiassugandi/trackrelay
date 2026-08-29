@@ -6,7 +6,8 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from gzip import compress
 from math import ceil
-from time import sleep
+from pathlib import Path
+from time import monotonic, sleep
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
@@ -45,9 +46,15 @@ RUNTIME_EVIDENCE_PREFIX = "TRACKRELAY_RUNTIME_EVIDENCE="
 RUNTIME_READY_PREFIX = "TRACKRELAY_RUNTIME_SAMPLING_READY="
 RESET_EVIDENCE_PREFIX = "TRACKRELAY_RESET_EVIDENCE="
 RUNTIME_SAMPLE_INTERVAL_SECONDS = 5
-# Covers controller handoff, high-rate k6 VU initialization, and its 10-second
-# graceful stop without making those phases part of the offered-load window.
-RUNTIME_SAMPLING_MARGIN_SECONDS = 30
+K6_PROCESS_STARTUP_ALLOWANCE_SECONDS = 120
+K6_GRACEFUL_STOP_SECONDS = 10
+RUNTIME_SAMPLER_SCHEDULING_SLACK_SECONDS = 15
+RUNTIME_SAMPLING_TIMEOUT_MARGIN_SECONDS = (
+    K6_PROCESS_STARTUP_ALLOWANCE_SECONDS
+    + K6_GRACEFUL_STOP_SECONDS
+    + RUNTIME_SAMPLE_INTERVAL_SECONDS
+    + RUNTIME_SAMPLER_SCHEDULING_SLACK_SECONDS
+)
 RUNTIME_SAMPLE_REQUEST_TIMEOUT_SECONDS = 1.0
 RUNTIME_READY_RETRY_INTERVAL_SECONDS = 1
 RUNTIME_READY_MAX_ATTEMPTS = 5
@@ -197,11 +204,27 @@ class RehostRuntimeTimeline(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2, 3] = 3
+    schema_version: Literal[2, 3, 4] = 4
     test_run_id: UUID
     sample_interval_seconds: Literal[5] = 5
-    sampling_duration_seconds: PositiveInteger
+    sampling_timeout_seconds: PositiveInteger
     samples: tuple[DeploymentRuntimeSample, ...]
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_duration_name(cls, value: Any) -> Any:
+        """Read schema-v2/v3 evidence written before stop handshakes."""
+        if (
+            isinstance(value, dict)
+            and "sampling_timeout_seconds" not in value
+            and "sampling_duration_seconds" in value
+        ):
+            migrated = dict(value)
+            migrated["sampling_timeout_seconds"] = migrated.pop(
+                "sampling_duration_seconds"
+            )
+            return migrated
+        return value
 
     @model_validator(mode="after")
     def require_ordered_samples(self) -> "RehostRuntimeTimeline":
@@ -539,22 +562,21 @@ def sample_rehost_runtime_timeline(
     *,
     api_client: httpx.Client,
     downstream_client: httpx.Client,
-    sampling_duration_seconds: int | None = None,
+    sampling_timeout_seconds: int | None = None,
     sleeper=sleep,
+    monotonic_clock: Callable[[], float] = monotonic,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     on_ready: Callable[[datetime], None] = lambda _captured_at: None,
+    stop_requested: Callable[[], bool] = lambda: False,
 ) -> RehostRuntimeTimeline:
-    """Sample both private processes for the requested evidence window."""
-    sampling_duration = (
+    """Sample until the controller stops the run or its safety bound expires."""
+    sampling_timeout = (
         point.duration_seconds
-        if sampling_duration_seconds is None
-        else sampling_duration_seconds
+        if sampling_timeout_seconds is None
+        else sampling_timeout_seconds
     )
-    if sampling_duration < point.duration_seconds:
-        raise ValueError("runtime sampling cannot end before the scheduled load")
-    sample_count = ceil(
-        sampling_duration / RUNTIME_SAMPLE_INTERVAL_SECONDS
-    ) + 1
+    if sampling_timeout < point.duration_seconds:
+        raise ValueError("runtime sampling timeout cannot precede scheduled load")
     samples = []
     for readiness_attempt in range(RUNTIME_READY_MAX_ATTEMPTS):
         ready_sample = _capture_deployment_runtime_sample(
@@ -578,8 +600,12 @@ def sample_rehost_runtime_timeline(
     else:
         raise RuntimeError("runtime endpoints did not become ready")
 
-    for _sample_index in range(1, sample_count):
-        sleeper(RUNTIME_SAMPLE_INTERVAL_SECONDS)
+    deadline = monotonic_clock() + sampling_timeout
+    while True:
+        remaining_seconds = deadline - monotonic_clock()
+        if remaining_seconds <= 0:
+            raise RuntimeError("runtime sampler did not receive the stop signal")
+        sleeper(min(RUNTIME_SAMPLE_INTERVAL_SECONDS, remaining_seconds))
         samples.append(
             _capture_deployment_runtime_sample(
                 api_client=api_client,
@@ -587,9 +613,13 @@ def sample_rehost_runtime_timeline(
                 now=now,
             )
         )
+        if stop_requested():
+            break
+        if monotonic_clock() >= deadline:
+            raise RuntimeError("runtime sampler did not receive the stop signal")
     return RehostRuntimeTimeline(
         test_run_id=point.test_run_id,
-        sampling_duration_seconds=sampling_duration,
+        sampling_timeout_seconds=sampling_timeout,
         samples=tuple(samples),
     )
 
@@ -633,7 +663,7 @@ def build_parser() -> ArgumentParser:
         action_parser.add_argument("--test-run-id", type=UUID, required=True)
         action_parser.add_argument("--rate", type=int, required=True)
         action_parser.add_argument("--duration-seconds", type=int, required=True)
-        action_parser.add_argument("--sampling-duration-seconds", type=int)
+        action_parser.add_argument("--sampling-timeout-seconds", type=int)
         action_parser.add_argument("--seed", type=int, required=True)
         action_parser.add_argument("--partner-id", required=True)
         action_parser.add_argument("--start-at", required=True)
@@ -647,6 +677,8 @@ def build_parser() -> ArgumentParser:
             type=float,
             required=True,
         )
+        if action == "sample-runtime":
+            action_parser.add_argument("--stop-file", required=True)
     return parser
 
 
@@ -690,9 +722,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 point,
                 api_client=api_client,
                 downstream_client=downstream_client,
-                sampling_duration_seconds=(
-                    arguments.sampling_duration_seconds
+                sampling_timeout_seconds=(
+                    arguments.sampling_timeout_seconds
                 ),
+                stop_requested=lambda: Path(
+                    arguments.stop_file
+                ).is_file(),
                 on_ready=lambda captured_at: print(
                     f"{RUNTIME_READY_PREFIX}{captured_at.isoformat()}",
                     flush=True,

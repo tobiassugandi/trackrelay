@@ -144,9 +144,17 @@ The load starts only after that completed handshake; it does not depend on
 eventually consistent partial SSM output from a command that is still running.
 Every five seconds the detached container preserves both processes' CPU, thread,
 memory, and host-counter snapshots without publishing the simulator or adding an
-API proxy path. After the load, a second bounded SSM command waits for the short
-sampling tail, returns the container logs, checks its exit code, and removes the
-container. Interrupted loads invoke an idempotent, run-specific cleanup command.
+API proxy path. When k6 exits, the controller records that exact boundary and
+signals the named container. The sampler then attempts one final observation
+and exits; a second bounded SSM command returns its logs, checks its exit code,
+and removes it. Interrupted loads invoke an idempotent, run-specific cleanup
+command.
+
+The normal lifetime is therefore controlled by actual load completion rather
+than a predicted tail. An absolute fail-safe timeout still bounds an orphaned
+sampler at the configured traffic duration plus 120 seconds for process startup,
+10 seconds for k6 graceful stop, one five-second sampling interval, and 15
+seconds of scheduling slack.
 
 The resulting timeline is gzip-compressed beneath a strict SSM output-size
 limit, decoded locally, and validated against the run identity, timestamped
@@ -400,15 +408,15 @@ make aws-verify-down \
   API_INGRESS_CIDR=YOUR_CURRENT_PUBLIC_IP/32
 ```
 
-The private five-second process sampler runs for 30 seconds beyond the scheduled
-load duration. Its detached-container readiness handshake removes container
-startup from the offered-load interval. The bounded margin covers the
-controller handoff, high-rate k6 VU initialization, the configured ten-second
-graceful stop, endpoint timeouts, and scheduling skew. This does not expand the
-CloudWatch load window: AWS metrics remain aligned to callbacks taken
-immediately after the k6 process starts and when it exits. Setup, the sampling
-tail, database settling, and metric-publication polling are therefore visible
-evidence but not counted as offered-load time.
+The private five-second process sampler starts before k6 and stops only after a
+controller signal triggered by k6's actual exit. It attempts one final observation
+after that signal, so coverage does not depend on predicting startup or graceful
+drain time. A named 150-second overhead budget remains solely as an absolute
+orphan-safety timeout. This does not expand the CloudWatch load window: AWS
+metrics remain aligned to callbacks taken immediately after the k6 process
+starts and when it exits. Setup, the final sampler observation, database
+settling, and metric-publication polling are therefore visible evidence but not
+counted as offered-load time.
 
 1. Provision the `t4g.small` baseline and fixed private RDS configuration.
 2. Deploy one immutable application image and verify RDS correctness.

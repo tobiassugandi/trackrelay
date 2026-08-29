@@ -208,9 +208,15 @@ def test_default_timing_uses_k6_callbacks_not_executor_boundaries(
             tmp_path / "summary.json",
             UUID(int=4),
             lambda: next(clock),
+            on_load_ended=lambda: actions.append("sampler stop"),
         )
 
-    assert actions == ["pre-load sample", "k6", "summary parsing"]
+    assert actions == [
+        "pre-load sample",
+        "k6",
+        "sampler stop",
+        "summary parsing",
+    ]
     assert result.window.started_at == started_at
     assert result.window.ended_at == ended_at
 
@@ -348,6 +354,8 @@ def test_current_tier_runner_preserves_every_rate_and_evidence_source(
         _summary_path,
         test_run_id,
         now,
+        *,
+        on_load_ended,
     ):
         rate = int(
             next(value for value in command if value.startswith("LOAD_RATE=")).split(
@@ -367,7 +375,7 @@ def test_current_tier_runner_preserves_every_rate_and_evidence_source(
             api_sample(start, 1),
             api_sample(start + timedelta(seconds=duration), 2),
         )
-        return execute_with_load_window(
+        result = execute_with_load_window(
             test_run_id,
             lambda: (
                 0,
@@ -385,6 +393,8 @@ def test_current_tier_runner_preserves_every_rate_and_evidence_source(
             ),
             now=now,
         )
+        on_load_ended()
+        return result
 
     def runtime_starter(_session, *, point, **_kwargs):
         rate_index = (10, 25, 50, 100, 250, 500).index(
@@ -401,6 +411,12 @@ def test_current_tier_runner_preserves_every_rate_and_evidence_source(
             ),
         )
 
+    stopped_rates = []
+
+    def runtime_stopper(_session, *, sampler, point, **_kwargs):
+        assert sampler.container_name == runtime_sampler_container_name(point)
+        stopped_rates.append(point.request_rate_per_second)
+
     def runtime_collector(_session, *, sampler, point, **_kwargs):
         assert sampler.container_name == runtime_sampler_container_name(point)
         start = sampler.ready_at
@@ -408,7 +424,7 @@ def test_current_tier_runner_preserves_every_rate_and_evidence_source(
         downstream = api.model_copy(update={"process_id": 8, "database_pool": None})
         return RehostRuntimeTimeline(
             test_run_id=point.test_run_id,
-            sampling_duration_seconds=210,
+            sampling_timeout_seconds=210,
             samples=(
                 DeploymentRuntimeSample(api=api, downstream=downstream),
                 DeploymentRuntimeSample(
@@ -459,6 +475,7 @@ def test_current_tier_runner_preserves_every_rate_and_evidence_source(
         load_executor=load_executor,
         remote_action=remote_action,
         runtime_starter=runtime_starter,
+        runtime_stopper=runtime_stopper,
         runtime_collector=runtime_collector,
         cloudwatch_collector=cloudwatch_collector,
         now=lambda: next(clock),
@@ -468,6 +485,7 @@ def test_current_tier_runner_preserves_every_rate_and_evidence_source(
     assert summary.maximum_sustainable_rate_per_second == 500
     assert summary.instance_type == "t4g.small"
     assert len(summary.rate_results) == 6
+    assert stopped_rates == [10, 25, 50, 100, 250, 500]
     assert remote_actions == [
         action
         for rate in (10, 25, 50, 100, 250, 500)

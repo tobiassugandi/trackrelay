@@ -46,6 +46,7 @@ from trackrelay.aws_rehost_workload import (
     execute_local_load,
     run_remote_action,
     start_remote_runtime_sampling,
+    stop_remote_runtime_sampling,
     validate_runtime_timeline_covers_load,
 )
 from trackrelay.aws_session import (
@@ -306,18 +307,25 @@ def execute_timed_local_load(
     summary_path: Path,
     test_run_id: UUID,
     now: Callable[[], datetime],
+    *,
+    on_load_ended: Callable[[], None] = lambda: None,
 ) -> TimedLoadResult[
     TimedLocalLoadValue
 ]:
     """Capture the k6 process boundaries inside the existing load executor."""
     boundaries: list[datetime] = []
+
+    def record_load_ended() -> None:
+        boundaries.append(now())
+        on_load_ended()
+
     value = execute_local_load(
         command,
         client,
         sample_interval_seconds,
         summary_path,
         on_load_started=lambda: boundaries.append(now()),
-        on_load_ended=lambda: boundaries.append(now()),
+        on_load_ended=record_load_ended,
     )
     if len(boundaries) != 2:
         raise AwsRehostError("k6 did not expose one complete load window")
@@ -585,6 +593,7 @@ def run_current_vertical_scaling_tier(
     runtime_collector: Callable[..., RehostRuntimeTimeline] = (
         collect_remote_runtime_sampling
     ),
+    runtime_stopper: Callable[..., None] = stop_remote_runtime_sampling,
     runtime_cleaner: Callable[..., None] = cleanup_remote_runtime_sampling,
     cloudwatch_collector: CloudWatchCollector = collect_cloudwatch_evidence,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -720,6 +729,19 @@ def run_current_vertical_scaling_tier(
                 point=point,
                 runner=runner,
             )
+
+            def stop_sampler_after_load(
+                sampler: RemoteRuntimeSampler = runtime_sampler,
+                active_point: RehostWorkloadPoint = point,
+            ) -> None:
+                runtime_stopper(
+                    session,
+                    instance_id=instance_id,
+                    sampler=sampler,
+                    point=active_point,
+                    runner=runner,
+                )
+
             try:
                 timed_load = load_executor(
                     command,
@@ -728,6 +750,7 @@ def run_current_vertical_scaling_tier(
                     k6_summary_path,
                     test_run_id,
                     now,
+                    on_load_ended=stop_sampler_after_load,
                 )
                 k6_exit_code, local_samples, k6_summary = timed_load.value
                 _write_model(timed_load.window, load_window_path)

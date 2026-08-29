@@ -36,6 +36,7 @@ from trackrelay.aws_rehost_workload import (
     run_remote_action,
     runtime_sampler_container_name,
     start_remote_runtime_sampling,
+    stop_remote_runtime_sampling,
     validate_runtime_timeline_covers_load,
 )
 from trackrelay.aws_session import (
@@ -196,6 +197,7 @@ def run_vertical_scaling_canary_point(
     runtime_collector: Callable[..., RehostRuntimeTimeline] = (
         collect_remote_runtime_sampling
     ),
+    runtime_stopper: Callable[..., None] = stop_remote_runtime_sampling,
     runtime_cleaner: Callable[..., None] = cleanup_remote_runtime_sampling,
     absence_verifier: Callable[..., None] = (
         verify_remote_runtime_sampler_absent
@@ -302,6 +304,16 @@ def run_vertical_scaling_canary_point(
         point=point,
         runner=runner,
     )
+
+    def stop_sampler_after_load() -> None:
+        runtime_stopper(
+            session,
+            instance_id=instance_id,
+            sampler=runtime_sampler,
+            point=point,
+            runner=runner,
+        )
+
     try:
         with httpx.Client(base_url=api_url, timeout=30.0) as client:
             timed_load = load_executor(
@@ -311,6 +323,7 @@ def run_vertical_scaling_canary_point(
                 k6_summary_path,
                 test_run_id,
                 now,
+                on_load_ended=stop_sampler_after_load,
             )
     except BaseException as load_error:
         try:

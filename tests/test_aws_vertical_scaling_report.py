@@ -257,7 +257,7 @@ def write_boundary_evidence(
     )
     timeline = RehostRuntimeTimeline(
         test_run_id=test_run_id,
-        sampling_duration_seconds=210,
+        sampling_timeout_seconds=210,
         samples=(
             DeploymentRuntimeSample(
                 api=api_samples[0],

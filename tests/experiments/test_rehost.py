@@ -6,6 +6,7 @@ from gzip import decompress
 from uuid import UUID
 
 import httpx
+from pytest import raises
 
 from trackrelay.database import Base, create_database_engine, create_session_factory
 from trackrelay.domain import (
@@ -256,7 +257,12 @@ def test_runtime_timeline_samples_both_private_processes_and_compresses() -> Non
         partner_id="load-alpha",
     )
     sleeps: list[float] = []
+    elapsed = [0.0]
     ready_samples: list[str] = []
+
+    def sleep_and_advance(seconds: float) -> None:
+        sleeps.append(seconds)
+        elapsed[0] += seconds
     api_transport = httpx.MockTransport(
         lambda request: httpx.Response(
             200,
@@ -292,12 +298,14 @@ def test_runtime_timeline_samples_both_private_processes_and_compresses() -> Non
             point,
             api_client=api_client,
             downstream_client=downstream_client,
-            sleeper=sleeps.append,
+            sleeper=sleep_and_advance,
+            monotonic_clock=lambda: elapsed[0],
             on_ready=ready_samples.append,
+            stop_requested=lambda: len(sleeps) == 2,
         )
 
     assert len(timeline.samples) == 3
-    assert timeline.sampling_duration_seconds == 10
+    assert timeline.sampling_timeout_seconds == 10
     assert sleeps == [5, 5]
     assert ready_samples == [timeline.coverage_started_at]
     assert {sample.api.process_id for sample in timeline.samples} == {7}
@@ -308,6 +316,15 @@ def test_runtime_timeline_samples_both_private_processes_and_compresses() -> Non
     ).decode("utf-8")
     assert RehostRuntimeTimeline.model_validate_json(decoded) == timeline
 
+    legacy = timeline.model_dump(mode="json")
+    legacy["schema_version"] = 3
+    legacy["sampling_duration_seconds"] = legacy.pop(
+        "sampling_timeout_seconds"
+    )
+    migrated = RehostRuntimeTimeline.model_validate(legacy)
+    assert migrated.schema_version == 3
+    assert migrated.sampling_timeout_seconds == 10
+
 
 def test_runtime_timeline_records_api_timeout_and_keeps_sampling_downstream() -> None:
     point = RehostWorkloadPoint(
@@ -317,6 +334,12 @@ def test_runtime_timeline_records_api_timeout_and_keeps_sampling_downstream() ->
         partner_id="load-alpha",
     )
     api_request_count = 0
+    sleeps: list[float] = []
+    elapsed = [0.0]
+
+    def sleep_and_advance(seconds: float) -> None:
+        sleeps.append(seconds)
+        elapsed[0] += seconds
 
     def api_response(request: httpx.Request) -> httpx.Response:
         nonlocal api_request_count
@@ -347,7 +370,9 @@ def test_runtime_timeline_records_api_timeout_and_keeps_sampling_downstream() ->
             point,
             api_client=api_client,
             downstream_client=downstream_client,
-            sleeper=lambda _seconds: None,
+            sleeper=sleep_and_advance,
+            monotonic_clock=lambda: elapsed[0],
+            stop_requested=lambda: len(sleeps) == 2,
         )
 
     failed_observation = timeline.samples[1]
@@ -377,7 +402,12 @@ def test_runtime_timeline_requires_complete_read_before_signalling_ready() -> No
     )
     api_request_count = 0
     sleeps: list[float] = []
+    elapsed = [0.0]
     ready_samples: list[datetime] = []
+
+    def sleep_and_advance(seconds: float) -> None:
+        sleeps.append(seconds)
+        elapsed[0] += seconds
 
     def api_response(request: httpx.Request) -> httpx.Response:
         nonlocal api_request_count
@@ -408,8 +438,10 @@ def test_runtime_timeline_requires_complete_read_before_signalling_ready() -> No
             point,
             api_client=api_client,
             downstream_client=downstream_client,
-            sleeper=sleeps.append,
+            sleeper=sleep_and_advance,
+            monotonic_clock=lambda: elapsed[0],
             on_ready=ready_samples.append,
+            stop_requested=lambda: 5 in sleeps,
         )
 
     assert len(timeline.samples) == 3
@@ -417,6 +449,45 @@ def test_runtime_timeline_requires_complete_read_before_signalling_ready() -> No
     assert timeline.samples[1].complete
     assert ready_samples == [timeline.coverage_started_at]
     assert sleeps == [1, 5]
+
+
+def test_runtime_timeline_fails_closed_at_the_absolute_timeout() -> None:
+    point = RehostWorkloadPoint(
+        test_run_id=TEST_RUN_ID,
+        request_rate_per_second=10,
+        duration_seconds=5,
+        partner_id="load-alpha",
+    )
+    elapsed = [0.0]
+
+    def sleep_and_advance(seconds: float) -> None:
+        elapsed[0] += seconds
+
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            json=runtime_response(process_id=7, database_pool=None),
+        )
+    )
+    with (
+        httpx.Client(
+            base_url="http://api:8000",
+            transport=transport,
+        ) as api_client,
+        httpx.Client(
+            base_url="http://downstream:8001",
+            transport=transport,
+        ) as downstream_client,
+        raises(RuntimeError, match="did not receive the stop signal"),
+    ):
+        sample_rehost_runtime_timeline(
+            point,
+            api_client=api_client,
+            downstream_client=downstream_client,
+            sampling_timeout_seconds=5,
+            sleeper=sleep_and_advance,
+            monotonic_clock=lambda: elapsed[0],
+        )
 
 
 def test_delivery_attempts_are_aggregated_into_aligned_intervals() -> None:

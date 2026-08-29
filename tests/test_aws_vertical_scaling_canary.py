@@ -102,11 +102,12 @@ def test_canary_point_runs_only_one_short_rds_backed_load(
     load_started_at = datetime(2026, 8, 29, 14, tzinfo=UTC)
     load_ended_at = load_started_at + timedelta(seconds=30)
 
-    def load_executor(command, *_args):
+    def load_executor(command, *_args, on_load_ended):
         assert "LOAD_RATE=10" in command
         assert "LOAD_DURATION_SECONDS=30" in command
         first = api_sample(load_started_at, 1)
         last = api_sample(load_ended_at, 2)
+        on_load_ended()
         return TimedLoadResult(
             value=(
                 0,
@@ -138,6 +139,10 @@ def test_canary_point_runs_only_one_short_rds_backed_load(
             ready_at=sampler_started_at,
         )
 
+    def runtime_stopper(_session, *, sampler, point, **_kwargs):
+        actions.append("sampler-stop")
+        assert sampler.container_name == runtime_sampler_container_name(point)
+
     def runtime_collector(_session, *, sampler, point, **_kwargs):
         actions.append("sampler-collect")
         assert sampler.ready_at == sampler_started_at
@@ -151,7 +156,7 @@ def test_canary_point_runs_only_one_short_rds_backed_load(
         )
         return RehostRuntimeTimeline(
             test_run_id=point.test_run_id,
-            sampling_duration_seconds=60,
+            sampling_timeout_seconds=60,
             samples=(
                 DeploymentRuntimeSample(
                     api=first,
@@ -174,6 +179,7 @@ def test_canary_point_runs_only_one_short_rds_backed_load(
         load_executor=load_executor,
         remote_action=remote_action,
         runtime_starter=runtime_starter,
+        runtime_stopper=runtime_stopper,
         runtime_collector=runtime_collector,
         absence_verifier=absence_verifier,
         now=lambda: datetime(2026, 8, 29, 15, tzinfo=UTC),
@@ -185,6 +191,7 @@ def test_canary_point_runs_only_one_short_rds_backed_load(
     assert actions == [
         "prepare",
         "sampler-start",
+        "sampler-stop",
         "sampler-collect",
         "sampler-absent",
         "collect",

@@ -25,11 +25,13 @@ from trackrelay.aws_rehost_workload import (
     build_runtime_sampling_cleanup_payload,
     build_runtime_sampling_collect_payload,
     build_runtime_sampling_start_payload,
+    build_runtime_sampling_stop_payload,
     collect_remote_runtime_sampling,
     execute_rehost_workload,
     frozen_rehost_definition,
     runtime_sampler_container_name,
     start_remote_runtime_sampling,
+    stop_remote_runtime_sampling,
     validate_runtime_timeline_covers_load,
 )
 from trackrelay.experiments.reconciliation import ReconciliationReport
@@ -91,8 +93,16 @@ def test_remote_payload_uses_private_compose_services_without_secrets() -> None:
     assert container_name in start_command
     assert RUNTIME_READY_PREFIX in start_command
     assert "http://" not in start_command
-    assert "--sampling-duration-seconds 40" in start_command
+    assert "--sampling-timeout-seconds 160" in start_command
+    assert "--stop-file /tmp/trackrelay-load-complete" in start_command
     assert start_payload["executionTimeout"] == ["90"]
+
+    stop_payload = build_runtime_sampling_stop_payload(point)
+    stop_command = stop_payload["commands"][0]
+    assert container_name in stop_command
+    assert "docker exec" in stop_command
+    assert "/tmp/trackrelay-load-complete" in stop_command
+    assert stop_payload["executionTimeout"] == ["30"]
 
     collect_payload = build_runtime_sampling_collect_payload(point)
     collect_command = collect_payload["commands"][0]
@@ -117,6 +127,7 @@ def test_runtime_sampler_shell_payloads_parse_as_bash() -> None:
 
     for payload in (
         build_runtime_sampling_start_payload(point),
+        build_runtime_sampling_stop_payload(point),
         build_runtime_sampling_collect_payload(point),
         build_runtime_sampling_cleanup_payload(point),
     ):
@@ -157,7 +168,7 @@ def runtime_timeline(
     )
     return RehostRuntimeTimeline(
         test_run_id=point.test_run_id,
-        sampling_duration_seconds=duration_seconds,
+        sampling_timeout_seconds=duration_seconds,
         samples=(
             DeploymentRuntimeSample(api=first, downstream=first),
             DeploymentRuntimeSample(api=last, downstream=last),
@@ -191,9 +202,12 @@ def test_runtime_sampler_uses_completed_start_and_collect_commands(
                 )
             )
             command = payload["commands"][0]
-            active_action = (
-                "start" if "run --detach" in command else "collect"
-            )
+            if "run --detach" in command:
+                active_action = "start"
+            elif "docker exec" in command:
+                active_action = "stop"
+            else:
+                active_action = "collect"
             submitted_actions.append(active_action)
             return completed(call, stdout=COMMAND_ID)
         if "wait" in call and "command-executed" in call:
@@ -218,6 +232,13 @@ def test_runtime_sampler_uses_completed_start_and_collect_commands(
         point=point,
         runner=runner,
     )
+    stop_remote_runtime_sampling(
+        session,
+        instance_id=INSTANCE_ID,
+        sampler=sampler,
+        point=point,
+        runner=runner,
+    )
     observed = collect_remote_runtime_sampling(
         session,
         instance_id=INSTANCE_ID,
@@ -231,7 +252,7 @@ def test_runtime_sampler_uses_completed_start_and_collect_commands(
         ready_at=ready_at,
     )
     assert observed == timeline
-    assert submitted_actions == ["start", "collect"]
+    assert submitted_actions == ["start", "stop", "collect"]
 
 
 def test_invalid_runtime_readiness_removes_the_detached_container(
@@ -333,7 +354,7 @@ def test_runtime_timeline_rejects_empty_and_reversed_samples() -> None:
     with raises(ValueError, match="must contain samples"):
         RehostRuntimeTimeline(
             test_run_id=point.test_run_id,
-            sampling_duration_seconds=210,
+            sampling_timeout_seconds=210,
             samples=(),
         )
 
@@ -344,7 +365,7 @@ def test_runtime_timeline_rejects_empty_and_reversed_samples() -> None:
     with raises(ValueError, match="must be chronological"):
         RehostRuntimeTimeline(
             test_run_id=point.test_run_id,
-            sampling_duration_seconds=210,
+            sampling_timeout_seconds=210,
             samples=tuple(reversed(ordered.samples)),
         )
 
@@ -406,6 +427,9 @@ def test_workload_saves_all_frozen_points_without_the_temporary_endpoint(
                 active_action, active_point = point_from_payload(payload_path)
                 assert active_action == "sample-runtime"
                 active_action = "sample-start"
+            elif "docker exec" in payload_command:
+                active_action = "sample-stop"
+                assert active_point is not None
             elif 'docker logs "$container_name"' in payload_command:
                 active_action = "sample-collect"
                 assert active_point is not None

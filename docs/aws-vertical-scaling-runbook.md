@@ -292,6 +292,9 @@ For every rate, it requires:
 
 - Exact k6 process boundaries and the complete k6 summary.
 - A detached private sampler ready before load begins.
+- A completed controller stop handshake immediately after k6 exits, followed
+  by one final process-observation attempt; the duration-plus-150-second timeout is
+  only an orphan-safety bound.
 - Timestamped API and downstream observation attempts containing the whole
   load window. Individual overload-time gaps are retained explicitly instead
   of crashing the observer; diagnostic calculations use successful snapshots

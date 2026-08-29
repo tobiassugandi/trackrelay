@@ -242,6 +242,16 @@ Success or failure then leads directly to full Terraform destroy and native
 empty-inventory verification. A passing canary is reviewed before a new full
 Stage 9.3 proposal is created; it never rolls directly into that experiment.
 
+The approved canary session `cloud-session-2-20260829T120045Z` passed on
+2026-08-29. It completed all 300 requests with zero errors or dropped
+iterations, reconciled 300 generated, accepted, processed, and downstream
+receipt records with nothing unaccounted, and observed 87.65 ms p95 response
+latency. Ten paired runtime samples began 4.34 seconds before the driver window
+and ended 8.67 seconds after it. The separate absence check found no sampler
+container. The runner then verified empty Terraform state and zero resources in
+all native inventories. This validates the repaired measurement lifecycle; it
+is not a Stage 9.3 performance treatment.
+
 ### Full Stage 9.3 procedure
 
 After the approved baseline deployment has passed RDS correctness,

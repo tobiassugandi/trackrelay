@@ -39,11 +39,14 @@ from trackrelay.aws_rehost import (
 )
 from trackrelay.aws_rehost_workload import (
     BenchmarkDriverEnvironment,
+    RemoteRuntimeSampler,
     capture_benchmark_driver_environment,
+    cleanup_remote_runtime_sampling,
     collect_remote_runtime_sampling,
     execute_local_load,
     run_remote_action,
     start_remote_runtime_sampling,
+    validate_runtime_timeline_covers_load,
 )
 from trackrelay.aws_session import (
     AwsSession,
@@ -576,10 +579,13 @@ def run_current_vertical_scaling_tier(
     remote_action: Callable[..., RehostServerEvidence | None] = (
         run_remote_action
     ),
-    runtime_starter: Callable[..., str] = start_remote_runtime_sampling,
+    runtime_starter: Callable[..., RemoteRuntimeSampler] = (
+        start_remote_runtime_sampling
+    ),
     runtime_collector: Callable[..., RehostRuntimeTimeline] = (
         collect_remote_runtime_sampling
     ),
+    runtime_cleaner: Callable[..., None] = cleanup_remote_runtime_sampling,
     cloudwatch_collector: CloudWatchCollector = collect_cloudwatch_evidence,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     uuid_factory: Callable[[], UUID] = uuid4,
@@ -708,7 +714,7 @@ def run_current_vertical_scaling_tier(
                 manifest_path=input_manifest_path,
                 run_directory=run_directory,
             )
-            runtime_command_id = runtime_starter(
+            runtime_sampler = runtime_starter(
                 session,
                 instance_id=instance_id,
                 point=point,
@@ -737,14 +743,33 @@ def run_current_vertical_scaling_tier(
                         f"{json.dumps(k6_summary, indent=2)}\n",
                         encoding="utf-8",
                     )
-            finally:
-                runtime_timeline = runtime_collector(
-                    session,
-                    instance_id=instance_id,
-                    command_id=runtime_command_id,
-                    point=point,
-                    runner=runner,
-                )
+            except BaseException as load_error:
+                try:
+                    runtime_cleaner(
+                        session,
+                        instance_id=instance_id,
+                        point=point,
+                        runner=runner,
+                    )
+                except (AwsRehostError, OSError) as cleanup_error:
+                    load_error.add_note(
+                        "detached runtime sampler cleanup also failed: "
+                        f"{type(cleanup_error).__name__}"
+                    )
+                raise
+            runtime_timeline = runtime_collector(
+                session,
+                instance_id=instance_id,
+                sampler=runtime_sampler,
+                point=point,
+                runner=runner,
+            )
+            validate_runtime_timeline_covers_load(
+                runtime_timeline,
+                test_run_id=test_run_id,
+                load_started_at=timed_load.window.started_at,
+                load_ended_at=timed_load.window.ended_at,
+            )
             _write_model(runtime_timeline, deployment_runtime_path)
 
             server_evidence = remote_action(

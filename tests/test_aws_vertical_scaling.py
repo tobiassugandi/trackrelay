@@ -26,6 +26,10 @@ from trackrelay.aws_cloudwatch import (
     metric_definitions,
 )
 from trackrelay.aws_rehost import AwsRehostError
+from trackrelay.aws_rehost_workload import (
+    RemoteRuntimeSampler,
+    runtime_sampler_container_name,
+)
 from trackrelay.aws_session import load_manifest, write_manifest
 from trackrelay.aws_vertical_scaling import (
     execute_timed_local_load,
@@ -382,16 +386,24 @@ def test_current_tier_runner_preserves_every_rate_and_evidence_source(
             now=now,
         )
 
-    points_by_command: dict[str, object] = {}
-
     def runtime_starter(_session, *, point, **_kwargs):
-        command_id = f"{COMMAND_ID[:-1]}{point.request_rate_per_second % 10}"
-        points_by_command[command_id] = point
-        return command_id
+        rate_index = (10, 25, 50, 100, 250, 500).index(
+            point.request_rate_per_second
+        )
+        return RemoteRuntimeSampler(
+            container_name=runtime_sampler_container_name(point),
+            ready_at=datetime(
+                2026,
+                8,
+                29,
+                14 + rate_index,
+                tzinfo=UTC,
+            ),
+        )
 
-    def runtime_collector(_session, *, command_id, point, **_kwargs):
-        assert points_by_command[command_id] == point
-        start = datetime(2026, 8, 29, 14, tzinfo=UTC)
+    def runtime_collector(_session, *, sampler, point, **_kwargs):
+        assert sampler.container_name == runtime_sampler_container_name(point)
+        start = sampler.ready_at
         api = api_sample(start, 1)
         downstream = api.model_copy(update={"process_id": 8, "database_pool": None})
         return RehostRuntimeTimeline(
@@ -486,6 +498,75 @@ def test_current_tier_runner_preserves_every_rate_and_evidence_source(
     assert PUBLIC_IP not in portable_evidence
     assert INSTANCE_ID not in portable_evidence
     assert RDS_IDENTIFIER not in portable_evidence
+
+
+def test_current_tier_runner_cleans_the_sampler_when_load_execution_fails(
+    tmp_path: Path,
+) -> None:
+    session = prepare_rds_session(tmp_path)
+    prepared_at = datetime(2026, 8, 29, 13, tzinfo=UTC)
+    prepare_vertical_scaling_experiment(
+        session,
+        runner=clean_revision_runner,
+        now=lambda: prepared_at,
+    )
+
+    def runner(arguments, input_text):
+        call = tuple(arguments)
+        if call in (
+            ("git", "status", "--porcelain"),
+            ("git", "rev-parse", "HEAD"),
+        ):
+            return clean_revision_runner(arguments, input_text)
+        outputs = {
+            "rehost_instance_id": INSTANCE_ID,
+            "rds_identifier": RDS_IDENTIFIER,
+            "rehost_public_ip": PUBLIC_IP,
+        }
+        output_name = terraform_output_name(call)
+        if output_name in outputs:
+            return completed(call, stdout=outputs[output_name])
+        raise AssertionError(f"unexpected external command: {call}")
+
+    point_holder = []
+
+    def runtime_starter(_session, *, point, **_kwargs):
+        point_holder.append(point)
+        return RemoteRuntimeSampler(
+            container_name=runtime_sampler_container_name(point),
+            ready_at=datetime(2026, 8, 29, 14, tzinfo=UTC),
+        )
+
+    cleaned = []
+
+    def runtime_cleaner(_session, *, point, **_kwargs):
+        cleaned.append(point)
+        raise OSError("synthetic cleanup failure")
+
+    def fail_load(*_args, **_kwargs):
+        raise RuntimeError("synthetic load failure")
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("post-load collection must not run")
+
+    with raises(RuntimeError, match="synthetic load failure") as error:
+        run_current_vertical_scaling_tier(
+            session,
+            runner=runner,
+            load_executor=fail_load,
+            remote_action=lambda *_args, **_kwargs: None,
+            runtime_starter=runtime_starter,
+            runtime_collector=unexpected,
+            runtime_cleaner=runtime_cleaner,
+            cloudwatch_collector=unexpected,
+            now=lambda: prepared_at,
+            uuid_factory=lambda: UUID(int=1),
+        )
+
+    assert cleaned == point_holder
+    assert error.value.__notes__ == [
+        "detached runtime sampler cleanup also failed: OSError"
+    ]
 
 
 def prepared_completed_baseline_session(tmp_path: Path):

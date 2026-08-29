@@ -137,17 +137,25 @@ latency, error, completeness, and reconciliation guardrails all pass. A failed
 overload point reports zero productive throughput even if native threads consume
 several cores while draining abandoned work.
 
-A private SSM command now starts before each load point and runs a sampler in a
-one-off container on the existing Compose network. Every five seconds it reads
-the API and downstream runtime endpoints, preserving both processes' CPU, thread,
+A short, bounded private SSM command starts a named sampler container before each
+load point. The command returns only after the detached sampler has read both the
+API and downstream runtime endpoints and emitted a timestamped readiness marker.
+The load starts only after that completed handshake; it does not depend on
+eventually consistent partial SSM output from a command that is still running.
+Every five seconds the detached container preserves both processes' CPU, thread,
 memory, and host-counter snapshots without publishing the simulator or adding an
-API proxy path. The resulting timeline is gzip-compressed beneath a strict SSM
-output-size limit, decoded locally, validated against the run identity, and
-saved with the other raw rate evidence. Independently, persisted delivery
-attempts are aggregated into the same five-second UTC intervals with attempt and
-outcome counts, p95 latency, and maximum latency. This distinguishes simulator
-pressure from API work while keeping the measurement interval fixed across all
-hardware tiers.
+API proxy path. After the load, a second bounded SSM command waits for the short
+sampling tail, returns the container logs, checks its exit code, and removes the
+container. Interrupted loads invoke an idempotent, run-specific cleanup command.
+
+The resulting timeline is gzip-compressed beneath a strict SSM output-size
+limit, decoded locally, and validated against the run identity, timestamped
+readiness marker, and exact load boundaries. Both the API and downstream sample
+series must contain the whole load window; a merely nonempty or nonoverlapping
+timeline is rejected. Independently, persisted delivery attempts are aggregated
+into the same five-second UTC intervals with attempt and outcome counts, p95
+latency, and maximum latency. This distinguishes simulator pressure from API
+work while keeping the measurement interval fixed across all hardware tiers.
 
 AWS documents that [EC2 detailed monitoring](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/manage-detailed-monitoring.html)
 provides one-minute metrics and incurs metric charges. It is enabled for Stage
@@ -335,11 +343,13 @@ make aws-verify-down \
 ```
 
 The private five-second process sampler runs for 15 seconds beyond the scheduled
-load duration. That margin covers local container startup and the final load
-seconds without expanding the CloudWatch load window: AWS metrics remain aligned
-to callbacks taken immediately after the k6 process starts and when it exits.
-Setup, the sampling tail, database settling, and metric-publication polling are
-therefore visible evidence but not counted as offered-load time.
+load duration. Its detached-container readiness handshake removes container
+startup from the offered-load interval, while the margin covers the final load
+seconds and scheduling skew. This does not expand the CloudWatch load window:
+AWS metrics remain aligned to callbacks taken immediately after the k6 process
+starts and when it exits. Setup, the sampling tail, database settling, and
+metric-publication polling are therefore visible evidence but not counted as
+offered-load time.
 
 1. Provision the `t4g.small` baseline and fixed private RDS configuration.
 2. Deploy one immutable application image and verify RDS correctness.

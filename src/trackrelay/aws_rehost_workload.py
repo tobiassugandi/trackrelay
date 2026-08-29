@@ -10,10 +10,10 @@ from datetime import UTC, datetime
 from gzip import decompress
 from ipaddress import IPv4Address
 from pathlib import Path
+from shlex import quote
 from tempfile import NamedTemporaryFile
-from time import sleep
 from typing import Annotated, Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
@@ -27,6 +27,7 @@ from trackrelay.aws_rehost import (
     invoke,
     require_applied_clean_revision,
     run_process,
+    run_ssm_payload,
     terraform_output,
 )
 from trackrelay.aws_session import (
@@ -53,6 +54,7 @@ from trackrelay.experiments.performance import (
 from trackrelay.experiments.rehost import (
     EVIDENCE_PREFIX,
     RUNTIME_EVIDENCE_PREFIX,
+    RUNTIME_READY_PREFIX,
     RUNTIME_SAMPLING_MARGIN_SECONDS,
     RehostRuntimeTimeline,
     RehostServerEvidence,
@@ -76,7 +78,17 @@ LocalLoadExecutor = Callable[
     [Sequence[str], httpx.Client, float, Path],
     tuple[int, tuple[RuntimeMetricsSnapshot, ...], dict[str, object]],
 ]
-Sleeper = Callable[[float], None]
+
+
+class RemoteRuntimeSampler(BaseModel):
+    """A detached private sampler proven ready before load begins."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    container_name: str = Field(
+        pattern=r"^trackrelay-runtime-[0-9a-f]{32}$"
+    )
+    ready_at: AwareDatetime
 
 
 class BenchmarkDriverEnvironment(BaseModel):
@@ -242,20 +254,17 @@ def build_remote_action_payload(
     return payload
 
 
-def build_runtime_sampling_payload(
-    point: RehostWorkloadPoint,
-) -> dict[str, list[str]]:
-    """Build the private five-second API/downstream sampling command."""
+def runtime_sampler_container_name(point: RehostWorkloadPoint) -> str:
+    """Derive one narrow Docker identity from the synthetic run UUID."""
+    return f"trackrelay-runtime-{point.test_run_id.hex}"
+
+
+def _runtime_sampling_command(point: RehostWorkloadPoint) -> str:
     sampling_duration = (
         point.duration_seconds + RUNTIME_SAMPLING_MARGIN_SECONDS
     )
-    command = " ".join(
+    return " ".join(
         (
-            "docker compose",
-            "--project-name trackrelay-rehost",
-            "--env-file /opt/trackrelay/.env",
-            "--file /opt/trackrelay/compose.yaml",
-            "run --rm --no-deps api",
             "python -m trackrelay.experiments.rehost",
             "sample-runtime",
             f"--test-run-id {point.test_run_id}",
@@ -275,13 +284,133 @@ def build_runtime_sampling_payload(
             ),
         )
     )
+
+
+def build_runtime_sampling_start_payload(
+    point: RehostWorkloadPoint,
+) -> dict[str, list[str]]:
+    """Start a detached sampler and return only after its first reads."""
+    container_name = runtime_sampler_container_name(point)
+    compose_run = " ".join(
+        (
+            "docker compose",
+            "--project-name trackrelay-rehost",
+            "--env-file /opt/trackrelay/.env",
+            "--file /opt/trackrelay/compose.yaml",
+            'run --detach --no-deps --name "$container_name" api',
+            _runtime_sampling_command(point),
+        )
+    )
+    command = "\n".join(
+        (
+            "set -euo pipefail",
+            f"container_name={quote(container_name)}",
+            "cleanup_failed_start() {",
+            "  exit_code=$?",
+            "  trap - EXIT",
+            '  docker rm --force "$container_name" >/dev/null 2>&1 || true',
+            '  exit "$exit_code"',
+            "}",
+            "trap cleanup_failed_start EXIT",
+            'docker rm --force "$container_name" >/dev/null 2>&1 || true',
+            f"{compose_run} >/dev/null",
+            "attempt=0",
+            'while [ "$attempt" -lt 60 ]; do',
+            (
+                '  ready_line="$(docker logs "$container_name" 2>/dev/null '
+                f"| grep '^{RUNTIME_READY_PREFIX}' | tail -n 1 || true)\""
+            ),
+            '  if [ -n "$ready_line" ]; then',
+            "    printf '%s\\n' \"$ready_line\"",
+            "    trap - EXIT",
+            "    exit 0",
+            "  fi",
+            (
+                "  running=\"$(docker inspect --format "
+                "'{{.State.Running}}' \"$container_name\" 2>/dev/null "
+                "|| true)\""
+            ),
+            '  if [ "$running" != "true" ]; then exit 1; fi',
+            "  attempt=$((attempt + 1))",
+            "  sleep 1",
+            "done",
+            "exit 1",
+        )
+    )
     payload = {
-        "commands": [f"set -euo pipefail\n{command}"],
-        "executionTimeout": [str(sampling_duration + 120)],
+        "commands": [command],
+        "executionTimeout": ["90"],
     }
     if len(json.dumps(payload).encode("utf-8")) > 20_000:
-        raise AwsRehostError("SSM runtime-sampling payload exceeds the safety limit")
+        raise AwsRehostError(
+            "SSM runtime-sampling start payload exceeds the safety limit"
+        )
     return payload
+
+
+def build_runtime_sampling_collect_payload(
+    point: RehostWorkloadPoint,
+) -> dict[str, list[str]]:
+    """Wait for one detached sampler, return its logs, and remove it."""
+    container_name = runtime_sampler_container_name(point)
+    command = "\n".join(
+        (
+            "set -euo pipefail",
+            f"container_name={quote(container_name)}",
+            "cleanup_sampler() {",
+            "  exit_code=$?",
+            "  trap - EXIT",
+            '  docker rm --force "$container_name" >/dev/null 2>&1 || true',
+            '  exit "$exit_code"',
+            "}",
+            "trap cleanup_sampler EXIT",
+            "attempt=0",
+            'while [ "$attempt" -lt 75 ]; do',
+            (
+                "  running=\"$(docker inspect --format "
+                "'{{.State.Running}}' \"$container_name\" 2>/dev/null "
+                "|| true)\""
+            ),
+            '  if [ "$running" != "true" ]; then break; fi',
+            "  attempt=$((attempt + 1))",
+            "  sleep 1",
+            "done",
+            (
+                "running=\"$(docker inspect --format '{{.State.Running}}' "
+                '"$container_name" 2>/dev/null || true)"'
+            ),
+            'if [ "$running" = "true" ]; then exit 1; fi',
+            (
+                "exit_code=\"$(docker inspect --format '{{.State.ExitCode}}' "
+                '"$container_name")"'
+            ),
+            'docker logs "$container_name"',
+            'test "$exit_code" = "0"',
+        )
+    )
+    payload = {"commands": [command], "executionTimeout": ["90"]}
+    if len(json.dumps(payload).encode("utf-8")) > 20_000:
+        raise AwsRehostError(
+            "SSM runtime-sampling collect payload exceeds the safety limit"
+        )
+    return payload
+
+
+def build_runtime_sampling_cleanup_payload(
+    point: RehostWorkloadPoint,
+) -> dict[str, list[str]]:
+    """Build an idempotent orphan-sampler cleanup command."""
+    container_name = runtime_sampler_container_name(point)
+    return {
+        "commands": [
+            (
+                "set -euo pipefail\n"
+                f"docker rm --force {quote(container_name)} "
+                ">/dev/null 2>&1 || true"
+            )
+        ],
+        "executionTimeout": ["30"],
+    }
 
 
 def start_remote_runtime_sampling(
@@ -290,94 +419,17 @@ def start_remote_runtime_sampling(
     instance_id: str,
     point: RehostWorkloadPoint,
     runner: ProcessRunner,
-    sleeper: Sleeper = sleep,
-) -> str:
-    """Start private sampling and tolerate bounded SSM delivery latency."""
-    payload = build_runtime_sampling_payload(point)
-    with NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        prefix="trackrelay-runtime-ssm-",
-        suffix=".json",
-    ) as payload_file:
-        payload_file.write(json.dumps(payload))
-        payload_file.flush()
-        command_id = invoke(
-            runner,
-            (
-                *aws_prefix(session),
-                "ssm",
-                "send-command",
-                "--instance-ids",
-                instance_id,
-                "--document-name",
-                "AWS-RunShellScript",
-                "--comment",
-                "TrackRelay private runtime sampling",
-                "--parameters",
-                f"file://{payload_file.name}",
-                "--query",
-                "Command.CommandId",
-                "--output",
-                "text",
-            ),
-            action="SSM runtime sampling start",
-        ).stdout.strip()
-    if COMMAND_ID_PATTERN.fullmatch(command_id) is None:
-        raise AwsRehostError("SSM returned an invalid runtime command ID")
-
-    output_command = (
-        *aws_prefix(session),
-        "ssm",
-        "get-command-invocation",
-        "--command-id",
-        command_id,
-        "--instance-id",
-        instance_id,
-        "--query",
-        "StandardOutputContent",
-        "--output",
-        "text",
+) -> RemoteRuntimeSampler:
+    """Start a detached sampler through one completed, bounded SSM command."""
+    container_name = runtime_sampler_container_name(point)
+    command_id = run_ssm_payload(
+        session,
+        instance_id=instance_id,
+        payload=build_runtime_sampling_start_payload(point),
+        comment="TrackRelay detached runtime sampler start",
+        runner=runner,
     )
-    # SSM normally begins these commands within a few seconds, but command
-    # delivery is asynchronous and has occasionally exceeded 20 seconds. Keep
-    # this wait well below the command execution timeout while allowing a
-    # bounded two-minute delivery/readiness window.
-    for _ in range(240):
-        result = runner(output_command, None)
-        if (
-            result.returncode == 0
-            and "TRACKRELAY_RUNTIME_SAMPLING_READY" in result.stdout
-        ):
-            return command_id
-        sleeper(0.5)
-    raise AwsRehostError("private runtime sampling did not become ready")
-
-
-def collect_remote_runtime_sampling(
-    session: AwsSession,
-    *,
-    instance_id: str,
-    command_id: str,
-    point: RehostWorkloadPoint,
-    runner: ProcessRunner,
-) -> RehostRuntimeTimeline:
-    """Wait for and decode one compressed private process timeline."""
-    invoke(
-        runner,
-        (
-            *aws_prefix(session),
-            "ssm",
-            "wait",
-            "command-executed",
-            "--command-id",
-            command_id,
-            "--instance-id",
-            instance_id,
-        ),
-        action="SSM runtime sampling completion",
-    )
-    status = invoke(
+    output = invoke(
         runner,
         (
             *aws_prefix(session),
@@ -388,14 +440,57 @@ def collect_remote_runtime_sampling(
             "--instance-id",
             instance_id,
             "--query",
-            "[Status,ResponseCode]",
+            "StandardOutputContent",
             "--output",
             "text",
         ),
-        action="SSM runtime sampling status",
-    ).stdout.split()
-    if status != ["Success", "0"]:
-        raise AwsRehostError("SSM runtime sampling did not report success")
+        action="SSM detached runtime sampler readiness",
+    ).stdout
+    ready_lines = [
+        line.removeprefix(RUNTIME_READY_PREFIX)
+        for line in output.splitlines()
+        if line.startswith(RUNTIME_READY_PREFIX)
+    ]
+    try:
+        if len(ready_lines) != 1:
+            raise ValueError("sampler returned ambiguous readiness")
+        ready_at = datetime.fromisoformat(ready_lines[0])
+        if ready_at.utcoffset() is None:
+            raise ValueError("sampler readiness timestamp is naive")
+    except ValueError as error:
+        cleanup_remote_runtime_sampling(
+            session,
+            instance_id=instance_id,
+            point=point,
+            runner=runner,
+        )
+        raise AwsRehostError(
+            "SSM returned invalid detached sampler readiness"
+        ) from error
+    return RemoteRuntimeSampler(
+        container_name=container_name,
+        ready_at=ready_at,
+    )
+
+
+def collect_remote_runtime_sampling(
+    session: AwsSession,
+    *,
+    instance_id: str,
+    sampler: RemoteRuntimeSampler,
+    point: RehostWorkloadPoint,
+    runner: ProcessRunner,
+) -> RehostRuntimeTimeline:
+    """Collect one detached sampler through a second bounded SSM command."""
+    if sampler.container_name != runtime_sampler_container_name(point):
+        raise AwsRehostError("runtime sampler identity differs from the workload")
+    command_id = run_ssm_payload(
+        session,
+        instance_id=instance_id,
+        payload=build_runtime_sampling_collect_payload(point),
+        comment="TrackRelay detached runtime sampler collection",
+        runner=runner,
+    )
     output = invoke(
         runner,
         (
@@ -429,7 +524,46 @@ def collect_remote_runtime_sampling(
         raise AwsRehostError("SSM returned invalid runtime evidence") from error
     if timeline.test_run_id != point.test_run_id:
         raise AwsRehostError("runtime evidence identity differs from the workload")
+    if timeline.coverage_started_at != sampler.ready_at:
+        raise AwsRehostError(
+            "runtime evidence start differs from sampler readiness"
+        )
     return timeline
+
+
+def cleanup_remote_runtime_sampling(
+    session: AwsSession,
+    *,
+    instance_id: str,
+    point: RehostWorkloadPoint,
+    runner: ProcessRunner,
+) -> None:
+    """Idempotently remove a detached sampler after an interrupted load."""
+    run_ssm_payload(
+        session,
+        instance_id=instance_id,
+        payload=build_runtime_sampling_cleanup_payload(point),
+        comment="TrackRelay detached runtime sampler cleanup",
+        runner=runner,
+    )
+
+
+def validate_runtime_timeline_covers_load(
+    timeline: RehostRuntimeTimeline,
+    *,
+    test_run_id: UUID,
+    load_started_at: datetime,
+    load_ended_at: datetime,
+) -> None:
+    """Reject process evidence that does not contain the whole load window."""
+    if timeline.test_run_id != test_run_id:
+        raise AwsRehostError("runtime timeline identity differs from load window")
+    if load_ended_at <= load_started_at:
+        raise AwsRehostError("load window must have positive duration")
+    if timeline.coverage_started_at > load_started_at:
+        raise AwsRehostError("runtime sampling began after the load")
+    if timeline.coverage_ended_at < load_ended_at:
+        raise AwsRehostError("runtime sampling ended before the load")
 
 
 def run_remote_action(
@@ -602,6 +736,7 @@ def execute_rehost_workload(
     *,
     runner: ProcessRunner = run_process,
     load_executor: LocalLoadExecutor = execute_local_load,
+    runtime_cleaner: Callable[..., None] = cleanup_remote_runtime_sampling,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> RehostWorkloadSummary:
     """Run all frozen points from outside AWS and save portable evidence."""
@@ -696,7 +831,7 @@ def execute_rehost_workload(
                 manifest_path=manifest_path,
                 run_directory=run_directory,
             )
-            runtime_command_id = start_remote_runtime_sampling(
+            runtime_sampler = start_remote_runtime_sampling(
                 session,
                 instance_id=instance_id,
                 point=point,
@@ -709,14 +844,35 @@ def execute_rehost_workload(
                     definition.resource_sample_interval_seconds,
                     k6_summary_path,
                 )
-            finally:
-                runtime_timeline = collect_remote_runtime_sampling(
-                    session,
-                    instance_id=instance_id,
-                    command_id=runtime_command_id,
-                    point=point,
-                    runner=runner,
-                )
+            except BaseException as load_error:
+                try:
+                    runtime_cleaner(
+                        session,
+                        instance_id=instance_id,
+                        point=point,
+                        runner=runner,
+                    )
+                except (AwsRehostError, OSError) as cleanup_error:
+                    load_error.add_note(
+                        "detached runtime sampler cleanup also failed: "
+                        f"{type(cleanup_error).__name__}"
+                    )
+                raise
+            runtime_timeline = collect_remote_runtime_sampling(
+                session,
+                instance_id=instance_id,
+                sampler=runtime_sampler,
+                point=point,
+                runner=runner,
+            )
+            if not samples:
+                raise AwsRehostError("local runtime sampling returned no samples")
+            validate_runtime_timeline_covers_load(
+                runtime_timeline,
+                test_run_id=test_run_id,
+                load_started_at=samples[0].captured_at,
+                load_ended_at=samples[-1].captured_at,
+            )
             server_evidence = run_remote_action(
                 session,
                 instance_id=instance_id,

@@ -42,6 +42,7 @@ PositiveInteger = Annotated[int, Field(gt=0)]
 NonNegativeInteger = Annotated[int, Field(ge=0)]
 EVIDENCE_PREFIX = "TRACKRELAY_REHOST_EVIDENCE="
 RUNTIME_EVIDENCE_PREFIX = "TRACKRELAY_RUNTIME_EVIDENCE="
+RUNTIME_READY_PREFIX = "TRACKRELAY_RUNTIME_SAMPLING_READY="
 RESET_EVIDENCE_PREFIX = "TRACKRELAY_RESET_EVIDENCE="
 RUNTIME_SAMPLE_INTERVAL_SECONDS = 5
 RUNTIME_SAMPLING_MARGIN_SECONDS = 15
@@ -132,6 +133,32 @@ class RehostRuntimeTimeline(BaseModel):
     sample_interval_seconds: Literal[5] = 5
     sampling_duration_seconds: PositiveInteger
     samples: tuple[DeploymentRuntimeSample, ...]
+
+    @model_validator(mode="after")
+    def require_ordered_samples(self) -> "RehostRuntimeTimeline":
+        if not self.samples:
+            raise ValueError("runtime timeline must contain samples")
+        api_times = tuple(sample.api.captured_at for sample in self.samples)
+        downstream_times = tuple(
+            sample.downstream.captured_at for sample in self.samples
+        )
+        if api_times != tuple(sorted(api_times)):
+            raise ValueError("API runtime samples must be chronological")
+        if downstream_times != tuple(sorted(downstream_times)):
+            raise ValueError("downstream runtime samples must be chronological")
+        return self
+
+    @property
+    def coverage_started_at(self) -> datetime:
+        """Return when both process timelines have begun."""
+        first = self.samples[0]
+        return max(first.api.captured_at, first.downstream.captured_at)
+
+    @property
+    def coverage_ended_at(self) -> datetime:
+        """Return the last instant covered by both process timelines."""
+        last = self.samples[-1]
+        return min(last.api.captured_at, last.downstream.captured_at)
 
 
 class ExperimentTableCounts(BaseModel):
@@ -341,7 +368,7 @@ def sample_rehost_runtime_timeline(
     downstream_client: httpx.Client,
     sampling_duration_seconds: int | None = None,
     sleeper=sleep,
-    on_ready: Callable[[], None] = lambda: None,
+    on_ready: Callable[[datetime], None] = lambda _captured_at: None,
 ) -> RehostRuntimeTimeline:
     """Sample both private processes for the requested evidence window."""
     sampling_duration = (
@@ -371,7 +398,12 @@ def sample_rehost_runtime_timeline(
             )
         )
         if sample_index == 0:
-            on_ready()
+            on_ready(
+                max(
+                    samples[0].api.captured_at,
+                    samples[0].downstream.captured_at,
+                )
+            )
         if sample_index < sample_count - 1:
             sleeper(RUNTIME_SAMPLE_INTERVAL_SECONDS)
     return RehostRuntimeTimeline(
@@ -480,8 +512,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 sampling_duration_seconds=(
                     arguments.sampling_duration_seconds
                 ),
-                on_ready=lambda: print(
-                    "TRACKRELAY_RUNTIME_SAMPLING_READY",
+                on_ready=lambda captured_at: print(
+                    f"{RUNTIME_READY_PREFIX}{captured_at.isoformat()}",
                     flush=True,
                 ),
             )

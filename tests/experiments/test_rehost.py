@@ -293,13 +293,13 @@ def test_runtime_timeline_samples_both_private_processes_and_compresses() -> Non
             api_client=api_client,
             downstream_client=downstream_client,
             sleeper=sleeps.append,
-            on_ready=lambda: ready_samples.append("ready"),
+            on_ready=ready_samples.append,
         )
 
     assert len(timeline.samples) == 3
     assert timeline.sampling_duration_seconds == 10
     assert sleeps == [5, 5]
-    assert ready_samples == ["ready"]
+    assert ready_samples == [timeline.coverage_started_at]
     assert {sample.api.process_id for sample in timeline.samples} == {7}
     assert {sample.downstream.process_id for sample in timeline.samples} == {8}
     line = encoded_runtime_evidence(timeline)

@@ -1,11 +1,14 @@
 """Tests for guarded, endpoint-free AWS rehost workload evidence."""
 
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from json import loads
 from pathlib import Path
 from shlex import split
-from subprocess import CompletedProcess
+from subprocess import CompletedProcess, run
+from uuid import UUID
+
+from pytest import raises
 
 from tests.test_aws_rehost import (
     COMMAND_ID,
@@ -15,15 +18,23 @@ from tests.test_aws_rehost import (
     make_session,
     terraform_output_name,
 )
+from trackrelay.aws_rehost import AwsRehostError
 from trackrelay.aws_rehost_workload import (
+    RemoteRuntimeSampler,
     build_remote_action_payload,
-    build_runtime_sampling_payload,
+    build_runtime_sampling_cleanup_payload,
+    build_runtime_sampling_collect_payload,
+    build_runtime_sampling_start_payload,
+    collect_remote_runtime_sampling,
     execute_rehost_workload,
     frozen_rehost_definition,
+    runtime_sampler_container_name,
     start_remote_runtime_sampling,
+    validate_runtime_timeline_covers_load,
 )
 from trackrelay.experiments.reconciliation import ReconciliationReport
 from trackrelay.experiments.rehost import (
+    RUNTIME_READY_PREFIX,
     DeploymentRuntimeSample,
     RehostRuntimeTimeline,
     RehostServerEvidence,
@@ -72,15 +83,88 @@ def test_remote_payload_uses_private_compose_services_without_secrets() -> None:
     assert "http://" not in command
     assert payload["executionTimeout"] == ["120"]
 
-    runtime_payload = build_runtime_sampling_payload(point)
-    runtime_command = runtime_payload["commands"][0]
-    assert "trackrelay.experiments.rehost sample-runtime" in runtime_command
-    assert "http://" not in runtime_command
-    assert "--sampling-duration-seconds 25" in runtime_command
-    assert runtime_payload["executionTimeout"] == ["145"]
+    start_payload = build_runtime_sampling_start_payload(point)
+    start_command = start_payload["commands"][0]
+    container_name = runtime_sampler_container_name(point)
+    assert "trackrelay.experiments.rehost sample-runtime" in start_command
+    assert "run --detach --no-deps" in start_command
+    assert container_name in start_command
+    assert RUNTIME_READY_PREFIX in start_command
+    assert "http://" not in start_command
+    assert "--sampling-duration-seconds 25" in start_command
+    assert start_payload["executionTimeout"] == ["90"]
+
+    collect_payload = build_runtime_sampling_collect_payload(point)
+    collect_command = collect_payload["commands"][0]
+    assert container_name in collect_command
+    assert 'docker logs "$container_name"' in collect_command
+    assert 'docker rm --force "$container_name"' in collect_command
+    assert collect_payload["executionTimeout"] == ["90"]
+
+    cleanup_payload = build_runtime_sampling_cleanup_payload(point)
+    assert container_name in cleanup_payload["commands"][0]
+    assert cleanup_payload["executionTimeout"] == ["30"]
 
 
-def test_runtime_sampling_tolerates_more_than_twenty_seconds_of_ssm_delivery(
+def test_runtime_sampler_shell_payloads_parse_as_bash() -> None:
+    point = RehostWorkloadPoint(
+        test_run_id="00000000-0000-0000-0000-000000000905",
+        request_rate_per_second=10,
+        duration_seconds=180,
+        partner_id="load-alpha",
+    )
+
+    for payload in (
+        build_runtime_sampling_start_payload(point),
+        build_runtime_sampling_collect_payload(point),
+        build_runtime_sampling_cleanup_payload(point),
+    ):
+        result = run(
+            ("bash", "-n"),
+            input=payload["commands"][0],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+
+
+def runtime_timeline(
+    point: RehostWorkloadPoint,
+    *,
+    started_at: datetime,
+    duration_seconds: int = 195,
+) -> RehostRuntimeTimeline:
+    first = RuntimeMetricsSnapshot(
+        captured_at=started_at,
+        process_id=7,
+        process_cpu_seconds=1,
+        process_max_rss_bytes=1024,
+        python_thread_count=1,
+        logical_cpu_count_available=2,
+        gil_enabled=True,
+        host_logical_cpu_times=(),
+        host_memory_total_bytes=None,
+        host_memory_available_bytes=None,
+        database_pool=None,
+    )
+    last = first.model_copy(
+        update={
+            "captured_at": started_at + timedelta(seconds=duration_seconds),
+            "process_cpu_seconds": 2,
+        }
+    )
+    return RehostRuntimeTimeline(
+        test_run_id=point.test_run_id,
+        sampling_duration_seconds=duration_seconds,
+        samples=(
+            DeploymentRuntimeSample(api=first, downstream=first),
+            DeploymentRuntimeSample(api=last, downstream=last),
+        ),
+    )
+
+
+def test_runtime_sampler_uses_completed_start_and_collect_commands(
     tmp_path: Path,
 ) -> None:
     session = make_session(tmp_path, status="rehost_deployed")
@@ -90,35 +174,183 @@ def test_runtime_sampling_tolerates_more_than_twenty_seconds_of_ssm_delivery(
         duration_seconds=180,
         partner_id="load-alpha",
     )
-    output_polls = 0
-    sleeps: list[float] = []
+    ready_at = datetime(2026, 8, 29, 7, tzinfo=UTC)
+    timeline = runtime_timeline(point, started_at=ready_at)
+    submitted_actions: list[str] = []
+    active_action = ""
 
     def runner(arguments, _input_text):
-        nonlocal output_polls
+        nonlocal active_action
         call = tuple(arguments)
         if "send-command" in call:
+            parameter = call[call.index("--parameters") + 1]
+            payload = loads(
+                Path(parameter.removeprefix("file://")).read_text(
+                    encoding="utf-8"
+                )
+            )
+            command = payload["commands"][0]
+            active_action = (
+                "start" if "run --detach" in command else "collect"
+            )
+            submitted_actions.append(active_action)
             return completed(call, stdout=COMMAND_ID)
-        output_polls += 1
-        if output_polls <= 41:
+        if "wait" in call and "command-executed" in call:
             return completed(call)
-        return completed(call, stdout="TRACKRELAY_RUNTIME_SAMPLING_READY\n")
+        if "[Status,ResponseCode]" in call:
+            return completed(call, stdout="Success\t0")
+        if "StandardOutputContent" in call:
+            if active_action == "start":
+                return completed(
+                    call,
+                    stdout=f"{RUNTIME_READY_PREFIX}{ready_at.isoformat()}\n",
+                )
+            return completed(
+                call,
+                stdout=f"{encoded_runtime_evidence(timeline)}\n",
+            )
+        raise AssertionError(f"unexpected external command: {call}")
 
-    observed_command_id = start_remote_runtime_sampling(
+    sampler = start_remote_runtime_sampling(
         session,
         instance_id=INSTANCE_ID,
         point=point,
         runner=runner,
-        sleeper=sleeps.append,
+    )
+    observed = collect_remote_runtime_sampling(
+        session,
+        instance_id=INSTANCE_ID,
+        sampler=sampler,
+        point=point,
+        runner=runner,
     )
 
-    assert observed_command_id == COMMAND_ID
-    assert output_polls == 42
-    assert sleeps == [0.5] * 41
+    assert sampler == RemoteRuntimeSampler(
+        container_name=runtime_sampler_container_name(point),
+        ready_at=ready_at,
+    )
+    assert observed == timeline
+    assert submitted_actions == ["start", "collect"]
+
+
+def test_invalid_runtime_readiness_removes_the_detached_container(
+    tmp_path: Path,
+) -> None:
+    session = make_session(tmp_path, status="rehost_deployed")
+    point = RehostWorkloadPoint(
+        test_run_id="00000000-0000-0000-0000-000000000904",
+        request_rate_per_second=10,
+        duration_seconds=180,
+        partner_id="load-alpha",
+    )
+    submitted_actions: list[str] = []
+    active_action = ""
+
+    def runner(arguments, _input_text):
+        nonlocal active_action
+        call = tuple(arguments)
+        if "send-command" in call:
+            parameter = call[call.index("--parameters") + 1]
+            command = loads(
+                Path(parameter.removeprefix("file://")).read_text(
+                    encoding="utf-8"
+                )
+            )["commands"][0]
+            active_action = (
+                "start" if "run --detach" in command else "cleanup"
+            )
+            submitted_actions.append(active_action)
+            return completed(call, stdout=COMMAND_ID)
+        if "wait" in call and "command-executed" in call:
+            return completed(call)
+        if "[Status,ResponseCode]" in call:
+            return completed(call, stdout="Success\t0")
+        if "StandardOutputContent" in call and active_action == "start":
+            return completed(call, stdout="not-a-readiness-marker\n")
+        raise AssertionError(f"unexpected external command: {call}")
+
+    with raises(AwsRehostError, match="invalid detached sampler readiness"):
+        start_remote_runtime_sampling(
+            session,
+            instance_id=INSTANCE_ID,
+            point=point,
+            runner=runner,
+        )
+
+    assert submitted_actions == ["start", "cleanup"]
+
+
+def test_runtime_coverage_requires_the_whole_matching_load_window() -> None:
+    point = RehostWorkloadPoint(
+        test_run_id="00000000-0000-0000-0000-000000000903",
+        request_rate_per_second=10,
+        duration_seconds=180,
+        partner_id="load-alpha",
+    )
+    sampling_started_at = datetime(2026, 8, 29, 7, tzinfo=UTC)
+    timeline = runtime_timeline(point, started_at=sampling_started_at)
+    load_started_at = sampling_started_at + timedelta(seconds=5)
+    load_ended_at = sampling_started_at + timedelta(seconds=185)
+
+    validate_runtime_timeline_covers_load(
+        timeline,
+        test_run_id=point.test_run_id,
+        load_started_at=load_started_at,
+        load_ended_at=load_ended_at,
+    )
+
+    with raises(AwsRehostError, match="began after"):
+        validate_runtime_timeline_covers_load(
+            timeline,
+            test_run_id=point.test_run_id,
+            load_started_at=sampling_started_at - timedelta(seconds=1),
+            load_ended_at=load_ended_at,
+        )
+    with raises(AwsRehostError, match="ended before"):
+        validate_runtime_timeline_covers_load(
+            timeline,
+            test_run_id=point.test_run_id,
+            load_started_at=load_started_at,
+            load_ended_at=sampling_started_at + timedelta(seconds=196),
+        )
+    with raises(AwsRehostError, match="identity differs"):
+        validate_runtime_timeline_covers_load(
+            timeline,
+            test_run_id=UUID(int=99),
+            load_started_at=load_started_at,
+            load_ended_at=load_ended_at,
+        )
+
+
+def test_runtime_timeline_rejects_empty_and_reversed_samples() -> None:
+    point = RehostWorkloadPoint(
+        test_run_id="00000000-0000-0000-0000-000000000906",
+        request_rate_per_second=10,
+        duration_seconds=180,
+        partner_id="load-alpha",
+    )
+    with raises(ValueError, match="must contain samples"):
+        RehostRuntimeTimeline(
+            test_run_id=point.test_run_id,
+            sampling_duration_seconds=195,
+            samples=(),
+        )
+
+    ordered = runtime_timeline(
+        point,
+        started_at=datetime(2026, 8, 29, 7, tzinfo=UTC),
+    )
+    with raises(ValueError, match="must be chronological"):
+        RehostRuntimeTimeline(
+            test_run_id=point.test_run_id,
+            sampling_duration_seconds=195,
+            samples=tuple(reversed(ordered.samples)),
+        )
 
 
 def point_from_payload(path: Path) -> tuple[str, RehostWorkloadPoint]:
     payload = loads(path.read_text(encoding="utf-8"))
-    arguments = split(payload["commands"][0].splitlines()[-1])
+    arguments = split(payload["commands"][0])
     module_index = arguments.index("trackrelay.experiments.rehost")
     action = arguments[module_index + 1]
 
@@ -165,45 +397,43 @@ def test_workload_saves_all_frozen_points_without_the_temporary_endpoint(
             return completed(call, stdout=PUBLIC_IP)
         if "send-command" in call:
             parameter = call[call.index("--parameters") + 1]
-            active_action, active_point = point_from_payload(
-                Path(parameter.removeprefix("file://"))
-            )
+            payload_path = Path(parameter.removeprefix("file://"))
+            payload_command = loads(
+                payload_path.read_text(encoding="utf-8")
+            )["commands"][0]
+            if "run --detach" in payload_command:
+                active_action, active_point = point_from_payload(payload_path)
+                assert active_action == "sample-runtime"
+                active_action = "sample-start"
+            elif 'docker logs "$container_name"' in payload_command:
+                active_action = "sample-collect"
+                assert active_point is not None
+            else:
+                active_action, active_point = point_from_payload(payload_path)
             return completed(call, stdout=COMMAND_ID)
         if "get-command-invocation" in call:
             query = call[call.index("--query") + 1]
             if query == "[Status,ResponseCode]":
                 return completed(call, stdout="Success\t0")
-            if active_action == "sample-runtime":
+            if active_action == "sample-start":
                 assert active_point is not None
-                sample = RuntimeMetricsSnapshot(
-                    captured_at=datetime(2026, 8, 26, tzinfo=UTC),
-                    process_id=7,
-                    process_cpu_seconds=1,
-                    process_max_rss_bytes=1024,
-                    python_thread_count=1,
-                    logical_cpu_count_available=2,
-                    gil_enabled=True,
-                    host_logical_cpu_times=(),
-                    host_memory_total_bytes=None,
-                    host_memory_available_bytes=None,
-                    database_pool=None,
-                )
-                timeline = RehostRuntimeTimeline(
-                    test_run_id=active_point.test_run_id,
-                    sampling_duration_seconds=25,
-                    samples=(
-                        DeploymentRuntimeSample(
-                            api=sample,
-                            downstream=sample,
-                        ),
-                    ),
-                )
                 return completed(
                     call,
                     stdout=(
-                        "TRACKRELAY_RUNTIME_SAMPLING_READY\n"
-                        f"{encoded_runtime_evidence(timeline)}\n"
+                        f"{RUNTIME_READY_PREFIX}"
+                        "2026-08-26T00:00:00+00:00\n"
                     ),
+                )
+            if active_action == "sample-collect":
+                assert active_point is not None
+                timeline = runtime_timeline(
+                    active_point,
+                    started_at=datetime(2026, 8, 26, tzinfo=UTC),
+                    duration_seconds=25,
+                )
+                return completed(
+                    call,
+                    stdout=f"{encoded_runtime_evidence(timeline)}\n",
                 )
             assert active_action == "collect"
             assert active_point is not None

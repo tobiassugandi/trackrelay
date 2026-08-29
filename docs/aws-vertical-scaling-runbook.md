@@ -228,6 +228,11 @@ make aws-rehost-workload \
 
 This is setup evidence, not the RDS-backed Stage 9.3 baseline. It runs six short
 rate points and saves each reconciliation result under `rehost-workload/`.
+At rates above the small host's capacity, k6 may print `level=error` because the
+`dropped_iterations` threshold was crossed. That is an expected measured
+overload result. The checkpoint itself passes only when the enclosing
+`make aws-rehost-workload` command finishes successfully and advances the
+session; an `AWS rehost command failed` message is not an expected k6 result.
 
 Switch the same deployment to the already provisioned private RDS instance:
 

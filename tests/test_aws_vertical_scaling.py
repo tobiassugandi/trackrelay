@@ -408,19 +408,19 @@ def test_current_tier_runner_preserves_every_rate_and_evidence_source(
         downstream = api.model_copy(update={"process_id": 8, "database_pool": None})
         return RehostRuntimeTimeline(
             test_run_id=point.test_run_id,
-            sampling_duration_seconds=195,
+            sampling_duration_seconds=210,
             samples=(
                 DeploymentRuntimeSample(api=api, downstream=downstream),
                 DeploymentRuntimeSample(
                     api=api.model_copy(
                         update={
-                            "captured_at": start + timedelta(seconds=195),
+                            "captured_at": start + timedelta(seconds=210),
                             "process_cpu_seconds": 2,
                         }
                     ),
                     downstream=downstream.model_copy(
                         update={
-                            "captured_at": start + timedelta(seconds=195),
+                            "captured_at": start + timedelta(seconds=210),
                             "process_cpu_seconds": 2,
                         }
                     ),

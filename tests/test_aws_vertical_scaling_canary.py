@@ -151,7 +151,7 @@ def test_canary_point_runs_only_one_short_rds_backed_load(
         )
         return RehostRuntimeTimeline(
             test_run_id=point.test_run_id,
-            sampling_duration_seconds=45,
+            sampling_duration_seconds=60,
             samples=(
                 DeploymentRuntimeSample(
                     api=first,

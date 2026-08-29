@@ -91,7 +91,7 @@ def test_remote_payload_uses_private_compose_services_without_secrets() -> None:
     assert container_name in start_command
     assert RUNTIME_READY_PREFIX in start_command
     assert "http://" not in start_command
-    assert "--sampling-duration-seconds 25" in start_command
+    assert "--sampling-duration-seconds 40" in start_command
     assert start_payload["executionTimeout"] == ["90"]
 
     collect_payload = build_runtime_sampling_collect_payload(point)
@@ -134,7 +134,7 @@ def runtime_timeline(
     point: RehostWorkloadPoint,
     *,
     started_at: datetime,
-    duration_seconds: int = 195,
+    duration_seconds: int = 210,
 ) -> RehostRuntimeTimeline:
     first = RuntimeMetricsSnapshot(
         captured_at=started_at,
@@ -312,7 +312,7 @@ def test_runtime_coverage_requires_the_whole_matching_load_window() -> None:
             timeline,
             test_run_id=point.test_run_id,
             load_started_at=load_started_at,
-            load_ended_at=sampling_started_at + timedelta(seconds=196),
+            load_ended_at=sampling_started_at + timedelta(seconds=211),
         )
     with raises(AwsRehostError, match="identity differs"):
         validate_runtime_timeline_covers_load(
@@ -333,7 +333,7 @@ def test_runtime_timeline_rejects_empty_and_reversed_samples() -> None:
     with raises(ValueError, match="must contain samples"):
         RehostRuntimeTimeline(
             test_run_id=point.test_run_id,
-            sampling_duration_seconds=195,
+            sampling_duration_seconds=210,
             samples=(),
         )
 
@@ -344,7 +344,7 @@ def test_runtime_timeline_rejects_empty_and_reversed_samples() -> None:
     with raises(ValueError, match="must be chronological"):
         RehostRuntimeTimeline(
             test_run_id=point.test_run_id,
-            sampling_duration_seconds=195,
+            sampling_duration_seconds=210,
             samples=tuple(reversed(ordered.samples)),
         )
 

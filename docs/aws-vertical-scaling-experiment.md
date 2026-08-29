@@ -400,14 +400,15 @@ make aws-verify-down \
   API_INGRESS_CIDR=YOUR_CURRENT_PUBLIC_IP/32
 ```
 
-The private five-second process sampler runs for 15 seconds beyond the scheduled
+The private five-second process sampler runs for 30 seconds beyond the scheduled
 load duration. Its detached-container readiness handshake removes container
-startup from the offered-load interval, while the margin covers the final load
-seconds and scheduling skew. This does not expand the CloudWatch load window:
-AWS metrics remain aligned to callbacks taken immediately after the k6 process
-starts and when it exits. Setup, the sampling tail, database settling, and
-metric-publication polling are therefore visible evidence but not counted as
-offered-load time.
+startup from the offered-load interval. The bounded margin covers the
+controller handoff, high-rate k6 VU initialization, the configured ten-second
+graceful stop, endpoint timeouts, and scheduling skew. This does not expand the
+CloudWatch load window: AWS metrics remain aligned to callbacks taken
+immediately after the k6 process starts and when it exits. Setup, the sampling
+tail, database settling, and metric-publication polling are therefore visible
+evidence but not counted as offered-load time.
 
 1. Provision the `t4g.small` baseline and fixed private RDS configuration.
 2. Deploy one immutable application image and verify RDS correctness.

@@ -522,8 +522,16 @@ def _tier_role(instance_type: str) -> TierRole:
         raise AwsRehostError("current hardware tier is not approved") from error
 
 
-def _write_model(model: BaseModel, path: Path) -> None:
-    path.write_text(f"{model.model_dump_json(indent=2)}\n", encoding="utf-8")
+def _write_model(
+    model: BaseModel,
+    path: Path,
+    *,
+    exclude_computed_fields: bool = False,
+) -> None:
+    path.write_text(
+        f"{model.model_dump_json(indent=2, exclude_computed_fields=exclude_computed_fields)}\n",
+        encoding="utf-8",
+    )
 
 
 def _source_benchmark() -> LegacyBaselineBenchmarkDefinition:
@@ -780,7 +788,11 @@ def run_current_vertical_scaling_tier(
             portable_performance_result = performance_result.model_copy(
                 update={"configuration": portable_configuration}
             )
-            _write_model(portable_performance_result, performance_result_path)
+            _write_model(
+                portable_performance_result,
+                performance_result_path,
+                exclude_computed_fields=True,
+            )
             compact_result = compact_rate_result(
                 performance_result,
                 raw_evidence_directory=run_directory.relative_to(

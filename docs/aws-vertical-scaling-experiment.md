@@ -259,6 +259,33 @@ This transition command is stateful and can incur AWS charges. Its existence is
 not authorization to run it: cloud session 2 still needs the separately
 reviewed resource list, duration, cost ceiling, and explicit user approval.
 
+After the final `c8g.4xlarge` tier is collected,
+`make aws-scaling-report REHOST_INSTANCE_TYPE=c8g.4xlarge` is a local-only
+command. It makes no AWS request. It refuses to report until the manifest names
+all three completed tiers and both validated transitions in their frozen order.
+For each tier, it re-derives the compact capacity boundary and loads the API,
+downstream, reconciliation, load-window, and CloudWatch evidence belonging to
+the first failing rate. If the highest rate passed, that rate is used as a
+censored lower-bound diagnostic instead.
+
+The report writes portable JSON and Markdown under
+`vertical-scaling/report/` in the ignored session evidence directory. It names
+the two comparisons differently: `t4g.small` to `c8g.large` is a workload-fit
+hardware migration, while `c8g.large` to `c8g.4xlarge` is a within-family
+vertical scale-up. Capacity ratios are marked as censored whenever either tier
+did not reach a failing rate.
+
+Bottleneck labels use explicit thresholds embedded in the JSON report: 85% for
+high EC2 or RDS CPU and for simulator CPU or memory allowance; 90% for
+database-pool pressure; and 70% as the spare-resource boundary. An application
+process-concurrency signal requires at least 0.85 average API cores while EC2
+and RDS remain below the spare boundary. Synchronous downstream waiting requires
+downstream p95 latency of at least 100 ms and at least 75% of API p95. The label
+becomes `ambiguous` when zero or multiple explanations match. If the fixed
+simulator reaches its CPU or memory allowance, attribution is invalidated rather
+than credited to the EC2 treatment. These labels summarize evidence; they do
+not replace the recorded measurements.
+
 The private five-second process sampler runs for 15 seconds beyond the scheduled
 load duration. That margin covers local container startup and the final load
 seconds without expanding the CloudWatch load window: AWS metrics remain aligned

@@ -36,6 +36,7 @@ from trackrelay.aws_vertical_scaling import (
     transition_to_next_vertical_scaling_tier,
     validate_transition_plan,
 )
+from trackrelay.experiments.performance import PerformanceExperimentResult
 from trackrelay.experiments.reconciliation import ReconciliationReport
 from trackrelay.experiments.rehost import (
     DeploymentRuntimeSample,
@@ -471,6 +472,10 @@ def test_current_tier_runner_preserves_every_rate_and_evidence_source(
         "rate-result.json",
     ):
         assert len(tuple(tier_root.rglob(evidence_name))) == 6
+    for performance_path in tier_root.rglob("performance-result.json"):
+        PerformanceExperimentResult.model_validate_json(
+            performance_path.read_text(encoding="utf-8")
+        )
     manifest = load_manifest(session)
     assert manifest["status"] == "vertical_scaling_tier_collected"
     assert manifest["vertical_scaling"]["completed_tiers"] == ["t4g.small"]

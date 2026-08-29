@@ -514,8 +514,9 @@ RDS provides the stable managed data layer for the target architecture; it is se
   - [x] Bind the applied image, verified RDS deployment, hardware catalog, frozen controls, and starting tier into one self-contained experiment definition before traffic begins; record exact driver-side load windows separately from setup and metric polling.
   - [x] Run and preserve one complete RDS-backed rate ladder for the current hardware tier, including exact load windows and complete process, downstream, reconciliation, and CloudWatch evidence at every rate.
   - [x] Implement and locally test evidence-preserving synthetic-state reset plus the guarded, exact-next-tier EC2 transition workflow. Require a saved plan that changes only the EC2 host in place, then revalidate the instance identity, RDS identity, image digest, TLS configuration, and API readiness.
+  - [x] Implement and locally test the fail-closed two-transition comparison and boundary bottleneck reporter. Re-derive each envelope, align raw evidence by explicit tier/rate/run identity, expose its classification thresholds, invalidate constrained-downstream attribution, and mark ambiguous or censored results honestly.
   - [ ] Execute both approved EC2 transitions in cloud session 2 while preserving the image, RDS, controls, and prior evidence.
-  - [ ] Produce the two-transition comparison and bottleneck report, then guarantee teardown and native empty-inventory verification.
+  - [ ] Generate the report from the completed cloud evidence, then guarantee teardown and native empty-inventory verification.
 
 Use cloud session 2 for the vertical-scaling experiment:
 

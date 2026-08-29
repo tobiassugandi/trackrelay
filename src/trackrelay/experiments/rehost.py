@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from gzip import compress
 from math import ceil
 from time import sleep
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 import httpx
@@ -46,6 +46,9 @@ RUNTIME_READY_PREFIX = "TRACKRELAY_RUNTIME_SAMPLING_READY="
 RESET_EVIDENCE_PREFIX = "TRACKRELAY_RESET_EVIDENCE="
 RUNTIME_SAMPLE_INTERVAL_SECONDS = 5
 RUNTIME_SAMPLING_MARGIN_SECONDS = 15
+RUNTIME_SAMPLE_REQUEST_TIMEOUT_SECONDS = 1.0
+RUNTIME_READY_RETRY_INTERVAL_SECONDS = 1
+RUNTIME_READY_MAX_ATTEMPTS = 5
 
 
 class RehostWorkloadPoint(BaseModel):
@@ -114,13 +117,77 @@ class DownstreamDeliveryInterval(BaseModel):
     maximum_latency_ms: NonNegativeInteger
 
 
-class DeploymentRuntimeSample(BaseModel):
-    """Near-simultaneous API and downstream process snapshots."""
+class RuntimeSamplingFailure(BaseModel):
+    """Sanitized evidence that one process could not be sampled."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    api: RuntimeMetricsSnapshot
-    downstream: RuntimeMetricsSnapshot
+    target: Literal["api", "downstream"]
+    kind: Literal[
+        "timeout",
+        "transport-error",
+        "http-status",
+        "invalid-response",
+    ]
+    status_code: Annotated[int, Field(ge=100, le=599)] | None = None
+
+    @model_validator(mode="after")
+    def require_status_only_for_http_failures(
+        self,
+    ) -> "RuntimeSamplingFailure":
+        if (self.status_code is not None) != (self.kind == "http-status"):
+            raise ValueError("only HTTP-status failures have a status code")
+        return self
+
+
+class DeploymentRuntimeSample(BaseModel):
+    """One attempt to sample both private processes without hiding gaps."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    attempted_at: AwareDatetime
+    api: RuntimeMetricsSnapshot | None = None
+    downstream: RuntimeMetricsSnapshot | None = None
+    failures: tuple[RuntimeSamplingFailure, ...] = ()
+
+    @model_validator(mode="before")
+    @classmethod
+    def infer_legacy_attempt_time(cls, value: Any) -> Any:
+        """Accept schema-v2 paired samples without attempt timestamps."""
+        if not isinstance(value, dict) or value.get("attempted_at") is not None:
+            return value
+        captured_times = []
+        for target in ("api", "downstream"):
+            snapshot = value.get(target)
+            if isinstance(snapshot, RuntimeMetricsSnapshot):
+                captured_times.append(snapshot.captured_at)
+            elif (
+                isinstance(snapshot, dict)
+                and snapshot.get("captured_at") is not None
+            ):
+                captured_times.append(snapshot["captured_at"])
+        if captured_times:
+            return {**value, "attempted_at": max(captured_times)}
+        return value
+
+    @model_validator(mode="after")
+    def require_one_outcome_per_target(self) -> "DeploymentRuntimeSample":
+        failure_targets = tuple(failure.target for failure in self.failures)
+        if len(failure_targets) != len(set(failure_targets)):
+            raise ValueError("runtime sample repeats a target failure")
+        for target in ("api", "downstream"):
+            has_snapshot = getattr(self, target) is not None
+            has_failure = target in failure_targets
+            if has_snapshot == has_failure:
+                raise ValueError(
+                    f"runtime sample must contain one {target} outcome"
+                )
+        return self
+
+    @property
+    def complete(self) -> bool:
+        """Return whether both process snapshots were captured."""
+        return self.api is not None and self.downstream is not None
 
 
 class RehostRuntimeTimeline(BaseModel):
@@ -128,7 +195,7 @@ class RehostRuntimeTimeline(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2] = 2
+    schema_version: Literal[2, 3] = 3
     test_run_id: UUID
     sample_interval_seconds: Literal[5] = 5
     sampling_duration_seconds: PositiveInteger
@@ -138,10 +205,25 @@ class RehostRuntimeTimeline(BaseModel):
     def require_ordered_samples(self) -> "RehostRuntimeTimeline":
         if not self.samples:
             raise ValueError("runtime timeline must contain samples")
-        api_times = tuple(sample.api.captured_at for sample in self.samples)
-        downstream_times = tuple(
-            sample.downstream.captured_at for sample in self.samples
+        attempted_times = tuple(
+            sample.attempted_at for sample in self.samples
         )
+        if attempted_times != tuple(sorted(attempted_times)):
+            raise ValueError(
+                "runtime sampling attempts must be chronological"
+            )
+        api_times = tuple(
+            sample.api.captured_at
+            for sample in self.samples
+            if sample.api is not None
+        )
+        downstream_times = tuple(
+            sample.downstream.captured_at
+            for sample in self.samples
+            if sample.downstream is not None
+        )
+        if not any(sample.complete for sample in self.samples):
+            raise ValueError("runtime timeline must contain a complete sample")
         if api_times != tuple(sorted(api_times)):
             raise ValueError("API runtime samples must be chronological")
         if downstream_times != tuple(sorted(downstream_times)):
@@ -150,15 +232,39 @@ class RehostRuntimeTimeline(BaseModel):
 
     @property
     def coverage_started_at(self) -> datetime:
-        """Return when both process timelines have begun."""
-        first = self.samples[0]
+        """Return when both process timelines first became ready."""
+        first = next(sample for sample in self.samples if sample.complete)
+        assert first.api is not None
+        assert first.downstream is not None
         return max(first.api.captured_at, first.downstream.captured_at)
 
     @property
     def coverage_ended_at(self) -> datetime:
-        """Return the last instant covered by both process timelines."""
-        last = self.samples[-1]
-        return min(last.api.captured_at, last.downstream.captured_at)
+        """Return the last instant at which both processes were attempted."""
+        return self.samples[-1].attempted_at
+
+    @property
+    def api_samples(self) -> tuple[RuntimeMetricsSnapshot, ...]:
+        """Return successful API snapshots in chronological order."""
+        return tuple(
+            sample.api for sample in self.samples if sample.api is not None
+        )
+
+    @property
+    def downstream_samples(self) -> tuple[RuntimeMetricsSnapshot, ...]:
+        """Return successful downstream snapshots in chronological order."""
+        return tuple(
+            sample.downstream
+            for sample in self.samples
+            if sample.downstream is not None
+        )
+
+    @property
+    def sampling_failures(self) -> tuple[RuntimeSamplingFailure, ...]:
+        """Return explicit process sampling gaps in observation order."""
+        return tuple(
+            failure for sample in self.samples for failure in sample.failures
+        )
 
 
 class ExperimentTableCounts(BaseModel):
@@ -361,6 +467,71 @@ def collect_downstream_delivery_intervals(
     return tuple(intervals)
 
 
+def _capture_runtime_snapshot(
+    client: httpx.Client,
+    path: str,
+    *,
+    target: Literal["api", "downstream"],
+) -> tuple[RuntimeMetricsSnapshot | None, RuntimeSamplingFailure | None]:
+    """Capture one endpoint without letting observer failure hide overload."""
+    try:
+        response = client.get(path)
+        response.raise_for_status()
+        return RuntimeMetricsSnapshot.model_validate(response.json()), None
+    except httpx.TimeoutException:
+        kind: Literal[
+            "timeout",
+            "transport-error",
+            "http-status",
+            "invalid-response",
+        ] = "timeout"
+        status_code = None
+    except httpx.HTTPStatusError as error:
+        kind = "http-status"
+        status_code = error.response.status_code
+    except httpx.RequestError:
+        kind = "transport-error"
+        status_code = None
+    except ValueError:
+        kind = "invalid-response"
+        status_code = None
+    return None, RuntimeSamplingFailure(
+        target=target,
+        kind=kind,
+        status_code=status_code,
+    )
+
+
+def _capture_deployment_runtime_sample(
+    *,
+    api_client: httpx.Client,
+    downstream_client: httpx.Client,
+    now: Callable[[], datetime],
+) -> DeploymentRuntimeSample:
+    """Attempt both endpoints independently so one cannot mask the other."""
+    attempted_at = now()
+    api, api_failure = _capture_runtime_snapshot(
+        api_client,
+        "/api/v1/experiments/runtime-metrics",
+        target="api",
+    )
+    downstream, downstream_failure = _capture_runtime_snapshot(
+        downstream_client,
+        "/experiments/runtime-metrics",
+        target="downstream",
+    )
+    return DeploymentRuntimeSample(
+        attempted_at=attempted_at,
+        api=api,
+        downstream=downstream,
+        failures=tuple(
+            failure
+            for failure in (api_failure, downstream_failure)
+            if failure is not None
+        ),
+    )
+
+
 def sample_rehost_runtime_timeline(
     point: RehostWorkloadPoint,
     *,
@@ -368,6 +539,7 @@ def sample_rehost_runtime_timeline(
     downstream_client: httpx.Client,
     sampling_duration_seconds: int | None = None,
     sleeper=sleep,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
     on_ready: Callable[[datetime], None] = lambda _captured_at: None,
 ) -> RehostRuntimeTimeline:
     """Sample both private processes for the requested evidence window."""
@@ -382,30 +554,37 @@ def sample_rehost_runtime_timeline(
         sampling_duration / RUNTIME_SAMPLE_INTERVAL_SECONDS
     ) + 1
     samples = []
-    for sample_index in range(sample_count):
-        api_response = api_client.get("/api/v1/experiments/runtime-metrics")
-        api_response.raise_for_status()
-        downstream_response = downstream_client.get(
-            "/experiments/runtime-metrics"
+    for readiness_attempt in range(RUNTIME_READY_MAX_ATTEMPTS):
+        ready_sample = _capture_deployment_runtime_sample(
+            api_client=api_client,
+            downstream_client=downstream_client,
+            now=now,
         )
-        downstream_response.raise_for_status()
-        samples.append(
-            DeploymentRuntimeSample(
-                api=RuntimeMetricsSnapshot.model_validate(api_response.json()),
-                downstream=RuntimeMetricsSnapshot.model_validate(
-                    downstream_response.json()
-                ),
-            )
-        )
-        if sample_index == 0:
+        samples.append(ready_sample)
+        if ready_sample.complete:
+            assert ready_sample.api is not None
+            assert ready_sample.downstream is not None
             on_ready(
                 max(
-                    samples[0].api.captured_at,
-                    samples[0].downstream.captured_at,
+                    ready_sample.api.captured_at,
+                    ready_sample.downstream.captured_at,
                 )
             )
-        if sample_index < sample_count - 1:
-            sleeper(RUNTIME_SAMPLE_INTERVAL_SECONDS)
+            break
+        if readiness_attempt < RUNTIME_READY_MAX_ATTEMPTS - 1:
+            sleeper(RUNTIME_READY_RETRY_INTERVAL_SECONDS)
+    else:
+        raise RuntimeError("runtime endpoints did not become ready")
+
+    for _sample_index in range(1, sample_count):
+        sleeper(RUNTIME_SAMPLE_INTERVAL_SECONDS)
+        samples.append(
+            _capture_deployment_runtime_sample(
+                api_client=api_client,
+                downstream_client=downstream_client,
+                now=now,
+            )
+        )
     return RehostRuntimeTimeline(
         test_run_id=point.test_run_id,
         sampling_duration_seconds=sampling_duration,
@@ -498,11 +677,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         with (
             httpx.Client(
                 base_url="http://api:8000",
-                timeout=settings.downstream_timeout_seconds,
+                timeout=RUNTIME_SAMPLE_REQUEST_TIMEOUT_SECONDS,
             ) as api_client,
             httpx.Client(
                 base_url=settings.downstream_url,
-                timeout=settings.downstream_timeout_seconds,
+                timeout=RUNTIME_SAMPLE_REQUEST_TIMEOUT_SECONDS,
             ) as downstream_client,
         ):
             timeline = sample_rehost_runtime_timeline(

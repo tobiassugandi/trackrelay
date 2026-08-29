@@ -99,7 +99,8 @@ def test_remote_payload_uses_private_compose_services_without_secrets() -> None:
     assert container_name in collect_command
     assert 'docker logs "$container_name"' in collect_command
     assert 'docker rm --force "$container_name"' in collect_command
-    assert collect_payload["executionTimeout"] == ["90"]
+    assert 'while [ "$attempt" -lt 120 ]; do' in collect_command
+    assert collect_payload["executionTimeout"] == ["150"]
 
     cleanup_payload = build_runtime_sampling_cleanup_payload(point)
     assert container_name in cleanup_payload["commands"][0]

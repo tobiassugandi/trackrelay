@@ -207,7 +207,10 @@ For every rate, it requires:
 
 - Exact k6 process boundaries and the complete k6 summary.
 - A detached private sampler ready before load begins.
-- API and downstream timelines containing the whole load window.
+- Timestamped API and downstream observation attempts containing the whole
+  load window. Individual overload-time gaps are retained explicitly instead
+  of crashing the observer; diagnostic calculations use successful snapshots
+  and remain fail-closed when those snapshots are insufficient.
 - Proof that the run-specific sampler container was removed.
 - Complete database and downstream reconciliation.
 - EC2 and RDS CloudWatch evidence aligned to the load window.

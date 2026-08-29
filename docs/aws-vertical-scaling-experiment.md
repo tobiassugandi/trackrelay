@@ -252,6 +252,20 @@ container. The runner then verified empty Terraform state and zero resources in
 all native inventories. This validates the repaired measurement lifecycle; it
 is not a Stage 9.3 performance treatment.
 
+A later full-session setup attempt exposed a different observer condition at
+the final 500 events/s host-local portability point: TrackRelay's own
+runtime-metrics endpoint timed out under overload, so the observer process
+exited even though overload is a legitimate experiment outcome. Runtime
+timeline schema 3 therefore records each API and downstream sampling outcome
+independently. Timeouts, transport errors, HTTP statuses, and invalid responses
+become sanitized timestamped gaps while later sampling continues. The sampler
+still requires one complete paired read before it signals readiness, uses a
+one-second request timeout so observation cannot materially extend the load,
+and preserves any downstream snapshot when only the API is starved. Coverage
+means that observation attempts span the driver window; bottleneck calculations
+use only the successful snapshots and still fail closed if they cannot span the
+window required for a claimed diagnosis.
+
 ### Full Stage 9.3 procedure
 
 After the approved baseline deployment has passed RDS correctness,

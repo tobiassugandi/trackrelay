@@ -47,6 +47,7 @@ from trackrelay.experiments.rehost import (
     RehostRuntimeTimeline,
     RehostServerEvidence,
     RehostWorkloadPoint,
+    RuntimeSamplingFailure,
 )
 from trackrelay.runtime_metrics import (
     DatabasePoolMetrics,
@@ -242,16 +243,31 @@ def write_boundary_evidence(
             database_pool=False,
         ),
     )
+    overload_observation = DeploymentRuntimeSample(
+        attempted_at=STARTED_AT + timedelta(seconds=90),
+        api=None,
+        downstream=runtime_sample(
+            captured_at=STARTED_AT + timedelta(seconds=90),
+            process_id=8,
+            cpu_seconds=9,
+            available_cpus=available_cpus,
+            database_pool=False,
+        ),
+        failures=(RuntimeSamplingFailure(target="api", kind="timeout"),),
+    )
     timeline = RehostRuntimeTimeline(
         test_run_id=test_run_id,
         sampling_duration_seconds=195,
-        samples=tuple(
-            DeploymentRuntimeSample(api=api, downstream=downstream)
-            for api, downstream in zip(
-                api_samples,
-                downstream_samples,
-                strict=True,
-            )
+        samples=(
+            DeploymentRuntimeSample(
+                api=api_samples[0],
+                downstream=downstream_samples[0],
+            ),
+            overload_observation,
+            DeploymentRuntimeSample(
+                api=api_samples[1],
+                downstream=downstream_samples[1],
+            ),
         ),
     )
     (run_directory / "deployment-runtime-timeline.json").write_text(

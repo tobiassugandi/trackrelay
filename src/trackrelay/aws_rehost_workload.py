@@ -78,6 +78,8 @@ LocalLoadExecutor = Callable[
     [Sequence[str], httpx.Client, float, Path],
     tuple[int, tuple[RuntimeMetricsSnapshot, ...], dict[str, object]],
 ]
+RUNTIME_SAMPLER_COLLECTION_MAX_WAIT_SECONDS = 120
+RUNTIME_SAMPLER_COLLECTION_EXECUTION_TIMEOUT_SECONDS = 150
 
 
 class RemoteRuntimeSampler(BaseModel):
@@ -365,7 +367,10 @@ def build_runtime_sampling_collect_payload(
             "}",
             "trap cleanup_sampler EXIT",
             "attempt=0",
-            'while [ "$attempt" -lt 75 ]; do',
+            (
+                'while [ "$attempt" -lt '
+                f'{RUNTIME_SAMPLER_COLLECTION_MAX_WAIT_SECONDS} ]; do'
+            ),
             (
                 "  running=\"$(docker inspect --format "
                 "'{{.State.Running}}' \"$container_name\" 2>/dev/null "
@@ -388,7 +393,12 @@ def build_runtime_sampling_collect_payload(
             'test "$exit_code" = "0"',
         )
     )
-    payload = {"commands": [command], "executionTimeout": ["90"]}
+    payload = {
+        "commands": [command],
+        "executionTimeout": [
+            str(RUNTIME_SAMPLER_COLLECTION_EXECUTION_TIMEOUT_SECONDS)
+        ],
+    }
     if len(json.dumps(payload).encode("utf-8")) > 20_000:
         raise AwsRehostError(
             "SSM runtime-sampling collect payload exceeds the safety limit"

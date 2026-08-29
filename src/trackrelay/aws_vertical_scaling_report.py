@@ -254,9 +254,9 @@ def _downstream_process_metrics(
     window: LoadExecutionWindow,
 ) -> tuple[float, int]:
     samples = tuple(
-        sample.downstream
-        for sample in timeline.samples
-        if window.started_at <= sample.downstream.captured_at <= window.ended_at
+        sample
+        for sample in timeline.downstream_samples
+        if window.started_at <= sample.captured_at <= window.ended_at
     )
     if len(samples) < 2:
         raise AwsRehostError("downstream timeline does not span the load window")

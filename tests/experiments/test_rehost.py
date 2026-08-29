@@ -309,6 +309,116 @@ def test_runtime_timeline_samples_both_private_processes_and_compresses() -> Non
     assert RehostRuntimeTimeline.model_validate_json(decoded) == timeline
 
 
+def test_runtime_timeline_records_api_timeout_and_keeps_sampling_downstream() -> None:
+    point = RehostWorkloadPoint(
+        test_run_id=TEST_RUN_ID,
+        request_rate_per_second=500,
+        duration_seconds=10,
+        partner_id="load-alpha",
+    )
+    api_request_count = 0
+
+    def api_response(request: httpx.Request) -> httpx.Response:
+        nonlocal api_request_count
+        api_request_count += 1
+        if api_request_count == 2:
+            raise httpx.ReadTimeout("overloaded", request=request)
+        return httpx.Response(
+            200,
+            json=runtime_response(process_id=7, database_pool=None),
+        )
+
+    with (
+        httpx.Client(
+            base_url="http://api:8000",
+            transport=httpx.MockTransport(api_response),
+        ) as api_client,
+        httpx.Client(
+            base_url="http://downstream:8001",
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    json=runtime_response(process_id=8, database_pool=None),
+                )
+            ),
+        ) as downstream_client,
+    ):
+        timeline = sample_rehost_runtime_timeline(
+            point,
+            api_client=api_client,
+            downstream_client=downstream_client,
+            sleeper=lambda _seconds: None,
+        )
+
+    failed_observation = timeline.samples[1]
+    assert failed_observation.api is None
+    assert failed_observation.downstream is not None
+    assert failed_observation.failures[0].model_dump() == {
+        "target": "api",
+        "kind": "timeout",
+        "status_code": None,
+    }
+    assert len(timeline.api_samples) == 2
+    assert len(timeline.downstream_samples) == 3
+    assert timeline.sampling_failures == failed_observation.failures
+    encoded = encoded_runtime_evidence(timeline)
+    decoded = decompress(
+        b64decode(encoded.removeprefix(RUNTIME_EVIDENCE_PREFIX))
+    ).decode("utf-8")
+    assert RehostRuntimeTimeline.model_validate_json(decoded) == timeline
+
+
+def test_runtime_timeline_requires_complete_read_before_signalling_ready() -> None:
+    point = RehostWorkloadPoint(
+        test_run_id=TEST_RUN_ID,
+        request_rate_per_second=10,
+        duration_seconds=5,
+        partner_id="load-alpha",
+    )
+    api_request_count = 0
+    sleeps: list[float] = []
+    ready_samples: list[datetime] = []
+
+    def api_response(request: httpx.Request) -> httpx.Response:
+        nonlocal api_request_count
+        api_request_count += 1
+        if api_request_count == 1:
+            raise httpx.ReadTimeout("not ready", request=request)
+        return httpx.Response(
+            200,
+            json=runtime_response(process_id=7, database_pool=None),
+        )
+
+    with (
+        httpx.Client(
+            base_url="http://api:8000",
+            transport=httpx.MockTransport(api_response),
+        ) as api_client,
+        httpx.Client(
+            base_url="http://downstream:8001",
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    json=runtime_response(process_id=8, database_pool=None),
+                )
+            ),
+        ) as downstream_client,
+    ):
+        timeline = sample_rehost_runtime_timeline(
+            point,
+            api_client=api_client,
+            downstream_client=downstream_client,
+            sleeper=sleeps.append,
+            on_ready=ready_samples.append,
+        )
+
+    assert len(timeline.samples) == 3
+    assert timeline.samples[0].api is None
+    assert timeline.samples[1].complete
+    assert ready_samples == [timeline.coverage_started_at]
+    assert sleeps == [1, 5]
+
+
 def test_delivery_attempts_are_aggregated_into_aligned_intervals() -> None:
     engine, sessions = create_test_database()
     started_at = datetime(2026, 8, 29, tzinfo=UTC)

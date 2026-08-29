@@ -461,8 +461,18 @@ def test_workload_saves_all_frozen_points_without_the_temporary_endpoint(
             return completed(call, stdout=f"{encoded_evidence(evidence)}\n")
         return completed(call)
 
-    def load_executor(command, client, interval, summary_path):
+    def load_executor(
+        command,
+        client,
+        interval,
+        summary_path,
+        *,
+        on_load_started,
+        on_load_ended,
+    ):
         del client, interval, summary_path
+        on_load_started()
+        on_load_ended()
         rate = int(next(value for value in command if value.startswith("LOAD_RATE=")).split("=")[1])
         duration = int(next(value for value in command if value.startswith("LOAD_DURATION_SECONDS=")).split("=")[1])
         expected = rate * duration
@@ -487,7 +497,9 @@ def test_workload_saves_all_frozen_points_without_the_temporary_endpoint(
         )
         last_sample = first_sample.model_copy(
             update={
-                "captured_at": datetime(2026, 8, 26, 0, 0, 1, tzinfo=UTC),
+                # A post-k6 metrics request may finish after remote sampling.
+                # It is not part of the actual k6 process window.
+                "captured_at": datetime(2026, 8, 26, 0, 1, tzinfo=UTC),
                 "process_cpu_seconds": 1.5,
             }
         )
@@ -501,11 +513,22 @@ def test_workload_saves_all_frozen_points_without_the_temporary_endpoint(
         }
 
     completed_at = datetime(2026, 8, 26, 12, tzinfo=UTC)
+    boundary_times = iter(
+        [
+            timestamp
+            for _ in range(6)
+            for timestamp in (
+                datetime(2026, 8, 26, 0, 0, 1, tzinfo=UTC),
+                datetime(2026, 8, 26, 0, 0, 2, tzinfo=UTC),
+            )
+        ]
+        + [completed_at]
+    )
     summary = execute_rehost_workload(
         session,
         runner=runner,
         load_executor=load_executor,
-        now=lambda: completed_at,
+        now=lambda: next(boundary_times),
     )
 
     assert summary.maximum_sustainable_rate_per_second == 500

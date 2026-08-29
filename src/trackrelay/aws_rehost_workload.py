@@ -75,7 +75,7 @@ FROZEN_BASELINE_DEFINITION = (
     / "benchmark-definition.json"
 )
 LocalLoadExecutor = Callable[
-    [Sequence[str], httpx.Client, float, Path],
+    ...,
     tuple[int, tuple[RuntimeMetricsSnapshot, ...], dict[str, object]],
 ]
 RUNTIME_SAMPLER_COLLECTION_MAX_WAIT_SECONDS = 120
@@ -847,12 +847,19 @@ def execute_rehost_workload(
                 point=point,
                 runner=runner,
             )
+            load_boundaries: list[datetime] = []
             try:
                 k6_exit_code, samples, k6_summary = load_executor(
                     command,
                     client,
                     definition.resource_sample_interval_seconds,
                     k6_summary_path,
+                    on_load_started=lambda boundaries=load_boundaries: (
+                        boundaries.append(now())
+                    ),
+                    on_load_ended=lambda boundaries=load_boundaries: (
+                        boundaries.append(now())
+                    ),
                 )
             except BaseException as load_error:
                 try:
@@ -877,11 +884,15 @@ def execute_rehost_workload(
             )
             if not samples:
                 raise AwsRehostError("local runtime sampling returned no samples")
+            if len(load_boundaries) != 2:
+                raise AwsRehostError(
+                    "load executor did not report exact process boundaries"
+                )
             validate_runtime_timeline_covers_load(
                 runtime_timeline,
                 test_run_id=test_run_id,
-                load_started_at=samples[0].captured_at,
-                load_ended_at=samples[-1].captured_at,
+                load_started_at=load_boundaries[0],
+                load_ended_at=load_boundaries[1],
             )
             server_evidence = run_remote_action(
                 session,

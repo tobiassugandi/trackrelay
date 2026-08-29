@@ -292,7 +292,7 @@ def start_remote_runtime_sampling(
     runner: ProcessRunner,
     sleeper: Sleeper = sleep,
 ) -> str:
-    """Start private sampling and wait until its first process reads succeed."""
+    """Start private sampling and tolerate bounded SSM delivery latency."""
     payload = build_runtime_sampling_payload(point)
     with NamedTemporaryFile(
         mode="w",
@@ -339,7 +339,11 @@ def start_remote_runtime_sampling(
         "--output",
         "text",
     )
-    for _ in range(40):
+    # SSM normally begins these commands within a few seconds, but command
+    # delivery is asynchronous and has occasionally exceeded 20 seconds. Keep
+    # this wait well below the command execution timeout while allowing a
+    # bounded two-minute delivery/readiness window.
+    for _ in range(240):
         result = runner(output_command, None)
         if (
             result.returncode == 0

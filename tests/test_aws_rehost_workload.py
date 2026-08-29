@@ -20,6 +20,7 @@ from trackrelay.aws_rehost_workload import (
     build_runtime_sampling_payload,
     execute_rehost_workload,
     frozen_rehost_definition,
+    start_remote_runtime_sampling,
 )
 from trackrelay.experiments.reconciliation import ReconciliationReport
 from trackrelay.experiments.rehost import (
@@ -77,6 +78,42 @@ def test_remote_payload_uses_private_compose_services_without_secrets() -> None:
     assert "http://" not in runtime_command
     assert "--sampling-duration-seconds 25" in runtime_command
     assert runtime_payload["executionTimeout"] == ["145"]
+
+
+def test_runtime_sampling_tolerates_more_than_twenty_seconds_of_ssm_delivery(
+    tmp_path: Path,
+) -> None:
+    session = make_session(tmp_path, status="rehost_deployed")
+    point = RehostWorkloadPoint(
+        test_run_id="00000000-0000-0000-0000-000000000902",
+        request_rate_per_second=10,
+        duration_seconds=180,
+        partner_id="load-alpha",
+    )
+    output_polls = 0
+    sleeps: list[float] = []
+
+    def runner(arguments, _input_text):
+        nonlocal output_polls
+        call = tuple(arguments)
+        if "send-command" in call:
+            return completed(call, stdout=COMMAND_ID)
+        output_polls += 1
+        if output_polls <= 41:
+            return completed(call)
+        return completed(call, stdout="TRACKRELAY_RUNTIME_SAMPLING_READY\n")
+
+    observed_command_id = start_remote_runtime_sampling(
+        session,
+        instance_id=INSTANCE_ID,
+        point=point,
+        runner=runner,
+        sleeper=sleeps.append,
+    )
+
+    assert observed_command_id == COMMAND_ID
+    assert output_polls == 42
+    assert sleeps == [0.5] * 41
 
 
 def point_from_payload(path: Path) -> tuple[str, RehostWorkloadPoint]:

@@ -27,16 +27,93 @@ ordinary failure, `Ctrl-C`, or `SIGTERM`. It cannot recover from destruction of
 the local machine, loss of Terraform state, or `SIGKILL`; keep the workspace and
 session evidence on durable storage.
 
-## 1. Choose the session inputs
+## 1. Set the session inputs
 
-Run from the repository root with a clean worktree. Use a new session ID and the
-public IPv4 of the machine that will run k6:
+Run from the repository root with a clean worktree. There are two distinct
+modes. Do not generate a new session ID when executing a plan that already
+exists.
+
+### Mode A — create a fresh proposal
+
+Generate the UTC session timestamp instead of handwriting it. Obtain the public
+IPv4 from the same machine that will run k6, validate it with Python's standard
+library, and convert it to the single-address CIDR accepted by Terraform:
 
 ```shell
-export TRACKRELAY_RUN_SESSION_ID=cloud-session-2-YYYYMMDDTHHMMSSZ
-export TRACKRELAY_RUN_API_CIDR=YOUR_CURRENT_PUBLIC_IPV4/32
-export TRACKRELAY_RUN_COST_CEILING_USD=REVIEWED_APPROVAL_CEILING
-export TRACKRELAY_RUN_TIER_ORDER=t4g.small,c8g.large,c8g.4xlarge
+export TRACKRELAY_RUN_SESSION_ID="cloud-session-2-$(date -u +%Y%m%dT%H%M%SZ)"
+
+trackrelay_public_ipv4="$(
+  curl --fail --silent --show-error https://checkip.amazonaws.com
+)"
+trackrelay_public_ipv4="$(
+  uv run --locked python -c \
+    'import ipaddress, sys; print(ipaddress.IPv4Address(sys.argv[1]))' \
+    "$trackrelay_public_ipv4"
+)"
+export TRACKRELAY_RUN_API_CIDR="${trackrelay_public_ipv4}/32"
+
+export TRACKRELAY_RUN_TIER_ORDER='t4g.small,c8g.large,c8g.4xlarge'
+test ! -e "results/aws-sessions/$TRACKRELAY_RUN_SESSION_ID"
+printf 'session: %s\ningress: %s\ntiers: %s\n' \
+  "$TRACKRELAY_RUN_SESSION_ID" \
+  "$TRACKRELAY_RUN_API_CIDR" \
+  "$TRACKRELAY_RUN_TIER_ORDER"
+```
+
+The `test ! -e` guard prevents accidental session reuse. Do not set the cost
+ceiling yet: it is a human authorization decision made after the saved plan and
+cost estimate have been reviewed.
+
+Continue through the preflight below and run `make aws-plan` in section 2. That
+command creates `session.json` and `terraform.tfplan`. The human-readable
+`proposal.md` is then written beside them during plan and cost review; it is not
+created by Terraform itself.
+
+### Mode B — execute an approved plan that already exists
+
+Select the exact approved session record deliberately. Derive its session ID
+and CIDR from that record rather than regenerating either value. The cost
+ceiling must be copied from the explicit approval because treating a file as
+authority for its own spending limit would make the approval check circular.
+
+Replace `APPROVED_SESSION_ID` once with the exact ID from the approval:
+
+```shell
+export TRACKRELAY_RUN_SESSION_FILE='results/aws-sessions/APPROVED_SESSION_ID/session.json'
+
+export TRACKRELAY_RUN_SESSION_ID="$(
+  jq -er '.session_id' "$TRACKRELAY_RUN_SESSION_FILE"
+)"
+export TRACKRELAY_RUN_API_CIDR="$(
+  jq -er '.api_ingress_cidr' "$TRACKRELAY_RUN_SESSION_FILE"
+)"
+export TRACKRELAY_RUN_COST_CEILING_USD='4.00'
+export TRACKRELAY_RUN_TIER_ORDER='t4g.small,c8g.large,c8g.4xlarge'
+```
+
+Verify that the selected plan is still the approved, unmodified plan:
+
+```shell
+test "$(jq -er '.status' "$TRACKRELAY_RUN_SESSION_FILE")" = 'planned'
+test "$(jq -er '.git_revision' "$TRACKRELAY_RUN_SESSION_FILE")" = \
+  "$(git rev-parse HEAD)"
+
+trackrelay_expected_plan_sha="$(
+  jq -er '.plan_sha256' "$TRACKRELAY_RUN_SESSION_FILE"
+)"
+trackrelay_actual_plan_sha="$(
+  shasum -a 256 \
+    "results/aws-sessions/$TRACKRELAY_RUN_SESSION_ID/terraform.tfplan" |
+    awk '{print $1}'
+)"
+test "$trackrelay_actual_plan_sha" = "$trackrelay_expected_plan_sha"
+
+printf 'session: %s\ningress: %s\nceiling: USD %s\ntiers: %s\nplan SHA-256: %s\n' \
+  "$TRACKRELAY_RUN_SESSION_ID" \
+  "$TRACKRELAY_RUN_API_CIDR" \
+  "$TRACKRELAY_RUN_COST_CEILING_USD" \
+  "$TRACKRELAY_RUN_TIER_ORDER" \
+  "$trackrelay_actual_plan_sha"
 ```
 
 These task-specific variables deliberately avoid ambient `AWS_PROFILE` and
@@ -61,7 +138,10 @@ Expected checkpoints:
 - Terraform validation and all Terraform tests pass.
 - The ordinary test suite passes.
 
-## 2. Create—but do not apply—the plan
+If you are in Mode A, continue to section 2. If you are in Mode B, the approved
+plan already exists: **skip section 2 and continue directly to section 3**.
+
+## 2. Create—but do not apply—the plan (Mode A only)
 
 ```shell
 make aws-plan \

@@ -47,6 +47,8 @@ from trackrelay.experiments.baseline import (
 from trackrelay.experiments.generator import write_input_manifest
 from trackrelay.experiments.performance import (
     PerformanceExperimentConfiguration,
+    RuntimeMetricsObservationFailure,
+    RuntimeMetricsObservationFailures,
     RuntimeMetricsSamples,
     build_k6_command,
     derive_performance_result,
@@ -977,12 +979,20 @@ def execute_local_load(
     on_load_ended: Callable[[], None] = lambda: None,
 ) -> tuple[int, tuple[RuntimeMetricsSnapshot, ...], dict[str, object]]:
     """Run k6 locally while sampling the remote API process."""
+    observation_failures: list[RuntimeMetricsObservationFailure] = []
     exit_code, samples = run_k6_with_resource_sampling(
         command,
         trackrelay_client=client,
         sample_interval_seconds=sample_interval_seconds,
         on_load_started=on_load_started,
         on_load_ended=on_load_ended,
+        observation_failures=observation_failures,
+    )
+    _write_model(
+        RuntimeMetricsObservationFailures(
+            failures=tuple(observation_failures)
+        ),
+        summary_path.parent / "runtime-metrics-observation-failures.json",
     )
     try:
         summary = json.loads(summary_path.read_text(encoding="utf-8"))

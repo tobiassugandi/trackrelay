@@ -4,11 +4,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
 
+import httpx
 from pydantic import ValidationError
-from pytest import raises
+from pytest import mark, raises
 
 from trackrelay.database import Base, create_database_engine, create_session_factory
 from trackrelay.domain import ShipmentStatus
+from trackrelay.experiments import performance
 from trackrelay.experiments.performance import (
     LoadScenario,
     PerformanceExperimentConfiguration,
@@ -243,6 +245,93 @@ def runtime_sample(
             max_overflow=10,
         ),
     )
+
+
+@mark.parametrize(
+    ("failed_request_number", "expected_phase"),
+    ((2, "during-load"), (3, "post-load")),
+)
+def test_overload_runtime_observation_gaps_do_not_erase_the_k6_result(
+    monkeypatch,
+    failed_request_number: int,
+    expected_phase: str,
+) -> None:
+    started_at = datetime(2026, 8, 30, tzinfo=UTC)
+    snapshots = (
+        runtime_sample(
+            captured_at=started_at,
+            process_cpu_seconds=1,
+            checked_out=1,
+            available_memory=1000,
+            cpu0_total=100,
+            cpu0_idle=80,
+            cpu1_total=100,
+            cpu1_idle=90,
+        ),
+        runtime_sample(
+            captured_at=started_at + timedelta(seconds=1),
+            process_cpu_seconds=2,
+            checked_out=2,
+            available_memory=900,
+            cpu0_total=101,
+            cpu0_idle=80,
+            cpu1_total=101,
+            cpu1_idle=90,
+        ),
+    )
+    request_count = 0
+
+    def runtime_handler(request: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        request_count += 1
+        if request_count == failed_request_number:
+            raise httpx.ReadTimeout("synthetic overload", request=request)
+        snapshot = snapshots[0] if request_count == 1 else snapshots[1]
+        return httpx.Response(
+            200,
+            json=snapshot.model_dump(mode="json"),
+            request=request,
+        )
+
+    class FakeProcess:
+        wait_count = 0
+
+        def wait(self, timeout=None):
+            del timeout
+            self.wait_count += 1
+            if self.wait_count == 1:
+                raise performance.subprocess.TimeoutExpired("k6", 1)
+            return 99
+
+        def poll(self):
+            return 99
+
+    monkeypatch.setattr(
+        performance.subprocess,
+        "Popen",
+        lambda _command: FakeProcess(),
+    )
+    observation_failures = []
+    callbacks = []
+    with httpx.Client(
+        base_url="http://trackrelay.invalid",
+        transport=httpx.MockTransport(runtime_handler),
+    ) as client:
+        exit_code, samples = performance.run_k6_with_resource_sampling(
+            ("k6",),
+            trackrelay_client=client,
+            sample_interval_seconds=1,
+            on_load_started=lambda: callbacks.append("started"),
+            on_load_ended=lambda: callbacks.append("ended"),
+            observation_failures=observation_failures,
+        )
+
+    assert exit_code == 99
+    assert samples == snapshots
+    assert callbacks == ["started", "ended"]
+    assert len(observation_failures) == 1
+    assert observation_failures[0].phase == expected_phase
+    assert observation_failures[0].kind == "timeout"
 
 
 def test_result_distinguishes_productive_throughput_from_resource_work() -> None:

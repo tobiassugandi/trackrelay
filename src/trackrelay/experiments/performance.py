@@ -5,6 +5,7 @@ import subprocess
 from argparse import ArgumentParser
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from time import monotonic, sleep
@@ -144,6 +145,25 @@ class RuntimeMetricsSamples(BaseModel):
     schema_version: Literal[2] = 2
     test_run_id: UUID
     samples: tuple[RuntimeMetricsSnapshot, ...]
+
+
+class RuntimeMetricsObservationFailure(BaseModel):
+    """One sanitized runtime-metrics gap caused by load pressure."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    attempted_at: AwareDatetime
+    phase: Literal["during-load", "post-load"]
+    kind: Literal["timeout", "transport", "http-status", "invalid-response"]
+
+
+class RuntimeMetricsObservationFailures(BaseModel):
+    """Non-fatal observation gaps retained beside the load evidence."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    failures: tuple[RuntimeMetricsObservationFailure, ...]
 
 
 class PerformanceExperimentResult(BaseModel):
@@ -313,9 +333,39 @@ def _write_json(value: object, output_path: Path) -> None:
 
 
 def _runtime_snapshot(trackrelay_client: httpx.Client) -> RuntimeMetricsSnapshot:
-    response = trackrelay_client.get("/api/v1/experiments/runtime-metrics")
+    response = trackrelay_client.get(
+        "/api/v1/experiments/runtime-metrics",
+        timeout=1.0,
+    )
     response.raise_for_status()
     return RuntimeMetricsSnapshot.model_validate(response.json())
+
+
+def _optional_runtime_snapshot(
+    trackrelay_client: httpx.Client,
+    *,
+    phase: Literal["during-load", "post-load"],
+    failures: list[RuntimeMetricsObservationFailure],
+) -> RuntimeMetricsSnapshot | None:
+    attempted_at = datetime.now(UTC)
+    try:
+        return _runtime_snapshot(trackrelay_client)
+    except httpx.TimeoutException:
+        kind = "timeout"
+    except httpx.HTTPStatusError:
+        kind = "http-status"
+    except httpx.TransportError:
+        kind = "transport"
+    except (ValidationError, ValueError):
+        kind = "invalid-response"
+    failures.append(
+        RuntimeMetricsObservationFailure(
+            attempted_at=attempted_at,
+            phase=phase,
+            kind=kind,
+        )
+    )
+    return None
 
 
 def build_k6_command(
@@ -366,7 +416,9 @@ def run_k6_with_resource_sampling(
     sample_interval_seconds: float,
     on_load_started: Callable[[], None] = lambda: None,
     on_load_ended: Callable[[], None] = lambda: None,
+    observation_failures: list[RuntimeMetricsObservationFailure] | None = None,
 ) -> tuple[int, tuple[RuntimeMetricsSnapshot, ...]]:
+    failures = observation_failures if observation_failures is not None else []
     samples = [_runtime_snapshot(trackrelay_client)]
     process = subprocess.Popen(command)
     try:
@@ -376,7 +428,13 @@ def run_k6_with_resource_sampling(
                 exit_code = process.wait(timeout=sample_interval_seconds)
                 break
             except subprocess.TimeoutExpired:
-                samples.append(_runtime_snapshot(trackrelay_client))
+                sample = _optional_runtime_snapshot(
+                    trackrelay_client,
+                    phase="during-load",
+                    failures=failures,
+                )
+                if sample is not None:
+                    samples.append(sample)
     except BaseException:
         if process.poll() is None:
             process.terminate()
@@ -384,7 +442,13 @@ def run_k6_with_resource_sampling(
         raise
     finally:
         on_load_ended()
-    samples.append(_runtime_snapshot(trackrelay_client))
+    final_sample = _optional_runtime_snapshot(
+        trackrelay_client,
+        phase="post-load",
+        failures=failures,
+    )
+    if final_sample is not None:
+        samples.append(final_sample)
     return exit_code, tuple(samples)
 
 
@@ -725,6 +789,9 @@ def execute_performance_experiment(
     configuration_path = run_directory / "configuration.json"
     manifest_path = run_directory / "input-manifest.json"
     resource_samples_path = run_directory / "runtime-metrics-samples.json"
+    observation_failures_path = (
+        run_directory / "runtime-metrics-observation-failures.json"
+    )
     k6_summary_path = run_directory / "k6-summary.json"
     simulator_receipts_path = run_directory / "simulator-receipts.json"
     database_summary_path = run_directory / "database-summary.json"
@@ -745,6 +812,7 @@ def execute_performance_experiment(
         manifest_path=manifest_path,
         run_directory=run_directory,
     )
+    observation_failures: list[RuntimeMetricsObservationFailure] = []
     try:
         k6_exit_code, resource_samples = run_k6_with_resource_sampling(
             command,
@@ -752,6 +820,7 @@ def execute_performance_experiment(
             sample_interval_seconds=(
                 configuration.resource_sample_interval_seconds
             ),
+            observation_failures=observation_failures,
         )
     finally:
         reset_response = downstream_client.put(
@@ -775,6 +844,12 @@ def execute_performance_experiment(
         samples=resource_samples,
     )
     _write_model(runtime_samples, resource_samples_path)
+    _write_model(
+        RuntimeMetricsObservationFailures(
+            failures=tuple(observation_failures)
+        ),
+        observation_failures_path,
+    )
 
     all_simulator_receipts = fetch_simulator_receipts(
         configuration.downstream_url,

@@ -302,6 +302,9 @@ For every rate, it requires:
   load window. Individual overload-time gaps are retained explicitly instead
   of crashing the observer; diagnostic calculations use successful snapshots
   and remain fail-closed when those snapshots are insufficient.
+- Sanitized driver-side runtime-observation gaps. A strict pre-load sample must
+  pass, but a one-second metrics timeout during or after overload cannot discard
+  the completed k6 result or prevent reconciliation.
 - A bounded post-load SSM recovery probe before reconciliation. Collection is
   retried only after `Undeliverable` or `DeliveryTimedOut` with response code
   -1; any command that began execution is never replayed. All command attempts

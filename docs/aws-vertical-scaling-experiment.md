@@ -179,6 +179,15 @@ into the same five-second UTC intervals with attempt and outcome counts, p95
 latency, and maximum latency. This distinguishes simulator pressure from API
 work while keeping the measurement interval fixed across all hardware tiers.
 
+The benchmark driver also samples the public API runtime endpoint. Its pre-load
+observation remains a strict readiness requirement, while observations during
+traffic and immediately after k6 exits use a one-second timeout and are
+best-effort. Overload-time timeouts, transport failures, HTTP failures, and
+invalid responses are saved as sanitized phase-tagged gaps; they cannot erase a
+completed k6 result or prevent private reconciliation. Successful snapshots
+remain available for supporting diagnostics, while the private detached
+timeline remains the coverage-controlled source for causal reporting.
+
 AWS documents that [EC2 detailed monitoring](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/manage-detailed-monitoring.html)
 provides one-minute metrics and incurs metric charges. It is enabled for Stage
 9.3 so host CPU and network data can be queried at 60-second resolution. The

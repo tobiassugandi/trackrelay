@@ -67,6 +67,7 @@ from trackrelay.experiments.baseline import (
 from trackrelay.experiments.generator import write_input_manifest
 from trackrelay.experiments.performance import (
     PerformanceExperimentConfiguration,
+    PerformanceExperimentResult,
     RuntimeMetricsSamples,
     build_k6_command,
     derive_performance_result,
@@ -85,6 +86,7 @@ from trackrelay.experiments.vertical_scaling import (
     ECONOMICAL_BASELINE_INSTANCE_TYPE,
     InfrastructureScalingCapacitySelection,
     InfrastructureScalingControls,
+    WorkloadControls,
     load_capacity_selection,
     load_experiment_controls,
 )
@@ -121,9 +123,9 @@ class VerticalScalingExperimentDefinition(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2] = 2
-    name: Literal["aws-synchronous-hardware-flexibility-v2"] = (
-        "aws-synchronous-hardware-flexibility-v2"
+    schema_version: Literal[3] = 3
+    name: Literal["aws-synchronous-hardware-flexibility-v3"] = (
+        "aws-synchronous-hardware-flexibility-v3"
     )
     prepared_at: AwareDatetime
     git_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
@@ -173,9 +175,9 @@ class VerticalScalingTierDefinition(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[1] = 1
-    experiment_name: Literal["aws-synchronous-hardware-flexibility-v2"] = (
-        "aws-synchronous-hardware-flexibility-v2"
+    schema_version: Literal[2] = 2
+    experiment_name: Literal["aws-synchronous-hardware-flexibility-v3"] = (
+        "aws-synchronous-hardware-flexibility-v3"
     )
     experiment_definition_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     instance_type: str
@@ -184,6 +186,11 @@ class VerticalScalingTierDefinition(BaseModel):
     offered_rates_per_second: tuple[int, ...]
     rate_duration_seconds: Literal[180]
     runtime_sample_interval_seconds: Literal[5]
+    warmup_rate_per_second: Literal[2]
+    warmup_duration_seconds: Literal[30]
+    post_reset_quiet_period_seconds: Literal[60]
+    matching_trials_required: Literal[2]
+    trials_per_rate: Literal[3]
     benchmark_driver: BenchmarkDriverEnvironment
 
     @model_validator(mode="after")
@@ -202,14 +209,103 @@ class VerticalScalingTierDefinition(BaseModel):
         return self
 
 
+class VerticalScalingTrialResult(BaseModel):
+    """One fully evidenced repetition followed by a proven clean reset."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    trial_number: int = Field(ge=1, le=3)
+    result: LegacyBaselineRateResult
+    post_trial_reset: RehostExperimentResetEvidence
+
+
+class VerticalScalingRateAssessment(BaseModel):
+    """A rate classification based on a two-of-three majority."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    offered_rate_per_second: int = Field(gt=0)
+    matching_trials_required: Literal[2] = 2
+    trials_per_rate: Literal[3] = 3
+    passed: bool
+    trials: tuple[VerticalScalingTrialResult, ...]
+
+    @model_validator(mode="after")
+    def require_a_two_of_three_consensus(self) -> "VerticalScalingRateAssessment":
+        if len(self.trials) != self.trials_per_rate:
+            raise ValueError("a rate assessment requires exactly three trials")
+        if tuple(trial.trial_number for trial in self.trials) != tuple(
+            range(1, len(self.trials) + 1)
+        ):
+            raise ValueError("rate trial numbers must be contiguous")
+        results = tuple(trial.result for trial in self.trials)
+        if any(
+            result.offered_rate_per_second != self.offered_rate_per_second
+            for result in results
+        ):
+            raise ValueError("every trial must use the assessed offered rate")
+        if len({result.test_run_id for result in results}) != len(results):
+            raise ValueError("rate trials must have unique test-run identities")
+        outcomes = tuple(
+            result.complete_experiment_passed for result in results
+        )
+        classified_pass = outcomes.count(True) >= self.matching_trials_required
+        classified_fail = outcomes.count(False) >= self.matching_trials_required
+        if classified_pass == classified_fail or self.passed is not classified_pass:
+            raise ValueError("rate assessment outcome disagrees with its trials")
+        return self
+
+    @property
+    def representative_result(self) -> LegacyBaselineRateResult:
+        """Use the last majority-supporting trial for boundary diagnostics."""
+        return next(
+            trial.result
+            for trial in reversed(self.trials)
+            if trial.result.complete_experiment_passed is self.passed
+        )
+
+    @property
+    def passing_trial_count(self) -> int:
+        return sum(
+            trial.result.complete_experiment_passed for trial in self.trials
+        )
+
+    @property
+    def failing_trial_count(self) -> int:
+        return len(self.trials) - self.passing_trial_count
+
+
+class VerticalScalingWarmupEvidence(BaseModel):
+    """A successful untimed warm-up followed by a clean-state checkpoint."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    result: LegacyBaselineRateResult
+    reset: RehostExperimentResetEvidence
+    post_reset_quiet_period_seconds: Literal[60] = 60
+
+    @model_validator(mode="after")
+    def require_the_frozen_successful_warmup(self) -> "VerticalScalingWarmupEvidence":
+        if (
+            self.result.offered_rate_per_second != 2
+            or self.result.expected_request_count != 60
+            or not self.result.complete_experiment_passed
+        ):
+            raise ValueError("tier warm-up must pass the frozen 2/s for 30s load")
+        return self
+
+
 class VerticalScalingTierSummary(BaseModel):
     """Compact capacity result for one unchanged-application treatment."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[1] = 1
-    benchmark_name: Literal["aws-synchronous-hardware-flexibility-v2"] = (
-        "aws-synchronous-hardware-flexibility-v2"
+    schema_version: Literal[2] = 2
+    benchmark_name: Literal["aws-synchronous-hardware-flexibility-v3"] = (
+        "aws-synchronous-hardware-flexibility-v3"
     )
     instance_type: str
     tier_role: TierRole
@@ -217,7 +313,43 @@ class VerticalScalingTierSummary(BaseModel):
     maximum_sustainable_rate_per_second: int | None
     first_failing_rate_per_second: int | None
     capacity_is_at_least_highest_tested_rate: bool
-    rate_results: tuple[LegacyBaselineRateResult, ...]
+    warmup_evidence: str
+    rate_assessments: tuple[VerticalScalingRateAssessment, ...]
+
+    @model_validator(mode="after")
+    def require_a_consistent_consensus_boundary(self) -> "VerticalScalingTierSummary":
+        if not self.rate_assessments:
+            raise ValueError("tier summary needs at least one assessed rate")
+        rates = tuple(
+            assessment.offered_rate_per_second
+            for assessment in self.rate_assessments
+        )
+        if rates != tuple(sorted(set(rates))):
+            raise ValueError("assessed rates must be unique and strictly increasing")
+        outcomes = tuple(assessment.passed for assessment in self.rate_assessments)
+        if False in outcomes[:-1]:
+            raise ValueError("tier continued after a confirmed failing rate")
+        expected_maximum = max(
+            (rate for rate, passed in zip(rates, outcomes, strict=True) if passed),
+            default=None,
+        )
+        expected_failure = rates[-1] if not outcomes[-1] else None
+        if (
+            self.maximum_sustainable_rate_per_second != expected_maximum
+            or self.first_failing_rate_per_second != expected_failure
+            or self.capacity_is_at_least_highest_tested_rate
+            is not (expected_failure is None)
+        ):
+            raise ValueError("tier boundary disagrees with rate consensus")
+        return self
+
+    @property
+    def rate_results(self) -> tuple[LegacyBaselineRateResult, ...]:
+        """Expose one consensus-deciding result per rate for report diagnostics."""
+        return tuple(
+            assessment.representative_result
+            for assessment in self.rate_assessments
+        )
 
 
 class InfrastructureTransitionPlanEvidence(BaseModel):
@@ -560,11 +692,15 @@ def _source_benchmark() -> LegacyBaselineBenchmarkDefinition:
 def _derive_tier_summary(
     *,
     instance_type: str,
-    rate_results: Sequence[LegacyBaselineRateResult],
+    warmup_evidence: str,
+    rate_assessments: Sequence[VerticalScalingRateAssessment],
     completed_at: datetime,
 ) -> VerticalScalingTierSummary:
+    representative_results = tuple(
+        assessment.representative_result for assessment in rate_assessments
+    )
     baseline = derive_legacy_baseline_summary(
-        rate_results,
+        representative_results,
         completed_at=completed_at,
     )
     return VerticalScalingTierSummary(
@@ -578,8 +714,153 @@ def _derive_tier_summary(
         capacity_is_at_least_highest_tested_rate=(
             baseline.capacity_is_at_least_highest_tested_rate
         ),
-        rate_results=baseline.rate_results,
+        warmup_evidence=warmup_evidence,
+        rate_assessments=tuple(rate_assessments),
     )
+
+
+def _performance_configuration(
+    controls: WorkloadControls,
+    *,
+    rate: int,
+    duration_seconds: int,
+    start_at: datetime,
+    api_url: str,
+) -> PerformanceExperimentConfiguration:
+    return PerformanceExperimentConfiguration(
+        scenario="healthy",
+        request_rate_per_second=rate,
+        duration_seconds=duration_seconds,
+        random_seed=controls.random_seed,
+        partner_id=controls.partner_id,
+        start_at=start_at,
+        resource_sample_interval_seconds=controls.runtime_sample_interval_seconds,
+        post_load_settle_timeout_seconds=(
+            controls.post_load_settle_timeout_seconds
+        ),
+        post_load_stable_window_seconds=(
+            controls.post_load_stable_window_seconds
+        ),
+        k6_image=controls.k6_image,
+        trackrelay_api_url=api_url,
+        trackrelay_api_url_for_container=api_url,
+    )
+
+
+def _portable_performance_result(
+    performance_result: PerformanceExperimentResult,
+) -> PerformanceExperimentResult:
+    configuration = performance_result.configuration.model_copy(
+        update={
+            "trackrelay_api_url": "http://stage-9-3-api.invalid",
+            "trackrelay_api_url_for_container": "http://stage-9-3-api.invalid",
+            "downstream_url": "http://private-downstream.invalid",
+        }
+    )
+    return performance_result.model_copy(update={"configuration": configuration})
+
+
+def _run_tier_warmup(
+    session: AwsSession,
+    *,
+    tier_root: Path,
+    controls: WorkloadControls,
+    start_at: datetime,
+    instance_id: str,
+    api_url: str,
+    client: httpx.Client,
+    runner: ProcessRunner,
+    load_executor: TimedLocalLoadExecutor,
+    remote_action: Callable[..., RehostServerEvidence | None],
+    now: Callable[[], datetime],
+    uuid_factory: Callable[[], UUID],
+) -> LegacyBaselineRateResult:
+    """Warm application, network, and database paths without measuring a tier."""
+    test_run_id = uuid_factory()
+    point = RehostWorkloadPoint(
+        test_run_id=test_run_id,
+        request_rate_per_second=controls.warmup_rate_per_second,
+        duration_seconds=controls.warmup_duration_seconds,
+        random_seed=controls.random_seed,
+        partner_id=controls.partner_id,
+        start_at=start_at,
+        post_load_settle_timeout_seconds=controls.post_load_settle_timeout_seconds,
+        post_load_stable_window_seconds=controls.post_load_stable_window_seconds,
+    )
+    run_directory = tier_root / "warmup" / str(test_run_id)
+    run_directory.mkdir(parents=True)
+    manifest_path = run_directory / "input-manifest.json"
+    summary_path = run_directory / "k6-summary.json"
+    write_input_manifest(point.manifest(), manifest_path)
+    remote_action(
+        session,
+        instance_id=instance_id,
+        action="prepare",
+        point=point,
+        runner=runner,
+        attempt_evidence_path=(run_directory / "ssm-prepare-command-attempts.json"),
+    )
+    configuration = _performance_configuration(
+        controls,
+        rate=controls.warmup_rate_per_second,
+        duration_seconds=controls.warmup_duration_seconds,
+        start_at=start_at,
+        api_url=api_url,
+    )
+    timed_load = load_executor(
+        build_k6_command(
+            configuration,
+            manifest_path=manifest_path,
+            run_directory=run_directory,
+        ),
+        client,
+        controls.runtime_sample_interval_seconds,
+        summary_path,
+        test_run_id,
+        now,
+        on_load_ended=lambda: None,
+    )
+    k6_exit_code, local_samples, k6_summary = timed_load.value
+    _write_model(timed_load.window, run_directory / "load-window.json")
+    _write_model(
+        RuntimeMetricsSamples(test_run_id=test_run_id, samples=local_samples),
+        run_directory / "runtime-metrics-samples.json",
+    )
+    if not summary_path.exists():
+        summary_path.write_text(
+            f"{json.dumps(k6_summary, indent=2)}\n",
+            encoding="utf-8",
+        )
+    server_evidence = remote_action(
+        session,
+        instance_id=instance_id,
+        action="collect",
+        point=point,
+        runner=runner,
+        attempt_evidence_path=(run_directory / "ssm-collect-command-attempts.json"),
+    )
+    if server_evidence is None:
+        raise AwsRehostError("SSM warm-up collection returned no evidence")
+    _write_model(server_evidence, run_directory / "server-evidence.json")
+    performance_result = derive_performance_result(
+        configuration,
+        test_run_id=test_run_id,
+        k6_exit_code=k6_exit_code,
+        k6_summary=k6_summary,
+        resource_samples=local_samples,
+        reconciliation=server_evidence.reconciliation,
+    )
+    _write_model(
+        _portable_performance_result(performance_result),
+        run_directory / "performance-result.json",
+        exclude_computed_fields=True,
+    )
+    compact_result = compact_rate_result(
+        performance_result,
+        raw_evidence_directory=run_directory.relative_to(session.evidence_dir),
+    )
+    _write_model(compact_result, run_directory / "rate-result.json")
+    return compact_result
 
 
 def run_current_vertical_scaling_tier(
@@ -599,6 +880,8 @@ def run_current_vertical_scaling_tier(
     runtime_stopper: Callable[..., None] = stop_remote_runtime_sampling,
     runtime_cleaner: Callable[..., None] = cleanup_remote_runtime_sampling,
     cloudwatch_collector: CloudWatchCollector = collect_cloudwatch_evidence,
+    resetter: RemoteResetter | None = None,
+    sleeper: Callable[[float], None] = sleep,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     uuid_factory: Callable[[], UUID] = uuid4,
 ) -> VerticalScalingTierSummary:
@@ -612,6 +895,7 @@ def run_current_vertical_scaling_tier(
         revision=revision,
     )
     controls = definition.controls.workload
+    active_resetter = resetter or run_remote_experiment_reset
     source = _source_benchmark().configuration
     instance_id = terraform_output(
         session,
@@ -654,14 +938,56 @@ def run_current_vertical_scaling_tier(
         runtime_sample_interval_seconds=(
             controls.runtime_sample_interval_seconds
         ),
+        warmup_rate_per_second=controls.warmup_rate_per_second,
+        warmup_duration_seconds=controls.warmup_duration_seconds,
+        post_reset_quiet_period_seconds=(
+            controls.post_reset_quiet_period_seconds
+        ),
+        matching_trials_required=controls.matching_trials_required,
+        trials_per_rate=controls.trials_per_rate,
         benchmark_driver=capture_benchmark_driver_environment(),
     )
     _write_model(tier_definition, tier_root / "tier-definition.json")
 
-    rate_results = []
     api_url = f"http://{public_ip}:8000"
     with httpx.Client(base_url=api_url, timeout=30.0) as client:
-        for rate in controls.offered_rates_per_second:
+        warmup_result = _run_tier_warmup(
+            session,
+            tier_root=tier_root,
+            controls=controls,
+            start_at=source.start_at,
+            instance_id=instance_id,
+            api_url=api_url,
+            client=client,
+            runner=runner,
+            load_executor=load_executor,
+            remote_action=remote_action,
+            now=now,
+            uuid_factory=uuid_factory,
+        )
+        warmup_reset = active_resetter(
+            session,
+            instance_id=instance_id,
+            runner=runner,
+        )
+        warmup_evidence = VerticalScalingWarmupEvidence(
+            result=warmup_result,
+            reset=warmup_reset,
+            post_reset_quiet_period_seconds=(
+                controls.post_reset_quiet_period_seconds
+            ),
+        )
+        warmup_path = tier_root / "warmup-summary.json"
+        _write_model(warmup_evidence, warmup_path)
+        sleeper(controls.post_reset_quiet_period_seconds)
+
+        rate_assessments = []
+        trial_results = []
+        for rate, trial_number in (
+            (rate, trial_number)
+            for rate in controls.offered_rates_per_second
+            for trial_number in range(1, controls.trials_per_rate + 1)
+        ):
             test_run_id = uuid_factory()
             point = RehostWorkloadPoint(
                 test_run_id=test_run_id,
@@ -708,25 +1034,12 @@ def run_current_vertical_scaling_tier(
                 runner=runner,
                 attempt_evidence_path=prepare_attempts_path,
             )
-            configuration = PerformanceExperimentConfiguration(
-                scenario="healthy",
-                request_rate_per_second=rate,
+            configuration = _performance_configuration(
+                controls,
+                rate=rate,
                 duration_seconds=controls.tier_duration_seconds,
-                random_seed=controls.random_seed,
-                partner_id=controls.partner_id,
                 start_at=source.start_at,
-                resource_sample_interval_seconds=(
-                    controls.runtime_sample_interval_seconds
-                ),
-                post_load_settle_timeout_seconds=(
-                    controls.post_load_settle_timeout_seconds
-                ),
-                post_load_stable_window_seconds=(
-                    controls.post_load_stable_window_seconds
-                ),
-                k6_image=controls.k6_image,
-                trackrelay_api_url=api_url,
-                trackrelay_api_url_for_container=api_url,
+                api_url=api_url,
             )
             command = build_k6_command(
                 configuration,
@@ -835,20 +1148,8 @@ def run_current_vertical_scaling_tier(
                 resource_samples=local_samples,
                 reconciliation=server_evidence.reconciliation,
             )
-            portable_configuration = configuration.model_copy(
-                update={
-                    "trackrelay_api_url": "http://stage-9-3-api.invalid",
-                    "trackrelay_api_url_for_container": (
-                        "http://stage-9-3-api.invalid"
-                    ),
-                    "downstream_url": "http://private-downstream.invalid",
-                }
-            )
-            portable_performance_result = performance_result.model_copy(
-                update={"configuration": portable_configuration}
-            )
             _write_model(
-                portable_performance_result,
+                _portable_performance_result(performance_result),
                 performance_result_path,
                 exclude_computed_fields=True,
             )
@@ -859,13 +1160,47 @@ def run_current_vertical_scaling_tier(
                 ),
             )
             _write_model(compact_result, rate_result_path)
-            rate_results.append(compact_result)
-            if not compact_result.complete_experiment_passed:
+            post_trial_reset = active_resetter(
+                session,
+                instance_id=instance_id,
+                runner=runner,
+            )
+            _write_model(post_trial_reset, run_directory / "post-trial-reset.json")
+            trial_results.append(
+                VerticalScalingTrialResult(
+                    trial_number=trial_number,
+                    result=compact_result,
+                    post_trial_reset=post_trial_reset,
+                )
+            )
+            if trial_number < controls.trials_per_rate:
+                sleeper(controls.post_reset_quiet_period_seconds)
+                continue
+
+            passing_trials = sum(
+                trial.result.complete_experiment_passed
+                for trial in trial_results
+            )
+            assessment = VerticalScalingRateAssessment(
+                offered_rate_per_second=rate,
+                matching_trials_required=controls.matching_trials_required,
+                trials_per_rate=controls.trials_per_rate,
+                passed=passing_trials >= controls.matching_trials_required,
+                trials=tuple(trial_results),
+            )
+            assessment_path = tier_root / "rates" / str(rate) / "assessment.json"
+            _write_model(assessment, assessment_path)
+            rate_assessments.append(assessment)
+            trial_results = []
+            if not assessment.passed:
                 break
+            if rate != controls.offered_rates_per_second[-1]:
+                sleeper(controls.post_reset_quiet_period_seconds)
 
     summary = _derive_tier_summary(
         instance_type=session.rehost_instance_type,
-        rate_results=rate_results,
+        warmup_evidence=str(warmup_path.relative_to(session.evidence_dir)),
+        rate_assessments=rate_assessments,
         completed_at=now(),
     )
     summary_path = tier_root / "summary.json"

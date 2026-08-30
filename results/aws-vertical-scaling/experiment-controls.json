@@ -1,6 +1,6 @@
 {
-  "schema_version": 2,
-  "name": "aws-synchronous-hardware-flexibility-controls-v2",
+  "schema_version": 3,
+  "name": "aws-synchronous-hardware-flexibility-controls-v3",
   "only_changed_deployment_input": "ec2-instance-type",
   "tier_order": [
     "t3.small",
@@ -57,6 +57,12 @@
     "partner_id": "load-alpha",
     "k6_image": "grafana/k6:2.1.0",
     "benchmark_driver_identity": "same-host-and-container-image",
+    "k6_vu_allocation": "preallocate-max-100-or-two-per-rate",
+    "warmup_rate_per_second": 2,
+    "warmup_duration_seconds": 30,
+    "post_reset_quiet_period_seconds": 60,
+    "matching_trials_required": 2,
+    "trials_per_rate": 3,
     "p95_latency_limit_ms": 500.0,
     "request_error_rate_limit": 0.01,
     "unaccounted_events_required": 0,

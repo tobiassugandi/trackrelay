@@ -81,20 +81,25 @@ library defaults. RDS remains `db.t4g.micro`, PostgreSQL 17, single-AZ, with
 
 The experiment reuses the Step 8.6 workload shape, offered-rate ladder,
 reconciliation invariants, and initial SLO. Every request represents one unique
-shipment in the `CREATED` state. Each rate is evaluated independently; a higher
-rate cannot restore the performance envelope after the first failing rate. The
-six frozen rates are therefore candidate points, not a requirement to run all
-six: each hardware tier preserves its first complete failing point and stops
-before offering any higher rate. A tier runs all six only when every candidate
-passes.
+shipment in the `CREATED` state. Before measurement, every hardware tier runs a
+2 events/s, 30-second warm-up, resets both stores, and waits 60 seconds. The k6
+driver preallocates `max(100, 2 × offered rate)` VUs so cold paths, dynamic VU
+creation, and a few tail-latency outliers cannot masquerade as an EC2 limit.
+
+Each candidate rate is classified by three independent 180-second trials after
+an evidence-preserving reset. Two passing trials classify the rate as passing;
+two failing trials classify it as failing. A 60-second quiet period separates
+trials and rate points. A higher rate cannot restore the performance envelope
+after a majority-confirmed failure, so the tier stops there. A tier runs all six
+candidates only when every lower candidate passes two-of-three.
 
 The ten-second portability rehearsal is too short for aligned AWS resource
-metrics. Stage 9.3 freezes each rate at 180 seconds, providing at least three
-samples even when the slowest accepted measurement period is one minute. The
-same duration, rate ladder, random seed, k6 image, driver placement, workload
-shape, and guardrails apply to all three tiers. The control loader also hashes
-the committed Step 8.6 benchmark definition and refuses to run against a changed
-source artifact.
+metrics. Stage 9.3 freezes every measured trial at 180 seconds, providing at
+least three samples even when the slowest accepted measurement period is one
+minute. The same warm-up, reset interval, repetition rule, duration, rate
+ladder, random seed, k6 image, driver placement, workload shape, and guardrails
+apply to all three tiers. The control loader also hashes the committed Step 8.6
+benchmark definition and refuses to run against a changed source artifact.
 
 A rate passes only when all of these remain true:
 
@@ -311,16 +316,19 @@ CloudWatch publication waits, and other evidence collection are outside that
 load window.
 
 `make aws-scaling-run-tier` is the stateful counterpart and must be used only
-inside the separately approved cloud session. It runs the frozen candidate
-ladder for the session's current EC2 treatment until the first complete failed
-point. Every executed rate gets its input manifest, k6
-summary, exact k6 process window, local and private process timelines, persisted
-downstream outcomes, reconciliation report, complete CloudWatch series, full
-derived performance result, and compact pass/fail result. The session advances
-to `vertical_scaling_tier_collected` only after the first failed rate has been
-fully preserved, or all six candidates have passed, and the tier summary has
-been written. Incomplete CloudWatch or reconciliation evidence aborts the tier
-instead of being mistaken for a classified failure or a publishable result.
+inside the separately approved cloud session. It first warms and resets the
+current EC2 treatment, then runs three trials at each frozen candidate until a
+two-of-three majority confirms the first failed rate. Every trial gets its own
+input manifest, k6 summary, exact k6 process window, local and private process
+timelines, persisted downstream outcomes, reconciliation report, complete
+CloudWatch series, full derived performance result, compact pass/fail result,
+and post-trial reset evidence. The rate assessment records all three outcomes
+and the tier boundary follows their majority. The session advances to
+`vertical_scaling_tier_collected` only after the first confirmed failed rate has
+been fully preserved, or all six candidates have passed, and the tier summary
+has been written. Incomplete CloudWatch, reset, or reconciliation evidence
+aborts the tier instead of being mistaken for a classified failure or a
+publishable result.
 
 After a tier has been collected, `make aws-scaling-transition` is the only
 supported way to move to the next frozen treatment. The command requires the
@@ -369,10 +377,11 @@ After the final `m7i-flex.large` tier is collected,
 `make aws-scaling-report REHOST_INSTANCE_TYPE=m7i-flex.large` is a local-only
 command. It makes no AWS request. It refuses to report until the manifest names
 all three completed tiers and both validated transitions in their frozen order.
-For each tier, it re-derives the compact capacity boundary and loads the API,
-downstream, reconciliation, load-window, and CloudWatch evidence belonging to
-the first failing rate. If the highest rate passed, that rate is used as a
-censored lower-bound diagnostic instead.
+For each tier, it re-derives the majority-classified capacity boundary and
+validates every trial's API, downstream, reconciliation, reset, load-window, and
+CloudWatch evidence. It reports the boundary trial counts and uses the last
+majority-supporting trial for resource diagnostics. If the highest rate passed,
+that rate is used as a censored lower-bound diagnostic instead.
 
 The report writes portable JSON and Markdown under
 `vertical-scaling/report/` in the ignored session evidence directory. It names

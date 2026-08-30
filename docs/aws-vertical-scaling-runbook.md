@@ -15,6 +15,13 @@ All three types are x86_64 and expose two vCPUs. Only the EC2 instance type chan
 process, connection pool, private RDS database, downstream simulator, load
 driver, rates, duration, and pass/fail rules remain fixed.
 
+Each tier receives the same 30-second warm-up, clean reset, and 60-second quiet
+period. Each candidate is then run three times for 180 seconds and classified by
+a two-of-three majority. State is reset after every trial, and the runner never
+offers a higher rate after a majority-confirmed failure. This repetition is
+intentional: a single small number of dropped iterations is not enough to rank
+the hardware tiers.
+
 ## Important ownership rule
 
 Before `aws-scaling-session` starts, you are responsible for running setup or
@@ -293,22 +300,23 @@ make aws-scaling-session \
 The runner performs, in order:
 
 1. Freeze the exact image, RDS, workload, hardware, and guardrail controls.
-2. Run 180-second candidates on `t3.small`, stopping after the first fully
-   collected failed point.
+2. Warm and reset `t3.small`, then run three 180-second trials per candidate,
+   stopping after the first fully collected majority-confirmed failed point.
 3. Preserve evidence, reset synthetic state, and validate the in-place move to
    `c7i-flex.large`.
-4. Replay the candidate ladder from its lowest rate on `c7i-flex.large`, again
-   stopping after the first failure.
+4. Warm, reset, and replay the candidate ladder from its lowest rate on
+   `c7i-flex.large`, again using three trials and stopping after a confirmed
+   failure.
 5. Preserve evidence, reset state, and validate the in-place move to
    `m7i-flex.large`.
-6. Replay the candidate ladder from its lowest rate on `m7i-flex.large`, stopping
-   after the first failure.
+6. Warm, reset, and replay the candidate ladder from its lowest rate on
+   `m7i-flex.large`, stopping after a confirmed failure.
 7. Generate the two-transition comparison and bottleneck report.
 8. Destroy the complete Terraform stack.
 9. Verify empty Terraform state, the generic tag inventory, and all native
    service inventories.
 
-For every rate, it requires:
+For every trial, it requires:
 
 - Exact k6 process boundaries and the complete k6 summary.
 - A detached private sampler ready before load begins.
@@ -334,6 +342,8 @@ For every rate, it requires:
   interval is never accepted as complete.
 - A valid pass/fail interpretation; failed overload is never counted as useful
   throughput merely because it consumed CPU.
+- A successful post-trial synthetic-state reset. The saved rate assessment must
+  contain exactly three unique run identities and a two-of-three outcome.
 
 Long quiet periods are expected while CloudWatch metrics publish, EC2 changes
 state, SSM comes back online, or RDS is being destroyed. Do not start a second

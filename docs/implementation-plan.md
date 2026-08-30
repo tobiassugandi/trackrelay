@@ -530,6 +530,7 @@ RDS provides the stable managed data layer for the target architecture; it is se
   - [x] Measure sampler coverage against the exact k6 process callbacks in the rehost checkpoint. The 500 events/s overload proved that a post-k6 runtime-metrics request can remain queued for roughly 30 seconds; its eventual timestamp describes observation delay, not load duration, and must not cause a false coverage failure.
   - [x] Replace the predicted post-load sampling tail with an explicit stop handshake. Signal the live run-specific container from the exact k6 exit callback, require one final observation attempt before it exits, and retain a named duration-plus-150-second absolute timeout only as an orphan-safety bound.
   - [x] Preserve failed Terraform transition stdout and stderr before raising, so AWS account-plan, capacity, or instance-compatibility errors remain diagnosable in `terraform-apply.log`.
+  - [x] Make tier classification robust against one-off jitter exposed by the first three-tier run. Warm every tier identically, preallocate load-driver concurrency headroom, reset and wait between trials, classify each candidate by three independent trials with a two-of-three majority, validate every trial and reset in the report, and stop only after a majority-confirmed failure.
   - [ ] Execute both revised EC2 transitions in a newly approved cloud session while preserving the image, RDS, controls, and prior evidence.
   - [ ] Generate the report from the completed cloud evidence, then guarantee teardown and native empty-inventory verification.
 

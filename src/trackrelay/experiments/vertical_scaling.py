@@ -100,6 +100,12 @@ class WorkloadControls(BaseModel):
     partner_id: Literal["load-alpha"]
     k6_image: Literal["grafana/k6:2.1.0"]
     benchmark_driver_identity: Literal["same-host-and-container-image"]
+    k6_vu_allocation: Literal["preallocate-max-100-or-two-per-rate"]
+    warmup_rate_per_second: Literal[2]
+    warmup_duration_seconds: Literal[30]
+    post_reset_quiet_period_seconds: Literal[60]
+    matching_trials_required: Literal[2]
+    trials_per_rate: Literal[3]
     p95_latency_limit_ms: Literal[500.0]
     request_error_rate_limit: Literal[0.01]
     unaccounted_events_required: Literal[0]
@@ -118,8 +124,8 @@ class InfrastructureScalingControls(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2] = 2
-    name: Literal["aws-synchronous-hardware-flexibility-controls-v2"]
+    schema_version: Literal[3] = 3
+    name: Literal["aws-synchronous-hardware-flexibility-controls-v3"]
     only_changed_deployment_input: Literal["ec2-instance-type"]
     tier_order: tuple[str, ...]
     experiment_state: Literal["fresh-identity-namespace-per-tier"]

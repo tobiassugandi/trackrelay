@@ -28,8 +28,10 @@ from trackrelay.aws_session import (
 from trackrelay.aws_vertical_scaling import (
     LoadExecutionWindow,
     VerticalScalingExperimentDefinition,
+    VerticalScalingRateAssessment,
     VerticalScalingTierSummary,
     VerticalScalingTransitionEvidence,
+    VerticalScalingWarmupEvidence,
     _derive_tier_summary,
     _load_prepared_definition,
     _tier_role,
@@ -82,6 +84,9 @@ class TierBoundaryDiagnostics(BaseModel):
     diagnostic_rate_per_second: int
     diagnostic_rate_passed: bool
     failure_reasons: tuple[str, ...]
+    trial_count: Literal[3]
+    passing_trial_count: int = Field(ge=0, le=3)
+    failing_trial_count: int = Field(ge=0, le=3)
     productive_throughput_per_second: NonNegativeFloat
     p95_response_latency_ms: NonNegativeFloat
     request_error_rate: Rate
@@ -152,9 +157,9 @@ class VerticalScalingComparisonReport(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2] = 2
-    experiment_name: Literal["aws-synchronous-hardware-flexibility-v2"] = (
-        "aws-synchronous-hardware-flexibility-v2"
+    schema_version: Literal[3] = 3
+    experiment_name: Literal["aws-synchronous-hardware-flexibility-v3"] = (
+        "aws-synchronous-hardware-flexibility-v3"
     )
     generated_at: AwareDatetime
     thresholds: BottleneckThresholds
@@ -375,32 +380,29 @@ def _capacity_for(
         raise AwsRehostError("missing frozen EC2 capacity") from error
 
 
-def _boundary_diagnostics(
+def _load_validated_trial_evidence(
     session: AwsSession,
     *,
     summary: VerticalScalingTierSummary,
-    thresholds: BottleneckThresholds,
-) -> TierBoundaryDiagnostics:
-    diagnostic = next(
-        (
-            result
-            for result in summary.rate_results
-            if result.offered_rate_per_second
-            == summary.first_failing_rate_per_second
-        ),
-        summary.rate_results[-1],
-    )
+    trial_result,
+) -> tuple[
+    PerformanceExperimentResult,
+    LoadExecutionWindow,
+    RehostRuntimeTimeline,
+    RehostServerEvidence,
+    CloudWatchRunEvidence,
+]:
     run_directory = _safe_evidence_path(
         session,
-        diagnostic.raw_evidence_directory,
+        trial_result.raw_evidence_directory,
     )
     expected_suffix = Path(
         "vertical-scaling",
         "tiers",
         summary.instance_type,
         "rates",
-        str(diagnostic.offered_rate_per_second),
-        str(diagnostic.test_run_id),
+        str(trial_result.offered_rate_per_second),
+        str(trial_result.test_run_id),
     )
     if run_directory != (session.evidence_dir / expected_suffix).resolve():
         raise AwsRehostError("rate evidence directory differs from its identity")
@@ -422,7 +424,7 @@ def _boundary_diagnostics(
         CloudWatchRunEvidence,
     )
     identities = {
-        diagnostic.test_run_id,
+        trial_result.test_run_id,
         performance.test_run_id,
         window.test_run_id,
         timeline.test_run_id,
@@ -431,24 +433,50 @@ def _boundary_diagnostics(
         cloudwatch.test_run_id,
     }
     if len(identities) != 1:
-        raise AwsRehostError("boundary evidence test-run identities differ")
+        raise AwsRehostError("rate evidence test-run identities differ")
     if (
         performance.configuration.request_rate_per_second
-        != diagnostic.offered_rate_per_second
+        != trial_result.offered_rate_per_second
         or server.point.request_rate_per_second
-        != diagnostic.offered_rate_per_second
+        != trial_result.offered_rate_per_second
         or cloudwatch.instance_type != summary.instance_type
         or cloudwatch.load_started_at != window.started_at
         or cloudwatch.load_ended_at != window.ended_at
     ):
-        raise AwsRehostError("boundary evidence differs from its hardware point")
+        raise AwsRehostError("rate evidence differs from its hardware point")
     _require_full_cloudwatch_coverage(cloudwatch)
     regenerated_compact = compact_rate_result(
         performance,
-        raw_evidence_directory=Path(diagnostic.raw_evidence_directory),
+        raw_evidence_directory=Path(trial_result.raw_evidence_directory),
     )
-    if regenerated_compact != diagnostic:
-        raise AwsRehostError("compact boundary result differs from raw evidence")
+    if regenerated_compact != trial_result:
+        raise AwsRehostError("compact rate result differs from raw evidence")
+    return performance, window, timeline, server, cloudwatch
+
+
+def _boundary_diagnostics(
+    session: AwsSession,
+    *,
+    summary: VerticalScalingTierSummary,
+    thresholds: BottleneckThresholds,
+) -> TierBoundaryDiagnostics:
+    rate_assessment: VerticalScalingRateAssessment = next(
+        (
+            candidate
+            for candidate in summary.rate_assessments
+            if candidate.offered_rate_per_second
+            == summary.first_failing_rate_per_second
+        ),
+        summary.rate_assessments[-1],
+    )
+    diagnostic = rate_assessment.representative_result
+    performance, window, timeline, server, cloudwatch = (
+        _load_validated_trial_evidence(
+            session,
+            summary=summary,
+            trial_result=diagnostic,
+        )
+    )
 
     downstream_cores, downstream_rss = _downstream_process_metrics(
         timeline,
@@ -487,6 +515,9 @@ def _boundary_diagnostics(
         diagnostic_rate_per_second=diagnostic.offered_rate_per_second,
         diagnostic_rate_passed=diagnostic.complete_experiment_passed,
         failure_reasons=diagnostic.failure_reasons,
+        trial_count=len(rate_assessment.trials),
+        passing_trial_count=rate_assessment.passing_trial_count,
+        failing_trial_count=rate_assessment.failing_trial_count,
         productive_throughput_per_second=(
             performance.productive_throughput_per_second
         ),
@@ -551,22 +582,17 @@ def _load_tier(
     summary = _read_model(summary_path, VerticalScalingTierSummary)
     expected_rates = definition.controls.workload.offered_rates_per_second
     observed_rates = tuple(
-        result.offered_rate_per_second for result in summary.rate_results
+        assessment.offered_rate_per_second
+        for assessment in summary.rate_assessments
     )
     stopped_at_first_failure = (
-        bool(summary.rate_results)
-        and not summary.rate_results[-1].complete_experiment_passed
-        and all(
-            result.complete_experiment_passed
-            for result in summary.rate_results[:-1]
-        )
+        bool(summary.rate_assessments)
+        and not summary.rate_assessments[-1].passed
+        and all(assessment.passed for assessment in summary.rate_assessments[:-1])
     )
     completed_candidate_ladder = (
         observed_rates == expected_rates
-        and all(
-            result.complete_experiment_passed
-            for result in summary.rate_results
-        )
+        and all(assessment.passed for assessment in summary.rate_assessments)
     )
     if (
         summary.instance_type != instance_type
@@ -577,10 +603,58 @@ def _load_tier(
         raise AwsRehostError("tier summary differs from the frozen experiment")
     if _derive_tier_summary(
         instance_type=instance_type,
-        rate_results=summary.rate_results,
+        warmup_evidence=summary.warmup_evidence,
+        rate_assessments=summary.rate_assessments,
         completed_at=summary.completed_at,
     ) != summary:
         raise AwsRehostError("tier capacity boundary differs from its rate results")
+    expected_warmup_path = Path(
+        "vertical-scaling",
+        "tiers",
+        instance_type,
+        "warmup-summary.json",
+    )
+    if Path(summary.warmup_evidence) != expected_warmup_path:
+        raise AwsRehostError("tier warm-up evidence path differs from its identity")
+    _read_model(
+        _safe_evidence_path(session, summary.warmup_evidence),
+        VerticalScalingWarmupEvidence,
+    )
+    for assessment in summary.rate_assessments:
+        assessment_path = (
+            session.evidence_dir
+            / "vertical-scaling"
+            / "tiers"
+            / instance_type
+            / "rates"
+            / str(assessment.offered_rate_per_second)
+            / "assessment.json"
+        )
+        if _read_model(
+            assessment_path,
+            VerticalScalingRateAssessment,
+        ) != assessment:
+            raise AwsRehostError(
+                "saved rate assessment differs from the tier summary"
+            )
+        for trial in assessment.trials:
+            _load_validated_trial_evidence(
+                session,
+                summary=summary,
+                trial_result=trial.result,
+            )
+            run_directory = _safe_evidence_path(
+                session,
+                trial.result.raw_evidence_directory,
+            )
+            saved_reset = _read_model(
+                run_directory / "post-trial-reset.json",
+                type(trial.post_trial_reset),
+            )
+            if saved_reset != trial.post_trial_reset:
+                raise AwsRehostError(
+                    "trial reset evidence differs from the rate assessment"
+                )
     capacity = _capacity_for(definition, instance_type)
     boundary = _boundary_diagnostics(
         session,
@@ -711,8 +785,8 @@ def render_markdown(report: VerticalScalingComparisonReport) -> str:
         "",
         "## Hardware tiers",
         "",
-        "| Tier | Role | Guarded capacity | First failure | Boundary p95 | EC2 CPU | API cores | RDS CPU | Pool | Downstream CPU | Assessment |",
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| Tier | Role | Guarded capacity | First failure | Boundary trials | Boundary p95 | EC2 CPU | API cores | RDS CPU | Pool | Downstream CPU | Assessment |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for tier in report.tiers:
         boundary = tier.boundary
@@ -727,6 +801,8 @@ def render_markdown(report: VerticalScalingComparisonReport) -> str:
             "| "
             f"`{tier.instance_type}` | {tier.tier_role} | {capacity} | "
             f"{tier.first_failing_rate_per_second or 'none'} | "
+            f"{boundary.passing_trial_count} pass / "
+            f"{boundary.failing_trial_count} fail | "
             f"{boundary.p95_response_latency_ms:.1f} ms | "
             f"{_percentage(boundary.ec2_cloudwatch_average_cpu_utilization)} | "
             f"{boundary.api_process_average_cores_used:.2f} | "

@@ -31,6 +31,7 @@ const expectedHttpStatus = positiveInteger(
 );
 const expectedRequests = requestRate * durationSeconds;
 const activeDurationMilliseconds = durationSeconds * 1000 - 1;
+const preAllocatedVUs = Math.max(100, requestRate * 2);
 const apiUrl = __ENV.TRACKRELAY_API_URL || "http://host.docker.internal:8000";
 const summaryPath =
   __ENV.K6_SUMMARY_PATH || "/results/k6-summary.json";
@@ -49,8 +50,11 @@ export const options = {
       rate: requestRate,
       timeUnit: "1s",
       duration: `${activeDurationMilliseconds}ms`,
-      preAllocatedVUs: Math.max(1, Math.ceil(requestRate / 2)),
-      maxVUs: requestRate,
+      // Preallocate two seconds of offered traffic—four times the 500 ms p95
+      // SLO—with a 100-VU floor for low-rate tail-latency outliers. This keeps
+      // driver startup and VU allocation from masquerading as a system limit.
+      preAllocatedVUs,
+      maxVUs: preAllocatedVUs,
       gracefulStop: "10s",
     },
   },

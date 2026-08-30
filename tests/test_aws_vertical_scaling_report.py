@@ -23,8 +23,11 @@ from trackrelay.aws_session import load_manifest, write_manifest
 from trackrelay.aws_vertical_scaling import (
     InfrastructureTransitionPlanEvidence,
     LoadExecutionWindow,
+    VerticalScalingRateAssessment,
     VerticalScalingTierSummary,
     VerticalScalingTransitionEvidence,
+    VerticalScalingTrialResult,
+    VerticalScalingWarmupEvidence,
     _derive_tier_summary,
     prepare_vertical_scaling_experiment,
 )
@@ -147,24 +150,26 @@ def cloudwatch_evidence(
     )
 
 
-def write_boundary_evidence(
+def write_trial_evidence(
     session,
     *,
     instance_type: str,
     test_run_id: UUID,
     ec2_cpu_percent: float,
+    rate: int,
+    passed: bool,
 ) -> LegacyBaselineRateResult:
     relative_directory = Path(
         "vertical-scaling",
         "tiers",
         instance_type,
         "rates",
-        "25",
+        str(rate),
         str(test_run_id),
     )
     run_directory = session.evidence_dir / relative_directory
     run_directory.mkdir(parents=True)
-    expected = 25 * 180
+    expected = rate * 180
     reconciliation = ReconciliationReport(
         test_run_id=test_run_id,
         generated=expected,
@@ -198,16 +203,18 @@ def write_boundary_evidence(
     performance = derive_performance_result(
         PerformanceExperimentConfiguration(
             scenario="healthy",
-            request_rate_per_second=25,
+            request_rate_per_second=rate,
             duration_seconds=180,
         ),
         test_run_id=test_run_id,
-        k6_exit_code=99,
+        k6_exit_code=0 if passed else 99,
         k6_summary={
             "metrics": {
-                "http_req_duration": {"values": {"p(95)": 600}},
+                "http_req_duration": {
+                    "values": {"p(95)": 100 if passed else 600}
+                },
                 "http_req_failed": {"values": {"rate": 0}},
-                "http_reqs": {"values": {"count": expected, "rate": 25}},
+                "http_reqs": {"values": {"count": expected, "rate": rate}},
                 "dropped_iterations": {"values": {"count": 0}},
             }
         },
@@ -276,7 +283,7 @@ def write_boundary_evidence(
     )
     point = RehostWorkloadPoint(
         test_run_id=test_run_id,
-        request_rate_per_second=25,
+        request_rate_per_second=rate,
         duration_seconds=180,
         partner_id="load-alpha",
     )
@@ -351,26 +358,183 @@ def compact_point(
     )
 
 
+def empty_reset_evidence() -> RehostExperimentResetEvidence:
+    empty = ExperimentTableCounts(
+        delivery_attempts=0,
+        events=0,
+        shipments=0,
+        test_runs=0,
+    )
+    return RehostExperimentResetEvidence(
+        completed_at=datetime(2026, 8, 29, 19, tzinfo=UTC),
+        database_rows_removed=empty,
+        database_rows_remaining=empty,
+        downstream_receipts_removed=0,
+    )
+
+
+def rate_assessment(
+    results: tuple[LegacyBaselineRateResult, ...],
+) -> VerticalScalingRateAssessment:
+    assessment = VerticalScalingRateAssessment(
+        offered_rate_per_second=results[0].offered_rate_per_second,
+        passed=sum(result.complete_experiment_passed for result in results) >= 2,
+        trials=tuple(
+            VerticalScalingTrialResult(
+                trial_number=index,
+                result=result,
+                post_trial_reset=empty_reset_evidence(),
+            )
+            for index, result in enumerate(results, start=1)
+        ),
+    )
+    for trial in assessment.trials:
+        run_directory = Path(trial.result.raw_evidence_directory)
+        # The caller's evidence root is not available here; write_tier persists
+        # these model-identical reset files after constructing the assessment.
+        assert not run_directory.is_absolute()
+    return assessment
+
+
+def test_rate_assessment_uses_a_two_of_three_majority(tmp_path: Path) -> None:
+    session = prepare_rds_session(tmp_path)
+    results = tuple(
+        write_trial_evidence(
+            session,
+            instance_type="t3.small",
+            test_run_id=UUID(int=index),
+            ec2_cpu_percent=50,
+            rate=10,
+            passed=passed,
+        )
+        for index, passed in enumerate((False, True, True), start=1)
+    )
+
+    assessment = rate_assessment(results)
+
+    assert assessment.passed is True
+    assert assessment.passing_trial_count == 2
+    assert assessment.failing_trial_count == 1
+    assert assessment.representative_result == results[2]
+
+
 def write_tier(session, *, instance_type: str, integer_offset: int) -> None:
     boundary_id = UUID(int=integer_offset + 25)
-    boundary = write_boundary_evidence(
+    boundary = write_trial_evidence(
         session,
         instance_type=instance_type,
         test_run_id=boundary_id,
         ec2_cpu_percent=90 if instance_type == "t3.small" else 50,
+        rate=25,
+        passed=False,
     )
-    results = [
-        compact_point(
+    warmup_id = UUID(int=integer_offset + 2)
+    warmup_result = LegacyBaselineRateResult(
+        offered_rate_per_second=2,
+        test_run_id=warmup_id,
+        expected_request_count=60,
+        observed_request_count=60,
+        dropped_iteration_count=0,
+        observed_request_rate_per_second=2,
+        p95_response_latency_ms=50,
+        request_error_rate=0,
+        unaccounted_events=0,
+        duplicate_business_effects=0,
+        incorrect_final_shipment_states=0,
+        k6_exit_code=0,
+        execution_valid=True,
+        slo_passed=True,
+        reconciliation_invariants_passed=True,
+        complete_experiment_passed=True,
+        failure_reasons=(),
+        raw_evidence_directory=str(
+            Path(
+                "vertical-scaling",
+                "tiers",
+                instance_type,
+                "warmup",
+                str(warmup_id),
+            )
+        ),
+    )
+    warmup_path = Path(
+        "vertical-scaling",
+        "tiers",
+        instance_type,
+        "warmup-summary.json",
+    )
+    full_warmup_path = session.evidence_dir / warmup_path
+    full_warmup_path.parent.mkdir(parents=True, exist_ok=True)
+    full_warmup_path.write_text(
+        VerticalScalingWarmupEvidence(
+            result=warmup_result,
+            reset=empty_reset_evidence(),
+        ).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    passing_results = tuple(
+        write_trial_evidence(
+            session,
             instance_type=instance_type,
+            test_run_id=UUID(int=integer_offset + 10 + trial),
+            ec2_cpu_percent=50,
             rate=10,
-            test_run_id=UUID(int=integer_offset + 10),
             passed=True,
+        )
+        for trial in range(3)
+    )
+    failing_results = (
+        write_trial_evidence(
+            session,
+            instance_type=instance_type,
+            test_run_id=UUID(int=integer_offset + 23),
+            ec2_cpu_percent=90 if instance_type == "t3.small" else 50,
+            rate=25,
+            passed=False,
+        ),
+        write_trial_evidence(
+            session,
+            instance_type=instance_type,
+            test_run_id=UUID(int=integer_offset + 24),
+            ec2_cpu_percent=90 if instance_type == "t3.small" else 50,
+            rate=25,
+            passed=False,
         ),
         boundary,
-    ]
+    )
+    assessments = (
+        rate_assessment(passing_results),
+        rate_assessment(failing_results),
+    )
+    for assessment in assessments:
+        assessment_path = (
+            session.evidence_dir
+            / "vertical-scaling"
+            / "tiers"
+            / instance_type
+            / "rates"
+            / str(assessment.offered_rate_per_second)
+            / "assessment.json"
+        )
+        assessment_path.parent.mkdir(parents=True, exist_ok=True)
+        assessment_path.write_text(
+            assessment.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+        for trial in assessment.trials:
+            reset_path = (
+                session.evidence_dir
+                / trial.result.raw_evidence_directory
+                / "post-trial-reset.json"
+            )
+            reset_path.write_text(
+                trial.post_trial_reset.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
     summary = _derive_tier_summary(
         instance_type=instance_type,
-        rate_results=results,
+        warmup_evidence=str(warmup_path),
+        rate_assessments=assessments,
         completed_at=datetime(2026, 8, 29, 20, tzinfo=UTC),
     )
     tier_root = session.evidence_dir / "vertical-scaling" / "tiers" / instance_type
@@ -543,7 +707,8 @@ def test_report_rejects_a_truncated_tier_without_a_failing_boundary(
     )
     truncated = _derive_tier_summary(
         instance_type="t3.small",
-        rate_results=summary.rate_results[:1],
+        warmup_evidence=summary.warmup_evidence,
+        rate_assessments=summary.rate_assessments[:1],
         completed_at=summary.completed_at,
     )
     summary_path.write_text(

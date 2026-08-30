@@ -438,19 +438,17 @@ def test_current_tier_runner_preserves_evidence_and_stops_at_first_failure(
         on_load_ended()
         return result
 
+    runtime_start_count = 0
+
     def runtime_starter(_session, *, point, **_kwargs):
-        rate_index = (10, 25, 50, 100, 250, 500).index(
-            point.request_rate_per_second
+        nonlocal runtime_start_count
+        start = datetime(2026, 8, 29, 14, tzinfo=UTC) + timedelta(
+            minutes=runtime_start_count * 4
         )
+        runtime_start_count += 1
         return RemoteRuntimeSampler(
             container_name=runtime_sampler_container_name(point),
-            ready_at=datetime(
-                2026,
-                8,
-                29,
-                14 + rate_index,
-                tzinfo=UTC,
-            ),
+            ready_at=start,
         )
 
     stopped_rates = []
@@ -487,6 +485,8 @@ def test_current_tier_runner_preserves_evidence_and_stops_at_first_failure(
         )
 
     cloudwatch_windows = []
+    resets = []
+    sleeps = []
 
     def cloudwatch_collector(
         _session,
@@ -503,13 +503,25 @@ def test_current_tier_runner_preserves_evidence_and_stops_at_first_failure(
             ended_at=load_ended_at,
         )
 
+    executed_trials = tuple(rate for rate in executed_rates for _ in range(3))
     clock_values = [datetime(2026, 8, 29, 13, 30, tzinfo=UTC)]
-    for index in range(6):
-        start = datetime(2026, 8, 29, 14 + index, tzinfo=UTC)
+    warmup_start = datetime(2026, 8, 29, 13, 31, tzinfo=UTC)
+    clock_values.extend((warmup_start, warmup_start + timedelta(seconds=30)))
+    for trial_index, _rate in enumerate(executed_trials):
+        start = datetime(2026, 8, 29, 14, tzinfo=UTC) + timedelta(
+            minutes=trial_index * 4
+        )
         clock_values.extend((start, start + timedelta(seconds=180)))
     clock_values.append(datetime(2026, 8, 29, 20, 5, tzinfo=UTC))
     clock = iter(clock_values)
-    identifiers = iter(UUID(int=index) for index in range(1, 7))
+    identifiers = iter(
+        UUID(int=index) for index in range(1, len(executed_trials) + 2)
+    )
+
+    def resetter(*_args, **_kwargs):
+        evidence = reset_evidence()
+        resets.append(evidence)
+        return evidence
 
     summary = run_current_vertical_scaling_tier(
         session,
@@ -520,6 +532,8 @@ def test_current_tier_runner_preserves_evidence_and_stops_at_first_failure(
         runtime_stopper=runtime_stopper,
         runtime_collector=runtime_collector,
         cloudwatch_collector=cloudwatch_collector,
+        resetter=resetter,
+        sleeper=sleeps.append,
         now=lambda: next(clock),
         uuid_factory=lambda: next(identifiers),
     )
@@ -532,13 +546,18 @@ def test_current_tier_runner_preserves_evidence_and_stops_at_first_failure(
     assert tuple(
         result.offered_rate_per_second for result in summary.rate_results
     ) == executed_rates
-    assert stopped_rates == list(executed_rates)
-    assert remote_actions == [
+    assert all(len(assessment.trials) == 3 for assessment in summary.rate_assessments)
+    assert stopped_rates == list(executed_trials)
+    assert remote_actions[:2] == [("prepare", 2), ("collect", 2)]
+    assert remote_actions[2:] == [
         action
-        for rate in executed_rates
+        for rate in executed_trials
         for action in (("prepare", rate), ("collect", rate))
     ]
+    assert len(resets) == 1 + len(executed_trials)
+    assert all(delay == 60 for delay in sleeps)
     assert all((end - start).total_seconds() == 180 for start, end in cloudwatch_windows)
+    assert len(cloudwatch_windows) == len(executed_trials)
     tier_root = session.evidence_dir / "vertical-scaling" / "tiers" / "t3.small"
     for evidence_name in (
         "load-window.json",
@@ -548,7 +567,12 @@ def test_current_tier_runner_preserves_evidence_and_stops_at_first_failure(
         "performance-result.json",
         "rate-result.json",
     ):
-        assert len(tuple(tier_root.rglob(evidence_name))) == len(executed_rates)
+        assert len(tuple(tier_root.glob(f"rates/*/*/{evidence_name}"))) == len(
+            executed_trials
+        )
+    assert len(tuple(tier_root.rglob("post-trial-reset.json"))) == len(
+        executed_trials
+    )
     for performance_path in tier_root.rglob("performance-result.json"):
         PerformanceExperimentResult.model_validate_json(
             performance_path.read_text(encoding="utf-8")
@@ -608,24 +632,96 @@ def test_current_tier_runner_cleans_the_sampler_when_load_execution_fails(
         cleaned.append(point)
         raise OSError("synthetic cleanup failure")
 
-    def fail_load(*_args, **_kwargs):
-        raise RuntimeError("synthetic load failure")
+    load_calls = 0
+
+    def fail_after_warmup(
+        command,
+        _client,
+        _interval,
+        _summary_path,
+        test_run_id,
+        now,
+        *,
+        on_load_ended,
+    ):
+        nonlocal load_calls
+        load_calls += 1
+        if load_calls > 1:
+            raise RuntimeError("synthetic load failure")
+        rate = 2
+        duration = 30
+        expected = rate * duration
+        start = datetime(2026, 8, 29, 13, 1, tzinfo=UTC)
+        samples = (
+            api_sample(start, 1),
+            api_sample(start + timedelta(seconds=duration), 2),
+        )
+        result = execute_with_load_window(
+            test_run_id,
+            lambda: (
+                0,
+                samples,
+                {
+                    "metrics": {
+                        "http_req_duration": {"values": {"p(95)": 10}},
+                        "http_req_failed": {"values": {"rate": 0}},
+                        "http_reqs": {"values": {"count": expected, "rate": rate}},
+                        "dropped_iterations": {"values": {"count": 0}},
+                    }
+                },
+            ),
+            now=now,
+        )
+        on_load_ended()
+        return result
+
+    def remote_action(_session, *, action, point, **_kwargs):
+        if action == "prepare":
+            return None
+        expected = point.request_rate_per_second * point.duration_seconds
+        return RehostServerEvidence(
+            point=point,
+            reconciliation=ReconciliationReport(
+                test_run_id=point.test_run_id,
+                generated=expected,
+                accepted=expected,
+                rejected=0,
+                unique=expected,
+                processed=expected,
+                failed=0,
+                pending=0,
+                unaccounted=0,
+                simulator_receipts=expected,
+                simulator_unique_events=expected,
+            ),
+        )
 
     def unexpected(*_args, **_kwargs):
         raise AssertionError("post-load collection must not run")
+
+    clock = iter(
+        (
+            prepared_at,
+            datetime(2026, 8, 29, 13, 1, tzinfo=UTC),
+            datetime(2026, 8, 29, 13, 1, 30, tzinfo=UTC),
+        )
+    )
+    identifiers = iter((UUID(int=1), UUID(int=2)))
 
     with raises(RuntimeError, match="synthetic load failure") as error:
         run_current_vertical_scaling_tier(
             session,
             runner=runner,
-            load_executor=fail_load,
-            remote_action=lambda *_args, **_kwargs: None,
+            load_executor=fail_after_warmup,
+            remote_action=remote_action,
             runtime_starter=runtime_starter,
             runtime_collector=unexpected,
             runtime_cleaner=runtime_cleaner,
             cloudwatch_collector=unexpected,
-            now=lambda: prepared_at,
-            uuid_factory=lambda: UUID(int=1),
+            resetter=lambda *_args, **_kwargs: reset_evidence(),
+            sleeper=lambda _seconds: None,
+            now=lambda: next(clock),
+            uuid_factory=lambda: next(identifiers),
         )
 
     assert cleaned == point_holder

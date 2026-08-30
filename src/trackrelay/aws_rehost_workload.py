@@ -169,7 +169,7 @@ class RehostWorkloadDefinition(BaseModel):
     )
     git_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
     aws_region: str
-    ec2_instance_type: Literal["t4g.small"] = "t4g.small"
+    ec2_instance_type: Literal["t3.small"] = "t3.small"
     api_process_count: Literal[1] = 1
     downstream_process_count: Literal[1] = 1
     database_placement: Literal["same-ec2-host-compose-container"] = (

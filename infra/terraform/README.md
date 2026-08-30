@@ -1,10 +1,10 @@
 # TrackRelay AWS infrastructure
 
-This directory is the Terraform root module for TrackRelay's disposable AWS experiment environments. It defines the synchronous host and private RDS data layer first validated in Stages 9.1 and 9.2. For Stage 9.3, the host is restricted to the frozen `t4g.small` economical baseline, `c8g.large` workload-fit tier, and `c8g.4xlarge` within-family scale tier. No Stage 9.3 resources have been applied to AWS.
+This directory is the Terraform root module for TrackRelay's disposable AWS experiment environments. It defines the synchronous host and private RDS data layer first validated in Stages 9.1 and 9.2. For the revised Stage 9.3 hardware-flexibility experiment, the host is restricted to the frozen `t3.small` economical baseline, `c7i-flex.large` compute-optimized tier, and `m7i-flex.large` memory-optimized tier.
 
 The current module contains:
 
-- one EC2 instance using the current ARM Amazon Linux 2023 AMI, defaulting to `t4g.small`, restricted to the three Stage 9.3 tiers, and using detailed monitoring for one-minute experiment evidence;
+- one EC2 instance using the current x86_64 Amazon Linux 2023 AMI, defaulting to `t3.small`, restricted to the three Stage 9.3 tiers, and using detailed monitoring for one-minute experiment evidence;
 - one encrypted 16 GiB gp3 root volume deleted with the instance;
 - one dedicated VPC, one public host subnet, and two isolated database subnets across separate Availability Zones, with an internet gateway but no NAT gateway;
 - one security group exposing only API port `8000` to an explicitly approved IPv4 `/32`, with no SSH ingress;
@@ -52,7 +52,7 @@ Replace the documentation-only address with the public IPv4 `/32` of the approve
 
 `aws-plan` saves an immutable plan hash and non-secret session record, including the approved ingress CIDR. It also resolves PostgreSQL 17 to the exact available minor version and validates that the selected class/storage combination is orderable in the target region. `aws-up` refuses a mismatched session, a changed plan or Git revision, and a cost ceiling above the monthly budget. `aws-down` intentionally has no approval gate so recovery cannot block teardown. `aws-verify-down` supplies the generic state and tag checks plus native checks for every resource type currently introduced by this module, including RDS instances, subnet and parameter groups, snapshots, retained automated backups, and the RDS-managed secret.
 
-After an approved `aws-up`, `make aws-rehost-publish` builds and pushes only Linux ARM64 and records its immutable digest. `make aws-rehost-deploy` transfers the runtime through SSM, generates the synthetic database password on the host, starts the stack, and runs a tiny smoke event. Both commands require the same clean Git revision as the applied plan. They are stateful cloud-session commands, not local validation commands, and must not be run merely because their implementation exists.
+After an approved `aws-up`, `make aws-rehost-publish` builds and pushes only Linux AMD64 and records its immutable digest. `make aws-rehost-deploy` transfers the runtime through SSM, generates the synthetic database password on the host, starts the stack, and runs a tiny smoke event. Both commands require the same clean Git revision as the applied plan. They are stateful cloud-session commands, not local validation commands, and must not be run merely because their implementation exists.
 
 After the host-local frozen workload is collected, `make aws-rds-deploy` discovers the private endpoint and RDS-managed secret from the EC2 instance, builds a TLS-required database URL in host memory, migrates RDS, recreates the API, and verifies ingestion plus persistence across an API restart. The SSM payload and local session evidence contain neither the endpoint nor credential. The on-host runtime env file is mode `0600`.
 

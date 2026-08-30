@@ -252,7 +252,7 @@ def ready_canary_session(tmp_path: Path) -> AwsSession:
             "git_revision": "a" * 40,
             "profile": session.profile,
             "region": session.region,
-            "rehost_instance_type": "t4g.small",
+            "rehost_instance_type": "t3.small",
             "session_id": session.session_id,
             "status": "rds_correctness_collected",
         },

@@ -98,8 +98,8 @@ FROZEN_SOURCE_BENCHMARK_PATH = (
 )
 TierRole = Literal[
     "economical-baseline",
-    "workload-fit-migration",
-    "within-family-scale-up",
+    "compute-optimized-migration",
+    "memory-optimized-migration",
 ]
 CloudWatchCollector = Callable[..., CloudWatchRunEvidence]
 TimedLocalLoadValue = tuple[
@@ -121,9 +121,9 @@ class VerticalScalingExperimentDefinition(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[1] = 1
-    name: Literal["aws-synchronous-vertical-scaling-v1"] = (
-        "aws-synchronous-vertical-scaling-v1"
+    schema_version: Literal[2] = 2
+    name: Literal["aws-synchronous-hardware-flexibility-v2"] = (
+        "aws-synchronous-hardware-flexibility-v2"
     )
     prepared_at: AwareDatetime
     git_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
@@ -131,7 +131,7 @@ class VerticalScalingExperimentDefinition(BaseModel):
         pattern=r"^sha256:[0-9a-f]{64}$"
     )
     aws_region: Literal["ap-southeast-3"]
-    starting_instance_type: Literal["t4g.small"] = "t4g.small"
+    starting_instance_type: Literal["t3.small"] = "t3.small"
     rds_engine_version: str = Field(pattern=r"^17\.[0-9]+$")
     controls_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     capacity_selection_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -142,8 +142,8 @@ class VerticalScalingExperimentDefinition(BaseModel):
     def require_one_consistent_experiment(self) -> "VerticalScalingExperimentDefinition":
         if self.controls.tier_order != (
             self.capacity_selection.economical_baseline.instance_type,
-            self.capacity_selection.workload_fit.instance_type,
-            self.capacity_selection.vertical_scale.instance_type,
+            self.capacity_selection.compute_optimized.instance_type,
+            self.capacity_selection.memory_optimized.instance_type,
         ):
             raise ValueError("capacity selection differs from the frozen tier order")
         if self.capacity_selection.aws_region != self.aws_region:
@@ -174,8 +174,8 @@ class VerticalScalingTierDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[1] = 1
-    experiment_name: Literal["aws-synchronous-vertical-scaling-v1"] = (
-        "aws-synchronous-vertical-scaling-v1"
+    experiment_name: Literal["aws-synchronous-hardware-flexibility-v2"] = (
+        "aws-synchronous-hardware-flexibility-v2"
     )
     experiment_definition_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     instance_type: str
@@ -189,9 +189,9 @@ class VerticalScalingTierDefinition(BaseModel):
     @model_validator(mode="after")
     def require_the_matching_tier_role(self) -> "VerticalScalingTierDefinition":
         expected_roles = {
-            "t4g.small": "economical-baseline",
-            "c8g.large": "workload-fit-migration",
-            "c8g.4xlarge": "within-family-scale-up",
+            "t3.small": "economical-baseline",
+            "c7i-flex.large": "compute-optimized-migration",
+            "m7i-flex.large": "memory-optimized-migration",
         }
         if expected_roles.get(self.instance_type) != self.tier_role:
             raise ValueError("hardware tier and experimental role differ")
@@ -208,8 +208,8 @@ class VerticalScalingTierSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[1] = 1
-    benchmark_name: Literal["aws-synchronous-vertical-scaling-v1"] = (
-        "aws-synchronous-vertical-scaling-v1"
+    benchmark_name: Literal["aws-synchronous-hardware-flexibility-v2"] = (
+        "aws-synchronous-hardware-flexibility-v2"
     )
     instance_type: str
     tier_role: TierRole
@@ -349,10 +349,13 @@ def _validated_image_digest(
         raise AwsRehostError("the scaling experiment needs a published image")
     digest = image.get("digest")
     tag = image.get("tag")
+    architecture = image.get("architecture")
     if not isinstance(digest, str) or IMAGE_DIGEST_PATTERN.fullmatch(digest) is None:
         raise AwsRehostError("the scaling experiment image digest is invalid")
     if tag != f"git-{revision[:12]}":
         raise AwsRehostError("the scaling experiment image differs from the revision")
+    if architecture != "linux/amd64":
+        raise AwsRehostError("the scaling experiment requires the x86_64 image")
     return digest
 
 
@@ -523,9 +526,9 @@ def _load_prepared_definition(
 
 def _tier_role(instance_type: str) -> TierRole:
     roles: dict[str, TierRole] = {
-        "t4g.small": "economical-baseline",
-        "c8g.large": "workload-fit-migration",
-        "c8g.4xlarge": "within-family-scale-up",
+        "t3.small": "economical-baseline",
+        "c7i-flex.large": "compute-optimized-migration",
+        "m7i-flex.large": "memory-optimized-migration",
     }
     try:
         return roles[instance_type]
@@ -1206,16 +1209,17 @@ def transition_to_next_vertical_scaling_tier(
     }
     write_manifest(session, manifest)
 
-    apply_result = invoke(
-        runner,
+    apply_result = runner(
         target_session.terraform_command(
             "apply",
             "-input=false",
             plan_path.resolve().as_posix(),
         ),
-        action="Terraform EC2 transition apply",
+        None,
     )
     write_command_log(transition_root / "terraform-apply.log", apply_result)
+    if apply_result.returncode != 0:
+        raise AwsRehostError("Terraform EC2 transition apply failed")
     applied_at = now()
     manifest["rehost_instance_type"] = target_instance_type
     manifest["status"] = "vertical_scaling_transition_applied_pending_validation"

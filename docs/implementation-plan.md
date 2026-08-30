@@ -395,15 +395,17 @@ Goal: demonstrate two progressively stronger cloud capabilities:
 The first supporting result will be a three-tier hardware story:
 
 > **With the application and RDS configuration held constant, TrackRelay moved
-> from a small economical instance to workload-fit compute and then a larger
-> instance, changing its sustainable healthy-downstream rate from X to Y to Z
+> from economical burstable compute to compute-optimized and memory-optimized
+> profiles, changing its sustainable healthy-downstream rate from X to Y to Z
 > events/s without an application redesign.**
 
-This infrastructure-scaling experiment answers the reasonable question, "Why
-not choose better or bigger hardware first?" The `t4g.small` to `c8g.large`
-transition demonstrates workload-fit flexibility but cannot be attributed to
-CPU alone; the `c8g.large` to `c8g.4xlarge` transition is the cleaner same-family
-vertical comparison. Both must identify observed bottlenecks honestly.
+This hardware-flexibility experiment answers the reasonable question, "Why
+not choose more suitable hardware first?" The `t3.small` to `c7i-flex.large`
+transition tests escaping burst-credit throttling and moving to a
+compute-optimized profile. The `c7i-flex.large` to `m7i-flex.large` transition
+holds processor generation and the two-vCPU count fixed while doubling memory.
+Both must identify observed bottlenecks honestly; neither is automatic
+elasticity.
 
 The primary cloud-specific question remains:
 
@@ -417,14 +419,14 @@ The primary figure will be one aligned time-series story: offered load rises and
 
 The causal experiment compares the same modernized AWS deployment with **worker autoscaling off** and **worker autoscaling on**. SQS, ECS task definitions, RDS, fixed API capacity, workload, SLO, and minimum worker count must remain the same. Only the worker-capacity policy changes. The asynchronous architecture is a prerequisite that makes delivery independently scalable; access to additional on-demand compute is the cloud capability being tested.
 
-The local legacy baseline remains important as the starting point and benchmark rehearsal, but it is not the denominator for either cloud claim. The `t4g.small` economical baseline must be rerun against RDS because the earlier 25 events/s cloud portability result used host-local PostgreSQL. A local asynchronous implementation is optional and is not required for the elasticity experiment.
+The local legacy baseline remains important as the starting point and benchmark rehearsal, but it is not the denominator for either cloud claim. The `t3.small` economical baseline must be rerun against RDS because the earlier 25 events/s cloud portability result used host-local PostgreSQL. A local asynchronous implementation is optional and is not required for the elasticity experiment.
 
 ### Phase 9 operating model
 
 AWS is **off by default**. Application code, container builds, experiment automation, and infrastructure definitions are developed and tested locally. AWS is used only for bounded validation or measurement sessions:
 
 1. **Cloud session 1 — synchronous migration:** validate Stages 9.1 and 9.2, collect evidence, then destroy the stack.
-2. **Cloud session 2 — infrastructure scaling:** run the RDS-backed synchronous system on `t4g.small`, `c8g.large`, and `c8g.4xlarge`, collect evidence, then destroy the stack.
+2. **Cloud session 2 — hardware flexibility:** run the RDS-backed synchronous system on `t3.small`, `c7i-flex.large`, and `m7i-flex.large`, collect evidence, then destroy the stack.
 3. **Cloud session 3 — asynchronous integration:** validate Stages 9.4 and 9.5 with tiny workloads, collect evidence, then destroy the stack.
 4. **Cloud session 4 — headline experiment:** provision once, run the Stage 9.6 fixed control and Stage 9.7 elastic treatment back-to-back, collect both result sets, then destroy the stack.
 
@@ -441,7 +443,7 @@ Most of Phase 9 remains Codex implementation work. The human owner is needed onl
 | 9.0 | **You + Codex** | You create or secure the AWS account, enable MFA, establish the working identity, receive budget alerts, privately complete authentication, and approve the region and spending ceiling. Codex supplies guidance, repository configuration, checks, and documentation. |
 | 9.1 | **Codex** | No routine input after the Stage 9.0 choices; review only if a deployment choice changes scope or expected cost. |
 | 9.2 | **Codex, with your cloud-session approval** | Before cloud session 1, explicitly authorize the session and its budget and complete MFA or browser sign-in if AWS requests it. Codex provisions, validates, collects evidence, destroys, and verifies teardown. |
-| 9.3 | **Codex, with your cloud-session approval** | Approve cloud session 2 and its infrastructure-scaling cost ceiling after reviewing all three EC2 configurations and complete any private authentication. |
+| 9.3 | **Codex, with your cloud-session approval** | Approve cloud session 2 and its hardware-flexibility cost ceiling after reviewing all three EC2 configurations and complete any private authentication. |
 | 9.4 | **Codex** | No routine input; this is local application development and testing. |
 | 9.5 | **Codex, with your cloud-session approval** | Provide the same authorization and private authentication handoff for cloud session 3. |
 | 9.6–9.7 | **Codex, with your cloud-session approval** | Approve cloud session 4 and its experiment cost ceiling and complete any private authentication. Codex runs both treatments in the same session and tears everything down only after both result sets are secured. |
@@ -474,7 +476,7 @@ Do not start cloud session 1 until the local-preparation items in both Stages 9.
 - [x] Define the minimal rehost host as locally tested Terraform: one cost-bounded ARM EC2 instance, a disposable public network without a NAT gateway, restricted `/32` API ingress, ECR, SSM access without SSH, and service-native teardown checks. Do not apply it yet.
 - [x] Define the host runtime configuration for the API, host-local PostgreSQL, one-off migration, and downstream simulator as a locally validated Compose model. Publish only the API port, require healthy dependencies and successful migrations, pin PostgreSQL by digest, and bound container logs.
 - [x] Add one failure-safe local rehost smoke command that builds the application image, creates isolated credentials and storage, starts the complete stack, verifies the migration head and non-root processes, ingests and delivers a real event, proves database persistence across restarts, and removes the stack and volume.
-- [x] Add locally tested, guarded automation that publishes only a Linux ARM64 image, records its ECR digest without account identifiers, transfers the committed runtime through SSM without SSH or plaintext secrets, generates the synthetic database password on-host, and performs migrations, health checks, and a unique tiny ingestion smoke test. Do not execute it before cloud-session approval and Terraform apply.
+- [x] Add locally tested, guarded automation that publishes only a Linux AMD64 image, records its ECR digest without account identifiers, transfers the committed runtime through SSM without SSH or plaintext secrets, generates the synthetic database password on-host, and performs migrations, health checks, and a unique tiny ingestion smoke test. Do not execute it before cloud-session approval and Terraform apply.
 - [x] Automate frozen workload execution and non-secret result collection for cloud session 1. The benchmark driver remains on the approved developer machine; SSM invokes a private in-image helper to prepare and reconcile database and simulator evidence without exposing those services. The saved bundle contains the Step 8.6 workload, k6 and runtime evidence, compact reconciliation, and explicit deployment/driver placement, but not the temporary API endpoint.
 
 ### Stage 9.2 — Provision RDS for the AWS deployment
@@ -497,20 +499,20 @@ Use cloud session 1 to validate both Stages 9.1 and 9.2:
 
 RDS provides the stable managed data layer for the target architecture; it is setup for the elasticity experiment, not a separately benchmarked intervention.
 
-### Stage 9.3 — Demonstrate rapid infrastructure scaling before redesigning the application
+### Stage 9.3 — Demonstrate rapid hardware flexibility before redesigning the application
 
 - [x] Define the causal comparison, fixed controls, evidence requirements, bottleneck interpretations, and honest stopping rules in `docs/aws-vertical-scaling-experiment.md`.
-- [x] Select the `t4g.small` economical baseline, `c8g.large` workload-fit migration, and `c8g.4xlarge` within-family scale-up after confirming current Jakarta availability and public On-Demand Linux prices; freeze their specifications, burstability, prices, roles, and query timestamps in a validated artifact.
-- [x] Fix the co-located healthy downstream simulator at one CPU and 1 GiB in the shared Compose definition so it cannot inherit additional capacity from the larger host tiers; require observed headroom for a valid rate point.
-- [x] Restrict Terraform to the three frozen tiers, default to `t4g.small` with standard CPU credits, omit credit configuration from both non-burstable C8g tiers, and reject unrelated instance types locally.
+- [x] Revise the frozen ladder for the AWS Free account plan: use one x86_64 image and host identity across `t3.small`, `c7i-flex.large`, and `m7i-flex.large`; record their current Jakarta availability, public On-Demand Linux prices, two-vCPU count, memory profiles, burstability, processors, and query timestamps in a versioned artifact.
+- [x] Fix the co-located healthy downstream simulator at one CPU and 1 GiB in the shared Compose definition so it cannot inherit additional capacity from changing host tiers; require observed headroom for a valid rate point.
+- [x] Restrict Terraform to the three frozen tiers, default to `t3.small` with standard CPU credits, omit credit configuration from both non-burstable Flex tiers, select the x86_64 Amazon Linux image and AMD64 container/bootstrap artifacts, and reject unrelated instance types locally.
 - [x] Pass the selected EC2 tier explicitly through every guarded cloud-session command, give it command-line precedence over ambient Terraform variables, and bind it into session evidence.
 - [x] Hold the application image and revision, RDS instance and configuration, API process and connection-pool settings, benchmark driver, workload, and guardrails constant through a validated control artifact and explicit runtime configuration. Only the declared EC2 instance type changes; do not misstate the first cross-family transition as a CPU-only causal result.
 - [x] Add aligned evidence for API process CPU and memory, EC2 CPU and any burst credits, RDS CPU, connections, memory and I/O latency, database-pool pressure, and downstream latency. Use measurement intervals long enough to identify the first constrained resource rather than relying on a short latency curve alone.
   - [x] Capture process identity, Python threads, GIL state, available CPUs, cumulative per-core Linux CPU time, host memory, and configured database-pool capacity; derive actual average cores used, per-core utilization, memory headroom, and pool pressure.
   - [x] Define productive throughput as zero for every rate that fails execution, SLO, or reconciliation guardrails, even when the failed run consumed substantial CPU.
   - [x] Collect aligned downstream-process resource measurements every five seconds throughout each rate and aggregate persisted delivery outcomes and p95 latency into matching UTC intervals.
-  - [x] Collect aligned EC2 and RDS CloudWatch measurements, including resolution-honest burst-credit evidence for `t4g.small`.
-- [ ] Automate all three runs, evidence-preserving resets, both EC2 transitions, a two-transition comparison report, and unconditional teardown. Do not use the earlier host-local-PostgreSQL result as the `t4g.small` RDS-backed baseline.
+  - [x] Collect aligned EC2 and RDS CloudWatch measurements, including resolution-honest burst-credit evidence for `t3.small`.
+- [ ] Automate all three runs, evidence-preserving resets, both EC2 transitions, a two-transition comparison report, and unconditional teardown. Do not use the earlier host-local-PostgreSQL result as the `t3.small` RDS-backed baseline.
   - [x] Bind the applied image, verified RDS deployment, hardware catalog, frozen controls, and starting tier into one self-contained experiment definition before traffic begins; record exact driver-side load windows separately from setup and metric polling.
   - [x] Run and preserve one RDS-backed candidate rate ladder for the current hardware tier, including exact load windows and complete process, downstream, reconciliation, and CloudWatch evidence at every executed rate.
   - [x] Stop each hardware tier after fully preserving its first failed rate; do not spend time or cloud budget on higher rates outside the measured performance envelope. Start every new hardware tier again at the lowest frozen candidate, and run all six only if they all pass.
@@ -521,25 +523,26 @@ RDS provides the stable managed data layer for the target architecture; it is se
   - [x] Implement and locally test the fail-closed two-transition comparison and boundary bottleneck reporter. Re-derive each envelope, align raw evidence by explicit tier/rate/run identity, expose its classification thresholds, invalidate constrained-downstream attribution, and mark ambiguous or censored results honestly.
   - [x] Implement and locally test an explicitly armed session runner that starts only after RDS correctness, enforces the frozen tier order, journals the current or pending cleanup tier, and attempts destroy plus native verification after success, failure, `SIGINT`, or `SIGTERM`. Document manual journal-based recovery for uncatchable process or host loss.
   - [x] Exercise the failure-safe path in the first cloud-session-2 attempt. The first `t4g.small` rate exposed a flawed sampler lifecycle: SSM does not reliably expose partial standard output while a command is running, and the earlier short run's sampler had actually completed before load began. The runner still destroyed the complete stack and verification found empty Terraform state plus zero resources in every native inventory. Replace polling with a completed start handshake, a detached run-specific sampler, a separate bounded collection command, idempotent cleanup, and fail-closed proof that both process timelines contain the exact load window.
-  - [x] Add a separate, non-publishable AWS canary that runs only one RDS-backed `t4g.small` point at 10 events/s for 30 seconds, proves sampler overlap and removal, requires complete reconciliation, omits CloudWatch and hardware transitions, and always destroys and natively verifies its stack.
+  - [x] Add a separate, non-publishable AWS canary that ran one RDS-backed `t4g.small` point at 10 events/s for 30 seconds, proved sampler overlap and removal, required complete reconciliation, omitted CloudWatch and hardware transitions, and always destroyed and natively verified its stack. The current revision uses `t3.small` if this diagnostic is ever repeated.
   - [x] Execute the separately approved sampler canary and review its compact evidence before proposing another full Stage 9.3 run. Session `cloud-session-2-20260829T120045Z` accepted, processed, and delivered all 300 events with zero errors or dropped iterations; both process timelines contained the complete load window, the run-specific sampler was absent afterward, and teardown verification found empty Terraform state plus zero resources in all native inventories.
   - [x] Make the detached observer survive expected overload. A full-session setup attempt reached the 500 events/s portability point but its API metrics read timed out; schema 3 now records sanitized per-target gaps, preserves the independently available downstream snapshot, continues sampling after failures, and requires a complete paired read before signalling readiness. The aborted session was destroyed and Terraform, tagged, and native absence checks all passed.
   - [x] Extend the sampler's bounded post-load tail from 15 to 30 seconds after the next 500 events/s gate proved that gap recording worked but k6 VU initialization and graceful draining outlasted the original timing allowance by roughly two seconds. Keep the exact driver window unchanged and retain fail-closed coverage validation.
   - [x] Measure sampler coverage against the exact k6 process callbacks in the rehost checkpoint. The 500 events/s overload proved that a post-k6 runtime-metrics request can remain queued for roughly 30 seconds; its eventual timestamp describes observation delay, not load duration, and must not cause a false coverage failure.
   - [x] Replace the predicted post-load sampling tail with an explicit stop handshake. Signal the live run-specific container from the exact k6 exit callback, require one final observation attempt before it exits, and retain a named duration-plus-150-second absolute timeout only as an orphan-safety bound.
-  - [ ] Execute both approved EC2 transitions in cloud session 2 while preserving the image, RDS, controls, and prior evidence.
+  - [x] Preserve failed Terraform transition stdout and stderr before raising, so AWS account-plan, capacity, or instance-compatibility errors remain diagnosable in `terraform-apply.log`.
+  - [ ] Execute both revised EC2 transitions in a newly approved cloud session while preserving the image, RDS, controls, and prior evidence.
   - [ ] Generate the report from the completed cloud evidence, then guarantee teardown and native empty-inventory verification.
 
-Use cloud session 2 for the vertical-scaling experiment:
+Use the next cloud session for the revised hardware-flexibility experiment:
 
-- [ ] **You:** Explicitly authorize cloud session 2 after reviewing all three EC2 configurations, every other resource, region, estimated duration, cost guardrail, and teardown command.
-- [ ] Provision the synchronous API against fixed RDS on `t4g.small` and run the healthy-downstream envelope with CPU-credit evidence.
-- [ ] Preserve and reset experiment state, switch to `c8g.large`, verify unchanged controls, and replay the identical envelope.
-- [ ] Preserve and reset again, switch to `c8g.4xlarge`, verify unchanged controls, and replay the identical envelope.
-- [ ] Report X→Y as workload-fit hardware migration and Y→Z as within-family vertical scaling, alongside the first observed bottleneck at each tier.
+- [ ] **You:** Explicitly authorize the revised session after reviewing all three x86_64 EC2 configurations, every other resource, region, estimated duration, cost guardrail, and teardown command.
+- [ ] Provision the synchronous API against fixed RDS on `t3.small` and run the healthy-downstream envelope with CPU-credit evidence.
+- [ ] Preserve and reset experiment state, switch to `c7i-flex.large`, verify unchanged controls, and replay the identical envelope.
+- [ ] Preserve and reset again, switch to `m7i-flex.large`, verify unchanged controls, and replay the identical envelope.
+- [ ] Report X→Y as burstable-to-compute-optimized migration and Y→Z as compute-to-memory-optimized migration, alongside the first observed bottleneck at each tier.
 - [ ] Collect the complete comparison evidence, destroy the session-2 stack, and verify empty Terraform state plus zero native resource inventories.
 
-This result demonstrates rapid hardware flexibility and vertical scaling, not automatic elasticity. A separate evidence-backed database-resizing experiment would require its own single-variable plan and approval if RDS proves to be the constraint.
+This result demonstrates rapid cloud hardware flexibility, not automatic elasticity. All three tiers have two vCPUs, so any gain must not be described as the effect of adding CPU count. The later fixed-worker-versus-autoscaled-worker experiment remains the elasticity proof. A separate evidence-backed database-resizing experiment would require its own single-variable plan and approval if RDS proves to be the constraint.
 
 ### Stage 9.4 — Decouple downstream delivery with SQS and a worker
 
@@ -595,7 +598,7 @@ Use cloud session 3 as a small integration checkpoint:
 - [ ] Report the highest demand step that satisfies every end-to-end guardrail in each run, the load multiplier, worker expansion A→B, time to scale out, backlog drain time, and return to A.
 - [ ] Put the figure and one-sentence elasticity result near the top of the repository README.
 - [ ] Explain the causal chain plainly: SQS exposes pending demand, autoscaling responds, ECS changes the worker count, and AWS supplies and releases compute without TrackRelay owning spare hardware.
-- [ ] Present the Stage 9.3 vertical-scaling result as the clear first answer to "why not use a bigger machine?", then keep migration details and extensive guardrail evidence from competing with the primary elasticity result.
+- [ ] Present the Stage 9.3 hardware-flexibility result as the clear first answer to "why not choose more suitable cloud hardware?", then keep migration details and extensive guardrail evidence from competing with the primary elasticity result.
 
 ## Deferred follow-up results
 

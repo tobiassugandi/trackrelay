@@ -1,4 +1,4 @@
-# Stage 9.3 synchronous infrastructure-scaling experiment
+# Stage 9.3 synchronous hardware-flexibility experiment
 
 ## Question
 
@@ -7,12 +7,14 @@ application architecture:
 
 > With the synchronous application and RDS held constant, how does the
 > healthy-downstream performance envelope change as TrackRelay moves from an
-> economical EC2 starting point to workload-fit and then larger hardware?
+> economical burstable EC2 starting point to compute-optimized and then
+> memory-optimized hardware?
 
-This is a test of cloud hardware flexibility and vertical scaling. It is not a
-test of automatic elasticity, and improvement is not assumed in advance. If the
-API host is not the first constrained resource, a different or larger instance
-may produce little or no capacity gain.
+This is a test of cloud hardware flexibility under the account's Free plan. It
+is not a test of automatic elasticity, and improvement is not assumed in
+advance. All three tiers expose two vCPUs. The experiment can show the value of
+escaping burst-credit throttling or choosing a better resource profile, but it
+cannot claim that adding CPU capacity caused the result.
 
 The 25 events/s result from cloud session 1 is not the small-capacity control.
 That workload used PostgreSQL on the EC2 host. All three Stage 9.3 tiers must use
@@ -21,11 +23,11 @@ them.
 
 ## Controlled hardware ladder
 
-| Property | Economical baseline | Workload-fit migration | Within-family scale-up |
+| Property | Economical baseline | Compute-optimized migration | Memory-optimized migration |
 | --- | --- | --- | --- |
 | Application revision and image digest | Same | Same | Same |
 | Application architecture | Synchronous | Synchronous | Synchronous |
-| EC2 instance type | `t4g.small` | `c8g.large` | `c8g.4xlarge` |
+| EC2 instance type | `t3.small` | `c7i-flex.large` | `m7i-flex.large` |
 | API process and connection-pool settings | Same | Same | Same |
 | RDS class, engine, storage, and parameters | Same | Same | Same |
 | Downstream mode and resource allowance | Healthy and fixed | Healthy and fixed | Healthy and fixed |
@@ -34,26 +36,27 @@ them.
 
 The EC2 instance type is the only deployment input changed between runs, but the
 first transition intentionally changes several hardware properties together.
-Read-only EC2 and Price List API queries on 2026-08-28 selected this ladder:
+Read-only EC2 and Price List API queries on 2026-08-30 selected this x86_64 ladder:
 
-- economical baseline: `t4g.small`, 2 vCPUs, 2 GiB, burstable Graviton2,
-  USD 0.02120 per hour;
-- workload-fit migration: `c8g.large`, 2 vCPUs, 4 GiB, non-burstable
-  Graviton4, USD 0.09163 per hour;
-- within-family scale-up: `c8g.4xlarge`, 16 vCPUs, 32 GiB, non-burstable
-  Graviton4, USD 0.73304 per hour.
+- economical baseline: `t3.small`, 2 vCPUs, 2 GiB, burstable Intel Skylake,
+  USD 0.02640 per hour;
+- compute-optimized migration: `c7i-flex.large`, 2 vCPUs, 4 GiB,
+  non-burstable Intel Sapphire Rapids, USD 0.09775 per hour;
+- memory-optimized migration: `m7i-flex.large`, 2 vCPUs, 8 GiB,
+  non-burstable Intel Sapphire Rapids, USD 0.11970 per hour.
 
 The first transition demonstrates the ability to choose a hardware profile that
-better fits an observed workload; it must not be attributed to CPU count alone.
-The second transition is the cleaner vertical-scaling comparison: the same
-non-burstable Graviton4 family gains eight times the vCPUs and memory. Prices are
-public On-Demand Linux instance time only, not the complete session estimate.
+better fits an observed workload; burstability, processor generation, memory,
+network profile, and instance family change together. The second transition
+holds processor generation, vCPU count, and burstability constant while doubling
+memory from 4 GiB to 8 GiB. Prices are public On-Demand Linux instance time only,
+not the complete session estimate.
 Catalog facts and timestamps are frozen in
 `results/aws-vertical-scaling/ec2-capacity-selection.json`.
 
-Terraform defaults to the `t4g.small` baseline and rejects every instance type
+Terraform defaults to the `t3.small` baseline and rejects every instance type
 outside the three frozen tiers. It configures standard CPU credits for the
-burstable baseline and no credit block for either C8g tier. The guarded lifecycle
+burstable baseline and no credit block for either non-burstable tier. The guarded lifecycle
 passes the selected type as an explicit Terraform command-line variable, records
 it in the session manifest, and rejects later commands that identify a different
 tier.
@@ -122,18 +125,10 @@ available logical CPUs, cumulative Linux scheduler counters for every logical
 CPU, host memory, and SQLAlchemy pool capacity and occupancy. Each result derives
 the API process's average cores used, the fraction of its available CPU capacity,
 per-core host utilization, minimum available memory, and maximum pool pressure.
-This is necessary because one fully occupied core appears as only 6.25% aggregate
-CPU on a 16-vCPU host.
-
-The current image intentionally remains a one-worker Uvicorn deployment. A local
-qualification probe showed that it can benefit from more than one CPU because
-synchronous FastAPI handlers overlap native database and HTTP work in a thread
-pool, even though Python bytecode remains GIL-constrained. It did not demonstrate
-efficient use of 16 CPUs: an unrestricted 50 events/s point passed while a
-one-CPU-capped replay dropped work, but both two- and eight-CPU treatments failed
-at 100 events/s. These local results are process-model diagnostics, not AWS
-performance claims. Stage 9.3 therefore measures the current deployment without
-promising a large scale-up gain.
+This is necessary because one fully occupied core appears as 50% aggregate CPU
+on these two-vCPU hosts. The current image intentionally remains a one-worker
+Uvicorn deployment. Since vCPU count stays fixed, Stage 9.3 does not rely on that
+process consuming more cores on later tiers.
 
 Resource consumption is not itself useful throughput. A rate contributes its
 observed completed rate to `productive_throughput_per_second` only when execution,
@@ -201,11 +196,11 @@ the portable evidence.
 
 AWS publishes [T-family CPU-credit metrics](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/viewing_metrics_with_cloudwatch.html#ec2-cloudwatch-metrics)
 in five-minute buckets, even when EC2 detailed monitoring is enabled. The
-`t4g.small` treatment therefore collects
+`t3.small` treatment therefore collects
 `CPUCreditUsage` and `CPUCreditBalance` at their native 300-second period and
 records their exact overlap with the 180-second load window. It does not
 mislabel those buckets as per-minute observations or apportion a whole-bucket
-credit value to only its overlapping seconds. Both C8g treatments omit credit
+credit value to only its overlapping seconds. Both non-burstable treatments omit credit
 queries because they are non-burstable. The collector polls for a bounded ten
 minutes after a load so the final five-minute bucket can close and be published;
 it rejects the rate as incomplete evidence if any required series remains
@@ -213,14 +208,17 @@ absent.
 
 ## Interpretation and stopping rules
 
-- The `t4g.small` to `c8g.large` result may be described only as a workload-fit
-  hardware migration. Family, processor generation, memory, network profile,
-  and burstability change together, so CPU alone cannot receive causal credit.
-- The `c8g.large` to `c8g.4xlarge` result is the cleaner within-family vertical
-  comparison because processor generation and burstability remain unchanged.
+- The `t3.small` to `c7i-flex.large` result is a burstable-to-compute-optimized
+  migration. Family, processor generation, memory, network profile, and
+  burstability change together, so no single hardware attribute receives causal
+  credit.
+- The `c7i-flex.large` to `m7i-flex.large` result is a compute-to-memory-optimized
+  migration. Processor generation, vCPU count, and burstability remain unchanged;
+  memory doubles. Little or no gain is a useful workload-fit result rather than
+  a failed elasticity claim.
 - High EC2 pressure with healthy RDS, pool, and downstream evidence supports an
   EC2-compute bottleneck. A substantial envelope increase then demonstrates
-  useful vertical scaling without application changes.
+  useful hardware-profile flexibility without application changes.
 - High RDS pressure with spare EC2 capacity identifies the database as the first
   scaling domain. The controlled EC2 comparison stops; it does not resize RDS
   and pretend that EC2 caused the combined result.
@@ -244,7 +242,7 @@ approval before any resource is created:
 ### Detached-sampler cloud canary
 
 Before another full Stage 9.3 attempt, use a separately planned and approved
-canary session on `t4g.small` with the same private RDS deployment. The canary
+canary session on `t3.small` with the same private RDS deployment. The canary
 is intentionally not a performance result: it sends only 10 events/s for 30
 seconds, omits CloudWatch collection and EC2 transitions, and cannot contribute
 to the final capacity comparison. Its only purpose is to prove the repaired
@@ -262,7 +260,7 @@ make aws-scaling-canary \
   APPROVED_SESSION_ID=cloud-session-2-YYYYMMDDTHHMMSSZ \
   APPROVED_COST_CEILING_USD=REVIEWED_CANARY_CEILING \
   APPROVED_UNCONDITIONAL_TEARDOWN_SESSION_ID=cloud-session-2-YYYYMMDDTHHMMSSZ \
-  REHOST_INSTANCE_TYPE=t4g.small \
+  REHOST_INSTANCE_TYPE=t3.small \
   API_INGRESS_CIDR=YOUR_CURRENT_PUBLIC_IP/32
 ```
 
@@ -332,9 +330,9 @@ For example, the first transition in an approved cloud session is:
 make aws-scaling-transition \
   SESSION_ID=cloud-session-2-YYYYMMDDTHHMMSSZ \
   APPROVED_SESSION_ID=cloud-session-2-YYYYMMDDTHHMMSSZ \
-  REHOST_INSTANCE_TYPE=t4g.small \
-  TARGET_INSTANCE_TYPE=c8g.large \
-  APPROVED_TARGET_INSTANCE_TYPE=c8g.large \
+  REHOST_INSTANCE_TYPE=t3.small \
+  TARGET_INSTANCE_TYPE=c7i-flex.large \
+  APPROVED_TARGET_INSTANCE_TYPE=c7i-flex.large \
   API_INGRESS_CIDR=YOUR_CURRENT_PUBLIC_IP/32
 ```
 
@@ -364,8 +362,8 @@ This transition command is stateful and can incur AWS charges. Its existence is
 not authorization to run it: cloud session 2 still needs the separately
 reviewed resource list, duration, cost ceiling, and explicit user approval.
 
-After the final `c8g.4xlarge` tier is collected,
-`make aws-scaling-report REHOST_INSTANCE_TYPE=c8g.4xlarge` is a local-only
+After the final `m7i-flex.large` tier is collected,
+`make aws-scaling-report REHOST_INSTANCE_TYPE=m7i-flex.large` is a local-only
 command. It makes no AWS request. It refuses to report until the manifest names
 all three completed tiers and both validated transitions in their frozen order.
 For each tier, it re-derives the compact capacity boundary and loads the API,
@@ -375,10 +373,10 @@ censored lower-bound diagnostic instead.
 
 The report writes portable JSON and Markdown under
 `vertical-scaling/report/` in the ignored session evidence directory. It names
-the two comparisons differently: `t4g.small` to `c8g.large` is a workload-fit
-hardware migration, while `c8g.large` to `c8g.4xlarge` is a within-family
-vertical scale-up. Capacity ratios are marked as censored whenever either tier
-did not reach a failing rate.
+the two comparisons differently: `t3.small` to `c7i-flex.large` is a
+burstable-to-compute-optimized migration, while `c7i-flex.large` to
+`m7i-flex.large` is a compute-to-memory-optimized migration. Capacity ratios are
+marked as censored whenever either tier did not reach a failing rate.
 
 Bottleneck labels use explicit thresholds embedded in the JSON report: 85% for
 high EC2 or RDS CPU and for simulator CPU or memory allowance; 90% for
@@ -394,7 +392,7 @@ not replace the recorded measurements.
 ## Failure-safe session runner
 
 After an approved cloud session has reached `rds_correctness_collected` on
-`t4g.small`, the preferred Stage 9.3 entry point is the explicitly armed session
+`t3.small`, the preferred Stage 9.3 entry point is the explicitly armed session
 runner:
 
 ```shell
@@ -402,9 +400,9 @@ make aws-scaling-session \
   SESSION_ID=cloud-session-2-YYYYMMDDTHHMMSSZ \
   APPROVED_SESSION_ID=cloud-session-2-YYYYMMDDTHHMMSSZ \
   APPROVED_COST_CEILING_USD=REVIEWED_CEILING \
-  APPROVED_TIER_ORDER='t4g.small,c8g.large,c8g.4xlarge' \
+  APPROVED_TIER_ORDER='t3.small,c7i-flex.large,m7i-flex.large' \
   APPROVED_UNCONDITIONAL_TEARDOWN_SESSION_ID=cloud-session-2-YYYYMMDDTHHMMSSZ \
-  REHOST_INSTANCE_TYPE=t4g.small \
+  REHOST_INSTANCE_TYPE=t3.small \
   API_INGRESS_CIDR=YOUR_CURRENT_PUBLIC_IP/32
 ```
 
@@ -450,14 +448,14 @@ starts and when it exits. Setup, the final sampler observation, database
 settling, and metric-publication polling are therefore visible evidence but not
 counted as offered-load time.
 
-1. Provision the `t4g.small` baseline and fixed private RDS configuration.
+1. Provision the `t3.small` baseline and fixed private RDS configuration.
 2. Deploy one immutable application image and verify RDS correctness.
 3. Run and freeze the economical baseline envelope and aligned evidence,
    including CPU-credit behavior.
 4. Reset synthetic application and simulator state without changing controls.
-5. Stop the EC2 instance, switch to `c8g.large`, verify the unchanged image and
+5. Stop the EC2 instance, switch to `c7i-flex.large`, verify the unchanged image and
    controls, and replay the identical envelope.
-6. Preserve that result, reset state, switch to `c8g.4xlarge`, verify the same
+6. Preserve that result, reset state, switch to `m7i-flex.large`, verify the same
    controls, and replay the envelope again.
 7. Build both transition comparisons and the bottleneck report while the
    evidence is available.

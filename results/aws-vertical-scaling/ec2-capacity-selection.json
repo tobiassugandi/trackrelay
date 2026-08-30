@@ -1,44 +1,45 @@
 {
-  "schema_version": 1,
-  "name": "aws-synchronous-infrastructure-scaling-capacity-v1",
+  "schema_version": 2,
+  "name": "aws-synchronous-hardware-flexibility-capacity-v2",
   "aws_region": "ap-southeast-3",
   "pricing_location": "Asia Pacific (Jakarta)",
   "operating_system": "Linux",
   "tenancy": "Shared",
   "purchase_option": "OnDemand",
   "availability_source": "ec2:DescribeInstanceTypeOfferings",
+  "availability_location_type": "availability-zone",
   "pricing_source": "pricing:GetProducts",
-  "availability_checked_at": "2026-08-28T16:02:18Z",
-  "price_catalog_publication_at": "2026-08-27T17:45:43Z",
-  "price_catalog_version": "20260827174543",
+  "availability_checked_at": "2026-08-30T12:26:57Z",
+  "price_catalog_publication_at": "2026-08-29T01:43:19Z",
+  "price_catalog_version": "20260829014319",
   "economical_baseline": {
-    "instance_type": "t4g.small",
-    "architecture": "arm64",
-    "processor": "AWS Graviton2 Processor",
+    "instance_type": "t3.small",
+    "architecture": "x86_64",
+    "processor": "Intel Skylake E5 2686 v5",
     "vcpu_count": 2,
     "memory_mib": 2048,
     "network_performance": "Up to 5 Gigabit",
     "burstable_performance": true,
-    "on_demand_linux_price_usd_per_hour": "0.0212000000"
+    "on_demand_linux_price_usd_per_hour": "0.0264000000"
   },
-  "workload_fit": {
-    "instance_type": "c8g.large",
-    "architecture": "arm64",
-    "processor": "AWS Graviton4 Processor",
+  "compute_optimized": {
+    "instance_type": "c7i-flex.large",
+    "architecture": "x86_64",
+    "processor": "Intel Xeon Scalable (Sapphire Rapids)",
     "vcpu_count": 2,
     "memory_mib": 4096,
-    "network_performance": "Up to 12.5 Gigabit",
+    "network_performance": "Up to 12500 Megabit",
     "burstable_performance": false,
-    "on_demand_linux_price_usd_per_hour": "0.0916300000"
+    "on_demand_linux_price_usd_per_hour": "0.0977500000"
   },
-  "vertical_scale": {
-    "instance_type": "c8g.4xlarge",
-    "architecture": "arm64",
-    "processor": "AWS Graviton4 Processor",
-    "vcpu_count": 16,
-    "memory_mib": 32768,
-    "network_performance": "Up to 15 Gigabit",
+  "memory_optimized": {
+    "instance_type": "m7i-flex.large",
+    "architecture": "x86_64",
+    "processor": "Intel Xeon Scalable (Sapphire Rapids)",
+    "vcpu_count": 2,
+    "memory_mib": 8192,
+    "network_performance": "Up to 12500 Megabit",
     "burstable_performance": false,
-    "on_demand_linux_price_usd_per_hour": "0.7330400000"
+    "on_demand_linux_price_usd_per_hour": "0.1197000000"
   }
 }

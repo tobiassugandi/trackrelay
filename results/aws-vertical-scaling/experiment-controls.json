@@ -1,11 +1,11 @@
 {
-  "schema_version": 1,
-  "name": "aws-synchronous-infrastructure-scaling-controls-v1",
+  "schema_version": 2,
+  "name": "aws-synchronous-hardware-flexibility-controls-v2",
   "only_changed_deployment_input": "ec2-instance-type",
   "tier_order": [
-    "t4g.small",
-    "c8g.large",
-    "c8g.4xlarge"
+    "t3.small",
+    "c7i-flex.large",
+    "m7i-flex.large"
   ],
   "experiment_state": "fresh-identity-namespace-per-tier",
   "application": {

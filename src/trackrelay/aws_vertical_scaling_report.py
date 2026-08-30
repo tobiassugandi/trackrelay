@@ -53,8 +53,8 @@ BottleneckAssessment = Literal[
     "ambiguous",
 ]
 ComparisonKind = Literal[
-    "workload-fit-hardware-migration",
-    "within-family-vertical-scale-up",
+    "burstable-to-compute-optimized-migration",
+    "compute-to-memory-optimized-migration",
 ]
 
 
@@ -149,9 +149,9 @@ class VerticalScalingComparisonReport(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[1] = 1
-    experiment_name: Literal["aws-synchronous-vertical-scaling-v1"] = (
-        "aws-synchronous-vertical-scaling-v1"
+    schema_version: Literal[2] = 2
+    experiment_name: Literal["aws-synchronous-hardware-flexibility-v2"] = (
+        "aws-synchronous-hardware-flexibility-v2"
     )
     generated_at: AwareDatetime
     thresholds: BottleneckThresholds
@@ -161,17 +161,17 @@ class VerticalScalingComparisonReport(BaseModel):
     @model_validator(mode="after")
     def require_the_complete_ladder(self) -> "VerticalScalingComparisonReport":
         if tuple(tier.instance_type for tier in self.tiers) != (
-            "t4g.small",
-            "c8g.large",
-            "c8g.4xlarge",
+            "t3.small",
+            "c7i-flex.large",
+            "m7i-flex.large",
         ):
             raise ValueError("comparison report must contain the frozen tier order")
         if tuple(
             (comparison.source_instance_type, comparison.target_instance_type)
             for comparison in self.transitions
         ) != (
-            ("t4g.small", "c8g.large"),
-            ("c8g.large", "c8g.4xlarge"),
+            ("t3.small", "c7i-flex.large"),
+            ("c7i-flex.large", "m7i-flex.large"),
         ):
             raise ValueError("comparison report must contain both transitions")
         return self
@@ -379,8 +379,8 @@ def _capacity_for(
 ) -> Ec2Capacity:
     capacities = (
         definition.capacity_selection.economical_baseline,
-        definition.capacity_selection.workload_fit,
-        definition.capacity_selection.vertical_scale,
+        definition.capacity_selection.compute_optimized,
+        definition.capacity_selection.memory_optimized,
     )
     try:
         return next(
@@ -496,7 +496,7 @@ def _boundary_diagnostics(
     )
     credit_balance = (
         _minimum(cloudwatch, "ec2_cpu_credit_balance")
-        if summary.instance_type == "t4g.small"
+        if summary.instance_type == "t3.small"
         else None
     )
     return TierBoundaryDiagnostics(
@@ -599,6 +599,13 @@ def _load_tier(
     ) != summary:
         raise AwsRehostError("tier capacity boundary differs from its rate results")
     capacity = _capacity_for(definition, instance_type)
+    boundary = _boundary_diagnostics(
+        session,
+        summary=summary,
+        thresholds=thresholds,
+    )
+    if boundary.api_process_available_cpu_count != capacity.vcpu_count:
+        raise AwsRehostError("runtime CPU count differs from the frozen hardware tier")
     return TierComparisonResult(
         instance_type=instance_type,
         tier_role=summary.tier_role,
@@ -614,11 +621,7 @@ def _load_tier(
         capacity_is_at_least_highest_tested_rate=(
             summary.capacity_is_at_least_highest_tested_rate
         ),
-        boundary=_boundary_diagnostics(
-            session,
-            summary=summary,
-            thresholds=thresholds,
-        ),
+        boundary=boundary,
     )
 
 
@@ -687,8 +690,8 @@ def _validate_transition_evidence(
     scaling = manifest["vertical_scaling"]
     records = scaling.get("transitions")
     expected = (
-        ("t4g.small", "c8g.large"),
-        ("c8g.large", "c8g.4xlarge"),
+        ("t3.small", "c7i-flex.large"),
+        ("c7i-flex.large", "m7i-flex.large"),
     )
     if not isinstance(records, list) or len(records) != 2:
         raise AwsRehostError("both Stage 9.3 transitions must be complete")
@@ -719,7 +722,7 @@ def _percentage(value: float | None) -> str:
 def render_markdown(report: VerticalScalingComparisonReport) -> str:
     """Render the compact human-readable companion to the JSON evidence."""
     lines = [
-        "# Stage 9.3 vertical-scaling comparison",
+        "# Stage 9.3 hardware-flexibility comparison",
         "",
         f"Generated at `{report.generated_at.isoformat()}`.",
         "",
@@ -799,11 +802,12 @@ def render_markdown(report: VerticalScalingComparisonReport) -> str:
     lines.extend(
         (
             (
-                "The first transition changes instance family, processor "
-                "generation, memory, network profile, and burstability together; "
-                "it is a workload-fit hardware migration, not a CPU-only result. "
-                "The second transition is the cleaner within-family vertical "
-                "comparison."
+                "All tiers expose two vCPUs. The first transition changes from "
+                "burstable baseline compute to non-burstable compute-optimized "
+                "hardware. The second keeps the processor generation and vCPU "
+                "count fixed while changing from a compute-optimized to a "
+                "memory-optimized profile. These are cloud hardware-flexibility "
+                "comparisons, not an autoscaling elasticity result."
             ),
             "",
         )
@@ -823,9 +827,9 @@ def generate_vertical_scaling_report(
     if (
         manifest.get("status") != "vertical_scaling_tier_collected"
         or not isinstance(scaling, dict)
-        or scaling.get("current_tier") != "c8g.4xlarge"
+        or scaling.get("current_tier") != "m7i-flex.large"
         or scaling.get("completed_tiers")
-        != ["t4g.small", "c8g.large", "c8g.4xlarge"]
+        != ["t3.small", "c7i-flex.large", "m7i-flex.large"]
     ):
         raise AwsRehostError("all three Stage 9.3 tiers must be complete")
     definition, _ = _load_prepared_definition(
@@ -854,12 +858,12 @@ def generate_vertical_scaling_report(
                 _transition_comparison(
                     tiers[0],
                     tiers[1],
-                    kind="workload-fit-hardware-migration",
+                    kind="burstable-to-compute-optimized-migration",
                 ),
                 _transition_comparison(
                     tiers[1],
                     tiers[2],
-                    kind="within-family-vertical-scale-up",
+                    kind="compute-to-memory-optimized-migration",
                 ),
             ),
         )

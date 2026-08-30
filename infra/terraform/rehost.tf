@@ -140,7 +140,7 @@ resource "aws_instance" "rehost" {
   vpc_security_group_ids               = [aws_security_group.rehost.id]
 
   dynamic "credit_specification" {
-    for_each = var.rehost_instance_type == "t4g.small" ? [true] : []
+    for_each = var.rehost_instance_type == "t3.small" ? [true] : []
 
     content {
       cpu_credits = "standard"

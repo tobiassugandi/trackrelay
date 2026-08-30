@@ -161,7 +161,7 @@ def metric_definitions(instance_type: str) -> tuple[MetricDefinition, ...]:
     """Return credits only for the frozen burstable treatment."""
     if instance_type not in ALLOWED_INSTANCE_TYPES:
         raise AwsRehostError("cannot query an unapproved EC2 treatment")
-    if instance_type == "t4g.small":
+    if instance_type == "t3.small":
         return BASE_METRICS + BURST_CREDIT_METRICS
     return BASE_METRICS
 

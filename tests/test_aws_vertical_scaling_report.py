@@ -178,7 +178,7 @@ def write_boundary_evidence(
         simulator_receipts=expected,
         simulator_unique_events=expected,
     )
-    available_cpus = 16 if instance_type == "c8g.4xlarge" else 2
+    available_cpus = 2
     api_samples = (
         runtime_sample(
             captured_at=STARTED_AT,
@@ -357,7 +357,7 @@ def write_tier(session, *, instance_type: str, integer_offset: int) -> None:
         session,
         instance_type=instance_type,
         test_run_id=boundary_id,
-        ec2_cpu_percent=90 if instance_type == "t4g.small" else 50,
+        ec2_cpu_percent=90 if instance_type == "t3.small" else 50,
     )
     results = [
         compact_point(
@@ -434,7 +434,7 @@ def complete_experiment_session(tmp_path: Path):
         now=lambda: datetime(2026, 8, 29, 13, tzinfo=UTC),
     )
     for index, instance_type in enumerate(
-        ("t4g.small", "c8g.large", "c8g.4xlarge"),
+        ("t3.small", "c7i-flex.large", "m7i-flex.large"),
         start=1,
     ):
         write_tier(
@@ -444,33 +444,33 @@ def complete_experiment_session(tmp_path: Path):
         )
     final_session = replace(
         baseline_session,
-        rehost_instance_type="c8g.4xlarge",
+        rehost_instance_type="m7i-flex.large",
     )
     manifest = load_manifest(baseline_session)
-    manifest["rehost_instance_type"] = "c8g.4xlarge"
+    manifest["rehost_instance_type"] = "m7i-flex.large"
     manifest["status"] = "vertical_scaling_tier_collected"
     manifest["vertical_scaling"].update(
         {
-            "current_tier": "c8g.4xlarge",
-            "completed_tiers": ["t4g.small", "c8g.large", "c8g.4xlarge"],
+            "current_tier": "m7i-flex.large",
+            "completed_tiers": ["t3.small", "c7i-flex.large", "m7i-flex.large"],
             "transitions": [
                 {
-                    "source_instance_type": "t4g.small",
-                    "target_instance_type": "c8g.large",
+                    "source_instance_type": "t3.small",
+                    "target_instance_type": "c7i-flex.large",
                     "evidence": write_transition(
                         baseline_session,
-                        source="t4g.small",
-                        target="c8g.large",
+                        source="t3.small",
+                        target="c7i-flex.large",
                         minute=0,
                     ),
                 },
                 {
-                    "source_instance_type": "c8g.large",
-                    "target_instance_type": "c8g.4xlarge",
+                    "source_instance_type": "c7i-flex.large",
+                    "target_instance_type": "m7i-flex.large",
                     "evidence": write_transition(
                         baseline_session,
-                        source="c8g.large",
-                        target="c8g.4xlarge",
+                        source="c7i-flex.large",
+                        target="m7i-flex.large",
                         minute=2,
                     ),
                 },
@@ -496,17 +496,17 @@ def test_complete_report_aligns_all_tiers_and_stays_local(tmp_path: Path) -> Non
     )
 
     assert tuple(tier.instance_type for tier in report.tiers) == (
-        "t4g.small",
-        "c8g.large",
-        "c8g.4xlarge",
+        "t3.small",
+        "c7i-flex.large",
+        "m7i-flex.large",
     )
     assert report.tiers[0].boundary.assessment == "ec2-compute-pressure"
     assert report.tiers[0].boundary.bottleneck_assessment_publishable is True
     assert report.tiers[1].boundary.assessment == "application-process-concurrency"
     assert report.tiers[2].boundary.assessment == "application-process-concurrency"
     assert tuple(item.comparison_kind for item in report.transitions) == (
-        "workload-fit-hardware-migration",
-        "within-family-vertical-scale-up",
+        "burstable-to-compute-optimized-migration",
+        "compute-to-memory-optimized-migration",
     )
     assert report.transitions[0].observed_sustainable_rate_ratio == 1
     assert runner_calls == [
@@ -516,8 +516,9 @@ def test_complete_report_aligns_all_tiers_and_stays_local(tmp_path: Path) -> Non
     report_root = session.evidence_dir / "vertical-scaling" / "report"
     assert (report_root / "comparison-report.json").is_file()
     markdown = (report_root / "comparison-report.md").read_text(encoding="utf-8")
-    assert "`t4g.small` -> `c8g.large`" in markdown
-    assert "workload-fit hardware migration, not a CPU-only result" in markdown
+    assert "`t3.small` -> `c7i-flex.large`" in markdown
+    assert "cloud hardware-flexibility comparisons" in markdown
+    assert "not an autoscaling elasticity result" in markdown
     manifest = load_manifest(session)
     assert manifest["status"] == "vertical_scaling_reported"
     assert manifest["vertical_scaling"]["report"] == {
@@ -534,14 +535,14 @@ def test_report_rejects_a_truncated_tier_without_a_failing_boundary(
         session.evidence_dir
         / "vertical-scaling"
         / "tiers"
-        / "t4g.small"
+        / "t3.small"
         / "summary.json"
     )
     summary = VerticalScalingTierSummary.model_validate_json(
         summary_path.read_text(encoding="utf-8")
     )
     truncated = _derive_tier_summary(
-        instance_type="t4g.small",
+        instance_type="t3.small",
         rate_results=summary.rate_results[:1],
         completed_at=summary.completed_at,
     )

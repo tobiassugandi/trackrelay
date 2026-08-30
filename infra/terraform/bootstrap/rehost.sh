@@ -5,9 +5,9 @@ set -euxo pipefail
 dnf install --assumeyes docker
 
 compose_version="v2.32.4"
-compose_sha256="0c4591cf3b1ed039adcd803dbbeddf757375fc08c11245b0154135f838495a2f"
+compose_sha256="ed1917fb54db184192ea9d0717bcd59e3662ea79db48bff36d3475516c480a6b"
 compose_directory="/usr/local/lib/docker/cli-plugins"
-compose_download="/tmp/docker-compose-linux-aarch64"
+compose_download="/tmp/docker-compose-linux-x86_64"
 
 install --directory --mode 0755 "${compose_directory}"
 curl \
@@ -15,7 +15,7 @@ curl \
     --location \
     --silent \
     --show-error \
-    "https://github.com/docker/compose/releases/download/${compose_version}/docker-compose-linux-aarch64" \
+    "https://github.com/docker/compose/releases/download/${compose_version}/docker-compose-linux-x86_64" \
     --output "${compose_download}"
 printf '%s  %s\n' "${compose_sha256}" "${compose_download}" | sha256sum --check
 install \

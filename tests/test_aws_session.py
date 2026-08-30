@@ -17,8 +17,8 @@ from trackrelay.aws_session import (
     verify_destroyed,
 )
 from trackrelay.experiments.vertical_scaling import (
-    VERTICAL_SCALE_INSTANCE_TYPE,
-    WORKLOAD_FIT_INSTANCE_TYPE,
+    COMPUTE_OPTIMIZED_INSTANCE_TYPE,
+    MEMORY_OPTIMIZED_INSTANCE_TYPE,
 )
 
 SESSION_ID = "cloud-session-1-20260822T090000Z"
@@ -119,7 +119,7 @@ def test_plan_saves_exact_inputs_and_plan_identity(tmp_path: Path) -> None:
     assert manifest["profile"] == PROFILE
     assert manifest["region"] == REGION
     assert manifest["api_ingress_cidr"] == API_INGRESS_CIDR
-    assert manifest["rehost_instance_type"] == "t4g.small"
+    assert manifest["rehost_instance_type"] == "t3.small"
     assert manifest["git_revision"] == GIT_REVISION
     assert manifest["status"] == "planned"
     assert len(manifest["plan_sha256"]) == 64
@@ -127,7 +127,7 @@ def test_plan_saves_exact_inputs_and_plan_identity(tmp_path: Path) -> None:
 
 @mark.parametrize(
     "instance_type",
-    (WORKLOAD_FIT_INSTANCE_TYPE, VERTICAL_SCALE_INSTANCE_TYPE),
+    (COMPUTE_OPTIMIZED_INSTANCE_TYPE, MEMORY_OPTIMIZED_INSTANCE_TYPE),
 )
 def test_plan_records_each_explicit_nondefault_hardware_tier(
     tmp_path: Path,
@@ -167,7 +167,7 @@ def test_session_evidence_rejects_a_different_hardware_tier(
         api_ingress_cidr=control_session.api_ingress_cidr,
         terraform_dir=control_session.terraform_dir,
         evidence_root=control_session.evidence_root,
-        rehost_instance_type=VERTICAL_SCALE_INSTANCE_TYPE,
+        rehost_instance_type=MEMORY_OPTIMIZED_INSTANCE_TYPE,
     )
 
     with raises(AwsSessionError, match="rehost_instance_type"):

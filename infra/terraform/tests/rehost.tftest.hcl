@@ -9,7 +9,7 @@ mock_provider "aws" {
 
   mock_data "aws_ssm_parameter" {
     defaults = {
-      value = "ami-mocked-arm64"
+      value = "ami-mocked-x86_64"
     }
   }
 
@@ -116,8 +116,8 @@ run "economical_baseline_is_burstable_and_disposable" {
   command = plan
 
   assert {
-    condition     = aws_instance.rehost.instance_type == "t4g.small"
-    error_message = "The economical baseline must use t4g.small."
+    condition     = aws_instance.rehost.instance_type == "t3.small"
+    error_message = "The economical baseline must use t3.small."
   }
 
   assert {
@@ -161,8 +161,8 @@ run "economical_baseline_is_burstable_and_disposable" {
   }
 
   assert {
-    condition     = strcontains(aws_instance.rehost.user_data, "docker-compose-linux-aarch64")
-    error_message = "The ARM rehost must install the Docker Compose plugin."
+    condition     = strcontains(aws_instance.rehost.user_data, "docker-compose-linux-x86_64")
+    error_message = "The x86_64 rehost must install the Docker Compose plugin."
   }
 
   assert {
@@ -171,39 +171,39 @@ run "economical_baseline_is_burstable_and_disposable" {
   }
 }
 
-run "workload_fit_tier_uses_c8g_large_without_cpu_credits" {
+run "compute_optimized_tier_uses_c7i_flex_without_cpu_credits" {
   command = plan
 
   variables {
-    rehost_instance_type = "c8g.large"
+    rehost_instance_type = "c7i-flex.large"
   }
 
   assert {
-    condition     = aws_instance.rehost.instance_type == "c8g.large"
-    error_message = "The workload-fit tier must use c8g.large."
+    condition     = aws_instance.rehost.instance_type == "c7i-flex.large"
+    error_message = "The compute-optimized tier must use c7i-flex.large."
   }
 
   assert {
     condition     = length(aws_instance.rehost.credit_specification) == 0
-    error_message = "The non-burstable workload-fit tier must have no credit configuration."
+    error_message = "The non-burstable compute tier must have no credit configuration."
   }
 }
 
-run "within_family_scale_tier_uses_c8g_4xlarge" {
+run "memory_optimized_tier_uses_m7i_flex_without_cpu_credits" {
   command = plan
 
   variables {
-    rehost_instance_type = "c8g.4xlarge"
+    rehost_instance_type = "m7i-flex.large"
   }
 
   assert {
-    condition     = aws_instance.rehost.instance_type == "c8g.4xlarge"
-    error_message = "The within-family scale tier must use c8g.4xlarge."
+    condition     = aws_instance.rehost.instance_type == "m7i-flex.large"
+    error_message = "The memory-optimized tier must use m7i-flex.large."
   }
 
   assert {
     condition     = length(aws_instance.rehost.credit_specification) == 0
-    error_message = "The non-burstable scale tier must have no credit configuration."
+    error_message = "The non-burstable memory tier must have no credit configuration."
   }
 }
 

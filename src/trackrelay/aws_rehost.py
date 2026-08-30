@@ -175,7 +175,7 @@ def publish_image(
     *,
     runner: ProcessRunner = run_process,
 ) -> None:
-    """Build and publish exactly one Linux ARM64 image, then record its digest."""
+    """Build and publish exactly one Linux AMD64 image, then record its digest."""
     manifest, revision = require_applied_clean_revision(session, runner=runner)
     repository_url = terraform_output(
         session,
@@ -214,7 +214,7 @@ def publish_image(
                 "buildx",
                 "build",
                 "--platform",
-                "linux/arm64",
+                "linux/amd64",
                 "--provenance=false",
                 "--sbom=false",
                 "--file",
@@ -224,7 +224,7 @@ def publish_image(
                 "--push",
                 ".",
             ),
-            action="ARM64 image publication",
+            action="AMD64 image publication",
         )
     finally:
         runner(("docker", "logout", registry_host), None)
@@ -252,7 +252,7 @@ def publish_image(
     manifest.update(
         {
             "image": {
-                "architecture": "linux/arm64",
+                "architecture": "linux/amd64",
                 "digest": digest,
                 "tag": image_tag,
             },
@@ -649,7 +649,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if arguments.command == "publish":
             publish_image(session)
-            print("published the approved revision as a Linux ARM64 image")
+            print("published the approved revision as a Linux AMD64 image")
         elif arguments.command == "deploy":
             deploy_rehost(
                 session,

@@ -66,7 +66,7 @@ def prepare_rds_session(tmp_path):
     manifest.update(
         {
             "image": {
-                "architecture": "linux/arm64",
+                "architecture": "linux/amd64",
                 "digest": IMAGE_DIGEST,
                 "tag": f"git-{GIT_REVISION[:12]}",
             },
@@ -112,12 +112,12 @@ def test_preparation_binds_deployment_and_controls_without_contacting_aws(
     assert definition.application_image_digest == IMAGE_DIGEST
     assert definition.rds_engine_version == "17.6"
     assert definition.controls.tier_order == (
-        "t4g.small",
-        "c8g.large",
-        "c8g.4xlarge",
+        "t3.small",
+        "c7i-flex.large",
+        "m7i-flex.large",
     )
     assert definition.controls.workload.tier_duration_seconds == 180
-    assert definition.capacity_selection.vertical_scale.vcpu_count == 16
+    assert definition.capacity_selection.memory_optimized.vcpu_count == 2
     definition_path = (
         session.evidence_dir
         / "vertical-scaling"
@@ -127,7 +127,7 @@ def test_preparation_binds_deployment_and_controls_without_contacting_aws(
     saved_manifest = load_manifest(session)
     assert saved_manifest["status"] == "vertical_scaling_ready"
     assert saved_manifest["vertical_scaling"]["completed_tiers"] == []
-    assert saved_manifest["vertical_scaling"]["current_tier"] == "t4g.small"
+    assert saved_manifest["vertical_scaling"]["current_tier"] == "t3.small"
     saved_definition = definition_path.read_text(encoding="utf-8")
     assert "123456789012" not in saved_definition
     assert "rds.amazonaws.com" not in saved_definition
@@ -138,7 +138,7 @@ def test_preparation_rejects_rds_drift_without_leaving_partial_output(
 ) -> None:
     session = prepare_rds_session(tmp_path)
     manifest = load_manifest(session)
-    manifest["rds"]["instance_class"] = "db.t4g.small"
+    manifest["rds"]["instance_class"] = "db.t3.small"
     write_manifest(session, manifest)
 
     with raises(AwsRehostError, match="RDS settings differ"):
@@ -149,6 +149,21 @@ def test_preparation_rejects_rds_drift_without_leaving_partial_output(
 
     assert not (session.evidence_dir / "vertical-scaling").exists()
     assert load_manifest(session)["status"] == "rds_correctness_collected"
+
+
+def test_preparation_rejects_an_arm_image_for_the_x86_ladder(tmp_path) -> None:
+    session = prepare_rds_session(tmp_path)
+    manifest = load_manifest(session)
+    manifest["image"]["architecture"] = "linux/arm64"
+    write_manifest(session, manifest)
+
+    with raises(AwsRehostError, match="requires the x86_64 image"):
+        prepare_vertical_scaling_experiment(
+            session,
+            runner=clean_revision_runner,
+        )
+
+    assert not (session.evidence_dir / "vertical-scaling").exists()
 
 
 def test_load_window_excludes_setup_and_metric_collection() -> None:
@@ -280,11 +295,11 @@ def cloudwatch_evidence(
                 ),
             ),
         )
-        for definition in metric_definitions("t4g.small")
+        for definition in metric_definitions("t3.small")
     )
     return CloudWatchRunEvidence(
         test_run_id=test_run_id,
-        instance_type="t4g.small",
+        instance_type="t3.small",
         load_started_at=started_at,
         load_ended_at=ended_at,
         collected_at=ended_at + timedelta(minutes=1),
@@ -499,7 +514,7 @@ def test_current_tier_runner_preserves_evidence_and_stops_at_first_failure(
         500 if first_failing_rate is None else 25
     )
     assert summary.first_failing_rate_per_second == first_failing_rate
-    assert summary.instance_type == "t4g.small"
+    assert summary.instance_type == "t3.small"
     assert tuple(
         result.offered_rate_per_second for result in summary.rate_results
     ) == executed_rates
@@ -510,7 +525,7 @@ def test_current_tier_runner_preserves_evidence_and_stops_at_first_failure(
         for action in (("prepare", rate), ("collect", rate))
     ]
     assert all((end - start).total_seconds() == 180 for start, end in cloudwatch_windows)
-    tier_root = session.evidence_dir / "vertical-scaling" / "tiers" / "t4g.small"
+    tier_root = session.evidence_dir / "vertical-scaling" / "tiers" / "t3.small"
     for evidence_name in (
         "load-window.json",
         "deployment-runtime-timeline.json",
@@ -526,7 +541,7 @@ def test_current_tier_runner_preserves_evidence_and_stops_at_first_failure(
         )
     manifest = load_manifest(session)
     assert manifest["status"] == "vertical_scaling_tier_collected"
-    assert manifest["vertical_scaling"]["completed_tiers"] == ["t4g.small"]
+    assert manifest["vertical_scaling"]["completed_tiers"] == ["t3.small"]
     assert not any("cloudwatch" in call for call in runner_calls)
     portable_evidence = "\n".join(
         path.read_text(encoding="utf-8") for path in tier_root.rglob("*.json")
@@ -615,7 +630,7 @@ def prepared_completed_baseline_session(tmp_path: Path):
     )
     manifest = load_manifest(session)
     manifest["status"] = "vertical_scaling_tier_collected"
-    manifest["vertical_scaling"]["completed_tiers"] = ["t4g.small"]
+    manifest["vertical_scaling"]["completed_tiers"] = ["t3.small"]
     write_manifest(session, manifest)
     return session
 
@@ -701,7 +716,7 @@ def test_transition_applies_only_saved_next_tier_plan_and_revalidates(
         if output_name == "rehost_ecr_repository_url":
             return completed(call, stdout=REPOSITORY_URL)
         if "plan" in call:
-            assert "-var=rehost_instance_type=c8g.large" in call
+            assert "-var=rehost_instance_type=c7i-flex.large" in call
             output_argument = next(value for value in call if value.startswith("-out="))
             Path(output_argument.removeprefix("-out=")).write_bytes(b"saved plan")
             return completed(call, stdout="one resource changed")
@@ -717,13 +732,13 @@ def test_transition_applies_only_saved_next_tier_plan_and_revalidates(
                         "change": {
                             "actions": ["update"],
                             "before": {
-                                "instance_type": "t4g.small",
+                                "instance_type": "t3.small",
                                 "credit_specification": [
                                     {"cpu_credits": "standard"}
                                 ],
                             },
                             "after": {
-                                "instance_type": "c8g.large",
+                                "instance_type": "c7i-flex.large",
                                 "credit_specification": [],
                             },
                         },
@@ -732,11 +747,11 @@ def test_transition_applies_only_saved_next_tier_plan_and_revalidates(
             }
             return completed(call, stdout=dumps(plan))
         if "apply" in call:
-            assert "-var=rehost_instance_type=c8g.large" not in call
+            assert "-var=rehost_instance_type=c7i-flex.large" not in call
             applied_plan_paths.append(call[-1])
             return completed(call, stdout="apply complete")
         if "ec2" in call and "describe-instances" in call:
-            return completed(call, stdout="c8g.large")
+            return completed(call, stdout="c7i-flex.large")
         raise AssertionError(f"unexpected external command: {call}")
 
     reset_calls: list[tuple[str, str]] = []
@@ -776,9 +791,9 @@ def test_transition_applies_only_saved_next_tier_plan_and_revalidates(
     )
     evidence = transition_to_next_vertical_scaling_tier(
         session,
-        target_instance_type="c8g.large",
+        target_instance_type="c7i-flex.large",
         approved_session_id=session.session_id,
-        approved_target_instance_type="c8g.large",
+        approved_target_instance_type="c7i-flex.large",
         runner=runner,
         resetter=resetter,
         ssm_waiter=waiter,
@@ -786,44 +801,44 @@ def test_transition_applies_only_saved_next_tier_plan_and_revalidates(
         now=lambda: next(clock),
     )
 
-    assert evidence.source_instance_type == "t4g.small"
-    assert evidence.target_instance_type == "c8g.large"
+    assert evidence.source_instance_type == "t3.small"
+    assert evidence.target_instance_type == "c7i-flex.large"
     assert evidence.plan.changed_attributes == (
         "credit_specification",
         "instance_type",
     )
-    assert reset_calls == [("t4g.small", INSTANCE_ID)]
-    assert wait_calls == [("c8g.large", INSTANCE_ID)]
+    assert reset_calls == [("t3.small", INSTANCE_ID)]
+    assert wait_calls == [("c7i-flex.large", INSTANCE_ID)]
     assert validation_calls == [
-        ("c8g.large", INSTANCE_ID, f"{REPOSITORY_URL}@{IMAGE_DIGEST}")
+        ("c7i-flex.large", INSTANCE_ID, f"{REPOSITORY_URL}@{IMAGE_DIGEST}")
     ]
     assert applied_plan_paths == [
         str(
             session.evidence_dir
             / "vertical-scaling"
             / "transitions"
-            / "t4g.small-to-c8g.large"
+            / "t3.small-to-c7i-flex.large"
             / "terraform-transition.tfplan"
         )
     ]
     target_session = session.__class__(
         **{
             **session.__dict__,
-            "rehost_instance_type": "c8g.large",
+            "rehost_instance_type": "c7i-flex.large",
         }
     )
     manifest = load_manifest(target_session)
     assert manifest["status"] == "vertical_scaling_ready"
-    assert manifest["rehost_instance_type"] == "c8g.large"
-    assert manifest["vertical_scaling"]["current_tier"] == "c8g.large"
-    assert manifest["vertical_scaling"]["completed_tiers"] == ["t4g.small"]
+    assert manifest["rehost_instance_type"] == "c7i-flex.large"
+    assert manifest["vertical_scaling"]["current_tier"] == "c7i-flex.large"
+    assert manifest["vertical_scaling"]["completed_tiers"] == ["t3.small"]
     assert "pending_transition" not in manifest["vertical_scaling"]
     assert len(manifest["vertical_scaling"]["transitions"]) == 1
     transition_root = (
         session.evidence_dir
         / "vertical-scaling"
         / "transitions"
-        / "t4g.small-to-c8g.large"
+        / "t3.small-to-c7i-flex.large"
     )
     assert (transition_root / "reset-evidence.json").is_file()
     assert (transition_root / "plan-evidence.json").is_file()
@@ -837,6 +852,85 @@ def test_transition_applies_only_saved_next_tier_plan_and_revalidates(
     assert not any("ssm" in call for call in calls)
 
 
+def test_transition_preserves_failed_terraform_apply_output(tmp_path: Path) -> None:
+    session = prepared_completed_baseline_session(tmp_path)
+
+    def runner(
+        arguments: Sequence[str],
+        input_text: str | None,
+    ) -> CompletedProcess[str]:
+        del input_text
+        call = tuple(arguments)
+        if call == ("git", "status", "--porcelain"):
+            return completed(call)
+        if call == ("git", "rev-parse", "HEAD"):
+            return completed(call, stdout=GIT_REVISION)
+        output_name = terraform_output_name(call)
+        if output_name == "rehost_instance_id":
+            return completed(call, stdout=INSTANCE_ID)
+        if output_name == "rds_identifier":
+            return completed(call, stdout=RDS_IDENTIFIER)
+        if "plan" in call:
+            output_argument = next(value for value in call if value.startswith("-out="))
+            Path(output_argument.removeprefix("-out=")).write_bytes(b"saved plan")
+            return completed(call, stdout="one resource changed")
+        if "show" in call and "-json" in call:
+            return completed(
+                call,
+                stdout=dumps(
+                    {
+                        "resource_changes": [
+                            {
+                                "address": "aws_instance.rehost",
+                                "change": {
+                                    "actions": ["update"],
+                                    "before": {
+                                        "instance_type": "t3.small",
+                                        "credit_specification": [
+                                            {"cpu_credits": "standard"}
+                                        ],
+                                    },
+                                    "after": {
+                                        "instance_type": "c7i-flex.large",
+                                        "credit_specification": [],
+                                    },
+                                },
+                            }
+                        ]
+                    }
+                ),
+            )
+        if "apply" in call:
+            return CompletedProcess(
+                call,
+                1,
+                "stopped the source instance\n",
+                "free-plan instance change rejected\n",
+            )
+        raise AssertionError(f"unexpected external command: {call}")
+
+    with raises(AwsRehostError, match="transition apply failed"):
+        transition_to_next_vertical_scaling_tier(
+            session,
+            target_instance_type="c7i-flex.large",
+            approved_session_id=session.session_id,
+            approved_target_instance_type="c7i-flex.large",
+            runner=runner,
+            resetter=lambda *_args, **_kwargs: reset_evidence(),
+        )
+
+    apply_log = (
+        session.evidence_dir
+        / "vertical-scaling"
+        / "transitions"
+        / "t3.small-to-c7i-flex.large"
+        / "terraform-apply.log"
+    ).read_text(encoding="utf-8")
+    assert "exit_code: 1" in apply_log
+    assert "stopped the source instance" in apply_log
+    assert "free-plan instance change rejected" in apply_log
+
+
 def test_transition_rejects_mismatched_approval_before_external_work(
     tmp_path: Path,
 ) -> None:
@@ -846,9 +940,9 @@ def test_transition_rejects_mismatched_approval_before_external_work(
     with raises(AwsRehostError, match="approved transition target"):
         transition_to_next_vertical_scaling_tier(
             session,
-            target_instance_type="c8g.large",
+            target_instance_type="c7i-flex.large",
             approved_session_id=session.session_id,
-            approved_target_instance_type="c8g.4xlarge",
+            approved_target_instance_type="m7i-flex.large",
             runner=lambda *_args, **_kwargs: external_work.append("runner"),
             resetter=lambda *_args, **_kwargs: external_work.append("reset"),
         )
@@ -862,8 +956,8 @@ def test_transition_plan_rejects_an_unrelated_resource_change() -> None:
             "address": "aws_instance.rehost",
             "change": {
                 "actions": ["update"],
-                "before": {"instance_type": "t4g.small"},
-                "after": {"instance_type": "c8g.large"},
+                "before": {"instance_type": "t3.small"},
+                "after": {"instance_type": "c7i-flex.large"},
             },
         },
         {
@@ -871,7 +965,7 @@ def test_transition_plan_rejects_an_unrelated_resource_change() -> None:
             "change": {
                 "actions": ["update"],
                 "before": {"instance_class": "db.t4g.micro"},
-                "after": {"instance_class": "db.t4g.small"},
+                "after": {"instance_class": "db.t3.small"},
             },
         },
     ]
@@ -879,8 +973,8 @@ def test_transition_plan_rejects_an_unrelated_resource_change() -> None:
     with raises(AwsRehostError, match="exactly one resource"):
         validate_transition_plan(
             dumps({"resource_changes": resource_changes}),
-            source_instance_type="t4g.small",
-            target_instance_type="c8g.large",
+            source_instance_type="t3.small",
+            target_instance_type="c7i-flex.large",
             plan_sha256="a" * 64,
         )
 
@@ -892,14 +986,14 @@ def test_transition_plan_accepts_computed_public_address_restart_effects() -> No
             "change": {
                 "actions": ["update"],
                 "before": {
-                    "instance_type": "t4g.small",
+                    "instance_type": "t3.small",
                     "primary_network_interface_id": "eni-0123456789abcdef0",
                     "private_ip": "10.42.1.43",
                     "public_dns": "ec2-198-51-100-20.example.invalid",
                     "public_ip": "198.51.100.20",
                 },
                 "after": {
-                    "instance_type": "c8g.large",
+                    "instance_type": "c7i-flex.large",
                     "primary_network_interface_id": "eni-0123456789abcdef0",
                     "private_ip": "10.42.1.43",
                 },
@@ -913,8 +1007,8 @@ def test_transition_plan_accepts_computed_public_address_restart_effects() -> No
 
     evidence = validate_transition_plan(
         dumps({"resource_changes": resource_changes}),
-        source_instance_type="t4g.small",
-        target_instance_type="c8g.large",
+        source_instance_type="t3.small",
+        target_instance_type="c7i-flex.large",
         plan_sha256="a" * 64,
     )
 
@@ -932,11 +1026,11 @@ def test_transition_plan_rejects_a_concrete_public_address_change() -> None:
             "change": {
                 "actions": ["update"],
                 "before": {
-                    "instance_type": "t4g.small",
+                    "instance_type": "t3.small",
                     "public_ip": "198.51.100.20",
                 },
                 "after": {
-                    "instance_type": "c8g.large",
+                    "instance_type": "c7i-flex.large",
                     "public_ip": "198.51.100.21",
                 },
                 "after_unknown": {"public_ip": False},
@@ -947,7 +1041,7 @@ def test_transition_plan_rejects_a_concrete_public_address_change() -> None:
     with raises(AwsRehostError, match="unexpected public address"):
         validate_transition_plan(
             dumps({"resource_changes": resource_changes}),
-            source_instance_type="t4g.small",
-            target_instance_type="c8g.large",
+            source_instance_type="t3.small",
+            target_instance_type="c7i-flex.large",
             plan_sha256="a" * 64,
         )

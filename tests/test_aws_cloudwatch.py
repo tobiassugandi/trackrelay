@@ -50,7 +50,7 @@ def test_query_uses_native_periods_and_private_resource_dimensions() -> None:
     query = build_cloudwatch_query(
         instance_id=INSTANCE_ID,
         rds_identifier=RDS_IDENTIFIER,
-        instance_type="t4g.small",
+        instance_type="t3.small",
         load_started_at=LOAD_STARTED_AT,
         load_ended_at=LOAD_ENDED_AT,
     )
@@ -73,7 +73,7 @@ def test_non_burstable_tier_does_not_request_credit_metrics() -> None:
     query = build_cloudwatch_query(
         instance_id=INSTANCE_ID,
         rds_identifier=RDS_IDENTIFIER,
-        instance_type="c8g.large",
+        instance_type="c7i-flex.large",
         load_started_at=LOAD_STARTED_AT,
         load_ended_at=LOAD_ENDED_AT,
     )
@@ -86,9 +86,9 @@ def test_non_burstable_tier_does_not_request_credit_metrics() -> None:
 
 def test_parser_records_exact_bucket_overlap_without_resource_ids() -> None:
     evidence = parse_cloudwatch_response(
-        cloudwatch_response("t4g.small"),
+        cloudwatch_response("t3.small"),
         test_run_id=TEST_RUN_ID,
-        instance_type="t4g.small",
+        instance_type="t3.small",
         load_started_at=LOAD_STARTED_AT,
         load_ended_at=LOAD_ENDED_AT,
         collected_at=datetime(2026, 8, 29, 12, 8, tzinfo=UTC),
@@ -118,7 +118,7 @@ def test_collection_retries_until_every_metric_is_published(
     tmp_path: Path,
 ) -> None:
     session = make_session(tmp_path)
-    responses = [json.dumps({"MetricDataResults": []}), cloudwatch_response("t4g.small")]
+    responses = [json.dumps({"MetricDataResults": []}), cloudwatch_response("t3.small")]
     calls: list[tuple[str, ...]] = []
     sleeps: list[float] = []
 
@@ -166,7 +166,7 @@ def test_incomplete_cloudwatch_evidence_is_rejected() -> None:
         parse_cloudwatch_response(
             json.dumps({"MetricDataResults": []}),
             test_run_id=TEST_RUN_ID,
-            instance_type="t4g.small",
+            instance_type="t3.small",
             load_started_at=LOAD_STARTED_AT,
             load_ended_at=LOAD_ENDED_AT,
             collected_at=datetime(2026, 8, 29, 12, 8, tzinfo=UTC),

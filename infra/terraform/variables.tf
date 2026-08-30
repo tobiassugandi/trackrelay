@@ -49,17 +49,17 @@ variable "api_ingress_cidr" {
 }
 
 variable "rehost_instance_type" {
-  description = "Frozen EC2 tier for the synchronous infrastructure-scaling experiment."
+  description = "Frozen EC2 tier for the synchronous hardware-flexibility experiment."
   type        = string
-  default     = "t4g.small"
+  default     = "t3.small"
 
   validation {
     condition = contains(
-      ["t4g.small", "c8g.large", "c8g.4xlarge"],
+      ["t3.small", "c7i-flex.large", "m7i-flex.large"],
       var.rehost_instance_type,
     )
     error_message = (
-      "rehost_instance_type must be t4g.small, c8g.large, or c8g.4xlarge."
+      "rehost_instance_type must be t3.small, c7i-flex.large, or m7i-flex.large."
     )
   }
 }
@@ -79,9 +79,9 @@ variable "rehost_root_volume_gib" {
 }
 
 variable "rehost_ami_parameter" {
-  description = "AWS public SSM parameter for the current ARM Amazon Linux 2023 AMI."
+  description = "AWS public SSM parameter for the current x86_64 Amazon Linux 2023 AMI."
   type        = string
-  default     = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64"
+  default     = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
 }
 
 variable "rds_postgres_major_version" {

@@ -89,7 +89,7 @@ class VerticalScalingCanaryResult(BaseModel):
     )
     completed_at: AwareDatetime
     git_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
-    instance_type: Literal["t4g.small"] = "t4g.small"
+    instance_type: Literal["t3.small"] = "t3.small"
     database_placement: Literal["private-single-az-rds"] = (
         "private-single-az-rds"
     )
@@ -210,7 +210,7 @@ def run_vertical_scaling_canary_point(
     if manifest.get("status") != "rds_correctness_collected":
         raise AwsRehostError("the canary requires completed RDS correctness")
     if session.rehost_instance_type != ECONOMICAL_BASELINE_INSTANCE_TYPE:
-        raise AwsRehostError("the canary must use t4g.small")
+        raise AwsRehostError("the canary must use t3.small")
     definition = build_experiment_definition(
         session,
         manifest=manifest,
@@ -447,7 +447,7 @@ def validate_canary_approval(
     if not session.session_id.startswith("cloud-session-2-"):
         raise AwsSessionError("the Stage 9.3 canary must use cloud session 2")
     if session.rehost_instance_type != ECONOMICAL_BASELINE_INSTANCE_TYPE:
-        raise AwsSessionError("the canary must use t4g.small")
+        raise AwsSessionError("the canary must use t3.small")
     if approved_session_id != session.session_id:
         raise AwsSessionError("approved canary session ID does not match")
     if approved_unconditional_teardown_session_id != session.session_id:

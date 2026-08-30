@@ -1,4 +1,4 @@
-"""Tests for digest-pinned ARM publication and secret-free SSM deployment."""
+"""Tests for digest-pinned image publication and secret-free SSM deployment."""
 
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -127,7 +127,7 @@ def test_rds_installer_waits_for_readiness_after_api_restart() -> None:
     assert restart_position < readiness_position < persisted_read_position
 
 
-def test_publish_pushes_only_arm64_and_records_digest_without_credentials(
+def test_publish_pushes_only_x86_64_and_records_digest_without_credentials(
     tmp_path: Path,
 ) -> None:
     session = make_session(tmp_path)
@@ -154,7 +154,7 @@ def test_publish_pushes_only_arm64_and_records_digest_without_credentials(
     publish_image(session, runner=runner)
 
     build_call = next(call for call, _ in calls if "buildx" in call)
-    assert "linux/arm64" in build_call
+    assert "linux/amd64" in build_call
     assert "--provenance=false" in build_call
     assert "--sbom=false" in build_call
     assert "--push" in build_call
@@ -170,7 +170,7 @@ def test_publish_pushes_only_arm64_and_records_digest_without_credentials(
     manifest = loads(manifest_text)
     assert manifest["status"] == "image_published"
     assert manifest["image"] == {
-        "architecture": "linux/arm64",
+        "architecture": "linux/amd64",
         "digest": IMAGE_DIGEST,
         "tag": f"git-{GIT_REVISION[:12]}",
     }
@@ -178,7 +178,7 @@ def test_publish_pushes_only_arm64_and_records_digest_without_credentials(
     assert "123456789012" not in manifest_text
 
 
-def test_publish_logs_out_when_the_arm_build_fails(tmp_path: Path) -> None:
+def test_publish_logs_out_when_the_amd64_build_fails(tmp_path: Path) -> None:
     session = make_session(tmp_path)
     calls: list[tuple[str, ...]] = []
 
@@ -211,7 +211,7 @@ def test_deploy_uses_ssm_without_ssh_or_plaintext_runtime_secrets(
     session = make_session(tmp_path, status="image_published")
     manifest = loads(session.manifest_path.read_text(encoding="utf-8"))
     manifest["image"] = {
-        "architecture": "linux/arm64",
+        "architecture": "linux/amd64",
         "digest": IMAGE_DIGEST,
         "tag": f"git-{GIT_REVISION[:12]}",
     }
@@ -282,7 +282,7 @@ def test_deploy_refuses_an_image_from_a_different_revision(
     session = make_session(tmp_path, status="image_published")
     manifest = loads(session.manifest_path.read_text(encoding="utf-8"))
     manifest["image"] = {
-        "architecture": "linux/arm64",
+        "architecture": "linux/amd64",
         "digest": IMAGE_DIGEST,
         "tag": "git-different0000",
     }
@@ -326,7 +326,7 @@ def test_rds_deploy_discovers_connection_data_on_host_without_persisting_it(
     session = make_session(tmp_path, status=prior_status)
     manifest = loads(session.manifest_path.read_text(encoding="utf-8"))
     manifest["image"] = {
-        "architecture": "linux/arm64",
+        "architecture": "linux/amd64",
         "digest": IMAGE_DIGEST,
         "tag": f"git-{GIT_REVISION[:12]}",
     }

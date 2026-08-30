@@ -40,7 +40,7 @@ def ready_session(tmp_path: Path) -> AwsSession:
             "git_revision": "a" * 40,
             "profile": session.profile,
             "region": session.region,
-            "rehost_instance_type": "t4g.small",
+            "rehost_instance_type": "t3.small",
             "session_id": session.session_id,
             "status": "rds_correctness_collected",
         },
@@ -113,15 +113,15 @@ def test_complete_session_runs_in_order_then_destroys_and_verifies(
 
     assert observed is report
     assert actions == [
-        ("prepare", "t4g.small"),
-        ("tier", "t4g.small"),
-        ("transition", "t4g.small->c8g.large"),
-        ("tier", "c8g.large"),
-        ("transition", "c8g.large->c8g.4xlarge"),
-        ("tier", "c8g.4xlarge"),
-        ("report", "c8g.4xlarge"),
-        ("destroy", "c8g.4xlarge"),
-        ("verify", "c8g.4xlarge"),
+        ("prepare", "t3.small"),
+        ("tier", "t3.small"),
+        ("transition", "t3.small->c7i-flex.large"),
+        ("tier", "c7i-flex.large"),
+        ("transition", "c7i-flex.large->m7i-flex.large"),
+        ("tier", "m7i-flex.large"),
+        ("report", "m7i-flex.large"),
+        ("destroy", "m7i-flex.large"),
+        ("verify", "m7i-flex.large"),
     ]
 
 
@@ -137,7 +137,7 @@ def test_tier_failure_still_destroys_and_verifies_the_journaled_tier(
         tier_count += 1
         actions.append(("tier", current_session.rehost_instance_type))
         if tier_count == 2:
-            raise RuntimeError("simulated c8g.large failure")
+            raise RuntimeError("simulated c7i-flex.large failure")
 
     def transition_runner(current_session, *, target_instance_type, **_kwargs):
         journal_transition(current_session, target_instance_type)
@@ -148,7 +148,7 @@ def test_tier_failure_still_destroys_and_verifies_the_journaled_tier(
     def verifier(current_session):
         actions.append(("verify", current_session.rehost_instance_type))
 
-    with raises(RuntimeError, match="simulated c8g.large failure"):
+    with raises(RuntimeError, match="simulated c7i-flex.large failure"):
         run_vertical_scaling_session(
             session,
             **approval_arguments(session),
@@ -161,10 +161,10 @@ def test_tier_failure_still_destroys_and_verifies_the_journaled_tier(
         )
 
     assert actions == [
-        ("tier", "t4g.small"),
-        ("tier", "c8g.large"),
-        ("destroy", "c8g.large"),
-        ("verify", "c8g.large"),
+        ("tier", "t3.small"),
+        ("tier", "c7i-flex.large"),
+        ("destroy", "c7i-flex.large"),
+        ("verify", "c7i-flex.large"),
     ]
 
 
@@ -202,11 +202,11 @@ def test_transition_failure_cleans_up_the_pending_journaled_tier(
         )
 
     assert cleanup_tiers == [
-        ("destroy", "c8g.large"),
-        ("verify", "c8g.large"),
+        ("destroy", "c7i-flex.large"),
+        ("verify", "c7i-flex.large"),
     ]
     cleanup_manifest = load_manifest(
-        replace(session, rehost_instance_type="c8g.large")
+        replace(session, rehost_instance_type="c7i-flex.large")
     )
     assert cleanup_manifest["cleanup_selected_from"] == "pending_transition"
     assert cleanup_manifest["status"] == "vertical_scaling_cleanup_pending"
@@ -237,7 +237,7 @@ def test_destroy_failure_does_not_skip_native_verification(tmp_path: Path) -> No
             teardown_verifier=verifier,
         )
 
-    assert verification_calls == ["c8g.4xlarge"]
+    assert verification_calls == ["m7i-flex.large"]
     assert len(failure.value.cleanup_errors) == 1
     assert failure.value.workflow_error is None
 
@@ -267,9 +267,9 @@ def test_keyboard_interrupt_still_destroys_and_verifies(tmp_path: Path) -> None:
         )
 
     assert actions == [
-        ("tier", "t4g.small"),
-        ("destroy", "t4g.small"),
-        ("verify", "t4g.small"),
+        ("tier", "t3.small"),
+        ("destroy", "t3.small"),
+        ("verify", "t3.small"),
     ]
 
 
@@ -284,7 +284,7 @@ def test_approval_mismatch_has_no_workflow_or_cleanup_side_effect(
             session,
             **{
                 **approval_arguments(session),
-                "approved_tier_order": "t4g.small,c8g.4xlarge",
+                "approved_tier_order": "t3.small,m7i-flex.large",
             },
             preparer=lambda _session: actions.append("prepare"),
             destroyer=lambda _session: actions.append("destroy"),

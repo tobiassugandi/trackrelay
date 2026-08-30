@@ -1,17 +1,17 @@
-# Stage 9.3 AWS vertical-scaling runbook
+# Stage 9.3 AWS hardware-flexibility runbook
 
 This is the operator-facing procedure for running TrackRelay's complete
-RDS-backed synchronous infrastructure-scaling experiment. It is intentionally
+RDS-backed synchronous hardware-flexibility experiment. It is intentionally
 separate from the implementation details in
 `docs/aws-vertical-scaling-experiment.md`.
 
 The experiment uses the same ordered six-rate candidate ladder on:
 
 ```text
-t4g.small -> c8g.large -> c8g.4xlarge
+t3.small -> c7i-flex.large -> m7i-flex.large
 ```
 
-Only the EC2 instance type changes. The application revision and image, one API
+All three types are x86_64 and expose two vCPUs. Only the EC2 instance type changes. The application revision and image, one API
 process, connection pool, private RDS database, downstream simulator, load
 driver, rates, duration, and pass/fail rules remain fixed.
 
@@ -52,7 +52,7 @@ trackrelay_public_ipv4="$(
 )"
 export TRACKRELAY_RUN_API_CIDR="${trackrelay_public_ipv4}/32"
 
-export TRACKRELAY_RUN_TIER_ORDER='t4g.small,c8g.large,c8g.4xlarge'
+export TRACKRELAY_RUN_TIER_ORDER='t3.small,c7i-flex.large,m7i-flex.large'
 test ! -e "results/aws-sessions/$TRACKRELAY_RUN_SESSION_ID"
 printf 'session: %s\ningress: %s\ntiers: %s\n' \
   "$TRACKRELAY_RUN_SESSION_ID" \
@@ -87,8 +87,8 @@ export TRACKRELAY_RUN_SESSION_ID="$(
 export TRACKRELAY_RUN_API_CIDR="$(
   jq -er '.api_ingress_cidr' "$TRACKRELAY_RUN_SESSION_FILE"
 )"
-export TRACKRELAY_RUN_COST_CEILING_USD='4.00'
-export TRACKRELAY_RUN_TIER_ORDER='t4g.small,c8g.large,c8g.4xlarge'
+export TRACKRELAY_RUN_COST_CEILING_USD='REVIEWED_APPROVAL_CEILING'
+export TRACKRELAY_RUN_TIER_ORDER='t3.small,c7i-flex.large,m7i-flex.large'
 ```
 
 Verify that the selected plan is still the approved, unmodified plan:
@@ -131,6 +131,23 @@ make infra-check
 make test
 ```
 
+Confirm that the account deliberately remains on the Free plan and that its
+credit balance is visible before proposing resources:
+
+```shell
+aws \
+  --profile trackrelay-admin \
+  --region us-east-1 \
+  freetier get-account-plan-state \
+  --query '{plan:accountPlanType,status:accountPlanStatus,remainingCredits:accountPlanRemainingCredits}' \
+  --output table
+```
+
+This revised ladder avoids the paid-plan-only C8g types. Regional
+`DescribeInstanceTypes` output alone is not sufficient: architecture must also
+match across every in-place transition, which is why the run begins on x86_64
+`t3.small` instead of ARM64 `t4g.small`.
+
 Expected checkpoints:
 
 - Git status is empty.
@@ -146,7 +163,7 @@ plan already exists: **skip section 2 and continue directly to section 3**.
 ```shell
 make aws-plan \
   SESSION_ID="$TRACKRELAY_RUN_SESSION_ID" \
-  REHOST_INSTANCE_TYPE=t4g.small \
+  REHOST_INSTANCE_TYPE=t3.small \
   API_INGRESS_CIDR="$TRACKRELAY_RUN_API_CIDR"
 ```
 
@@ -175,7 +192,7 @@ make aws-up \
   SESSION_ID="$TRACKRELAY_RUN_SESSION_ID" \
   APPROVED_SESSION_ID="$TRACKRELAY_RUN_SESSION_ID" \
   APPROVED_COST_CEILING_USD="$TRACKRELAY_RUN_COST_CEILING_USD" \
-  REHOST_INSTANCE_TYPE=t4g.small \
+  REHOST_INSTANCE_TYPE=t3.small \
   API_INGRESS_CIDR="$TRACKRELAY_RUN_API_CIDR"
 ```
 
@@ -189,12 +206,12 @@ Notes:
 
 ## 4. Publish and smoke-test the synchronous deployment
 
-Publish the exact committed Linux ARM64 image:
+Publish the exact committed Linux AMD64 image:
 
 ```shell
 make aws-rehost-publish \
   SESSION_ID="$TRACKRELAY_RUN_SESSION_ID" \
-  REHOST_INSTANCE_TYPE=t4g.small \
+  REHOST_INSTANCE_TYPE=t3.small \
   API_INGRESS_CIDR="$TRACKRELAY_RUN_API_CIDR"
 ```
 
@@ -203,13 +220,13 @@ Deploy the digest-pinned image through SSM and run the small on-host smoke test:
 ```shell
 make aws-rehost-deploy \
   SESSION_ID="$TRACKRELAY_RUN_SESSION_ID" \
-  REHOST_INSTANCE_TYPE=t4g.small \
+  REHOST_INSTANCE_TYPE=t3.small \
   API_INGRESS_CIDR="$TRACKRELAY_RUN_API_CIDR"
 ```
 
 Expected checkpoints:
 
-- The session manifest contains a Linux ARM64 image digest.
+- The session manifest contains a Linux AMD64 image digest.
 - The deployment uses that digest, not a mutable tag.
 - Migrations, API readiness, downstream readiness, ingestion, and persistence
   pass without SSH access.
@@ -222,7 +239,7 @@ Stage 9.3 state machine:
 ```shell
 make aws-rehost-workload \
   SESSION_ID="$TRACKRELAY_RUN_SESSION_ID" \
-  REHOST_INSTANCE_TYPE=t4g.small \
+  REHOST_INSTANCE_TYPE=t3.small \
   API_INGRESS_CIDR="$TRACKRELAY_RUN_API_CIDR"
 ```
 
@@ -239,7 +256,7 @@ Switch the same deployment to the already provisioned private RDS instance:
 ```shell
 make aws-rds-deploy \
   SESSION_ID="$TRACKRELAY_RUN_SESSION_ID" \
-  REHOST_INSTANCE_TYPE=t4g.small \
+  REHOST_INSTANCE_TYPE=t3.small \
   API_INGRESS_CIDR="$TRACKRELAY_RUN_API_CIDR"
 ```
 
@@ -251,7 +268,7 @@ Run the four RDS correctness scenarios:
 ```shell
 make aws-rds-correctness \
   SESSION_ID="$TRACKRELAY_RUN_SESSION_ID" \
-  REHOST_INSTANCE_TYPE=t4g.small \
+  REHOST_INSTANCE_TYPE=t3.small \
   API_INGRESS_CIDR="$TRACKRELAY_RUN_API_CIDR"
 ```
 
@@ -269,22 +286,22 @@ make aws-scaling-session \
   APPROVED_COST_CEILING_USD="$TRACKRELAY_RUN_COST_CEILING_USD" \
   APPROVED_TIER_ORDER="$TRACKRELAY_RUN_TIER_ORDER" \
   APPROVED_UNCONDITIONAL_TEARDOWN_SESSION_ID="$TRACKRELAY_RUN_SESSION_ID" \
-  REHOST_INSTANCE_TYPE=t4g.small \
+  REHOST_INSTANCE_TYPE=t3.small \
   API_INGRESS_CIDR="$TRACKRELAY_RUN_API_CIDR"
 ```
 
 The runner performs, in order:
 
 1. Freeze the exact image, RDS, workload, hardware, and guardrail controls.
-2. Run 180-second candidates on `t4g.small`, stopping after the first fully
+2. Run 180-second candidates on `t3.small`, stopping after the first fully
    collected failed point.
 3. Preserve evidence, reset synthetic state, and validate the in-place move to
-   `c8g.large`.
-4. Replay the candidate ladder from its lowest rate on `c8g.large`, again
+   `c7i-flex.large`.
+4. Replay the candidate ladder from its lowest rate on `c7i-flex.large`, again
    stopping after the first failure.
 5. Preserve evidence, reset state, and validate the in-place move to
-   `c8g.4xlarge`.
-6. Replay the candidate ladder from its lowest rate on `c8g.4xlarge`, stopping
+   `m7i-flex.large`.
+6. Replay the candidate ladder from its lowest rate on `m7i-flex.large`, stopping
    after the first failure.
 7. Generate the two-transition comparison and bottleneck report.
 8. Destroy the complete Terraform stack.

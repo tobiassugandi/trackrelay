@@ -976,11 +976,16 @@ def validate_transition_plan(
         actions = tuple(change["actions"])
         before = change["before"]
         after = change["after"]
+        after_unknown = change.get("after_unknown", {})
     except (KeyError, TypeError) as error:
         raise AwsRehostError("Terraform EC2 transition is incomplete") from error
     if address != "aws_instance.rehost" or actions != ("update",):
         raise AwsRehostError("transition plan is not an in-place EC2 update")
-    if not isinstance(before, dict) or not isinstance(after, dict):
+    if (
+        not isinstance(before, dict)
+        or not isinstance(after, dict)
+        or not isinstance(after_unknown, dict)
+    ):
         raise AwsRehostError("Terraform EC2 values are invalid")
     if before.get("instance_type") != source_instance_type:
         raise AwsRehostError("transition plan source type differs from the session")
@@ -999,7 +1004,24 @@ def validate_transition_plan(
         "cpu_options",
         "ebs_optimized",
     }
-    unexpected_changes = set(changed_attributes) - permitted_changes
+    computed_restart_changes = {"public_dns", "public_ip"}
+    observed_computed_changes = (
+        set(changed_attributes) & computed_restart_changes
+    )
+    invalid_computed_changes = {
+        attribute
+        for attribute in observed_computed_changes
+        if after.get(attribute) is not None
+        or after_unknown.get(attribute) is not True
+    }
+    if invalid_computed_changes:
+        raise AwsRehostError(
+            "transition plan assigns unexpected public address values: "
+            f"{sorted(invalid_computed_changes)}"
+        )
+    unexpected_changes = set(changed_attributes) - (
+        permitted_changes | observed_computed_changes
+    )
     if unexpected_changes:
         raise AwsRehostError(
             "transition plan changes unexpected EC2 attributes: "

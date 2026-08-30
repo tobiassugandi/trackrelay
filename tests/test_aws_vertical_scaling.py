@@ -883,3 +883,71 @@ def test_transition_plan_rejects_an_unrelated_resource_change() -> None:
             target_instance_type="c8g.large",
             plan_sha256="a" * 64,
         )
+
+
+def test_transition_plan_accepts_computed_public_address_restart_effects() -> None:
+    resource_changes = [
+        {
+            "address": "aws_instance.rehost",
+            "change": {
+                "actions": ["update"],
+                "before": {
+                    "instance_type": "t4g.small",
+                    "primary_network_interface_id": "eni-0123456789abcdef0",
+                    "private_ip": "10.42.1.43",
+                    "public_dns": "ec2-198-51-100-20.example.invalid",
+                    "public_ip": "198.51.100.20",
+                },
+                "after": {
+                    "instance_type": "c8g.large",
+                    "primary_network_interface_id": "eni-0123456789abcdef0",
+                    "private_ip": "10.42.1.43",
+                },
+                "after_unknown": {
+                    "public_dns": True,
+                    "public_ip": True,
+                },
+            },
+        }
+    ]
+
+    evidence = validate_transition_plan(
+        dumps({"resource_changes": resource_changes}),
+        source_instance_type="t4g.small",
+        target_instance_type="c8g.large",
+        plan_sha256="a" * 64,
+    )
+
+    assert evidence.changed_attributes == (
+        "instance_type",
+        "public_dns",
+        "public_ip",
+    )
+
+
+def test_transition_plan_rejects_a_concrete_public_address_change() -> None:
+    resource_changes = [
+        {
+            "address": "aws_instance.rehost",
+            "change": {
+                "actions": ["update"],
+                "before": {
+                    "instance_type": "t4g.small",
+                    "public_ip": "198.51.100.20",
+                },
+                "after": {
+                    "instance_type": "c8g.large",
+                    "public_ip": "198.51.100.21",
+                },
+                "after_unknown": {"public_ip": False},
+            },
+        }
+    ]
+
+    with raises(AwsRehostError, match="unexpected public address"):
+        validate_transition_plan(
+            dumps({"resource_changes": resource_changes}),
+            source_instance_type="t4g.small",
+            target_instance_type="c8g.large",
+            plan_sha256="a" * 64,
+        )

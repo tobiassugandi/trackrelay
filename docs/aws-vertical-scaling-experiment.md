@@ -338,8 +338,14 @@ portable reset evidence.
 The controller then saves a new Terraform plan and inspects its JSON before
 apply. Exactly one meaningful resource change is accepted: an in-place update
 of `aws_instance.rehost` from the completed tier to the next tier. A database,
-network, image, or unrelated EC2 change aborts before apply. The session record
-is journaled before and after apply so an interrupted transition is visible.
+network, image, or unrelated EC2 change aborts before apply. Because an EC2
+resize stops and restarts a host with an automatically assigned public address,
+the same in-place plan may mark `public_ip` and its derived `public_dns` as
+unknown until apply. The guard accepts those fields only as explicit
+`after_unknown` computed consequences; it still rejects concrete address
+assignments or changes to the ENI, private IP, subnet, or security groups. The
+session record is journaled before and after apply so an interrupted transition
+is visible.
 After the restart, the controller requires the same EC2 instance identity, the
 same RDS identifier, the requested instance type, the same digest-pinned image,
 an RDS TLS connection string, and a ready API. Only then does the next tier

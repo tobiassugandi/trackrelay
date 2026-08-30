@@ -100,7 +100,7 @@ class WorkloadControls(BaseModel):
     partner_id: Literal["load-alpha"]
     k6_image: Literal["grafana/k6:2.1.0"]
     benchmark_driver_identity: Literal["same-host-and-container-image"]
-    k6_vu_allocation: Literal["preallocate-max-100-or-half-rate-cap-one-per-rate"]
+    k6_vu_allocation: Literal["preallocate-half-rate-cap-one-per-rate"]
     warmup_rate_per_second: Literal[2]
     warmup_duration_seconds: Literal[30]
     post_reset_quiet_period_seconds: Literal[60]

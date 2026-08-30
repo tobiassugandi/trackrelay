@@ -79,7 +79,11 @@ library defaults. RDS remains `db.t4g.micro`, PostgreSQL 17, single-AZ, with
 The experiment reuses the Step 8.6 workload shape, offered-rate ladder,
 reconciliation invariants, and initial SLO. Every request represents one unique
 shipment in the `CREATED` state. Each rate is evaluated independently; a higher
-rate cannot restore the performance envelope after the first failing rate.
+rate cannot restore the performance envelope after the first failing rate. The
+six frozen rates are therefore candidate points, not a requirement to run all
+six: each hardware tier preserves its first complete failing point and stops
+before offering any higher rate. A tier runs all six only when every candidate
+passes.
 
 The ten-second portability rehearsal is too short for aligned AWS resource
 metrics. Stage 9.3 freezes each rate at 180 seconds, providing at least three
@@ -287,14 +291,16 @@ CloudWatch publication waits, and other evidence collection are outside that
 load window.
 
 `make aws-scaling-run-tier` is the stateful counterpart and must be used only
-inside the separately approved cloud session. It runs the full frozen ladder
-for the session's current EC2 treatment. Every rate gets its input manifest, k6
+inside the separately approved cloud session. It runs the frozen candidate
+ladder for the session's current EC2 treatment until the first complete failed
+point. Every executed rate gets its input manifest, k6
 summary, exact k6 process window, local and private process timelines, persisted
 downstream outcomes, reconciliation report, complete CloudWatch series, full
 derived performance result, and compact pass/fail result. The session advances
-to `vertical_scaling_tier_collected` only after all six rate directories and the
-tier summary have been written; incomplete CloudWatch or reconciliation
-evidence aborts the tier instead of silently producing a publishable result.
+to `vertical_scaling_tier_collected` only after the first failed rate has been
+fully preserved, or all six candidates have passed, and the tier summary has
+been written. Incomplete CloudWatch or reconciliation evidence aborts the tier
+instead of being mistaken for a classified failure or a publishable result.
 
 After a tier has been collected, `make aws-scaling-transition` is the only
 supported way to move to the next frozen treatment. The command requires the
@@ -383,8 +389,9 @@ match the approved apply and frozen experiment. A generic request to continue
 does not supply them and cannot start this command.
 
 After the approval gate passes, the runner prepares the control artifact, runs
-the three rate ladders and two guarded transitions, generates the comparison
-report, and then attempts full-stack destroy and native absence verification.
+the three bounded rate ladders and two guarded transitions, generates the
+comparison report, and then attempts full-stack destroy and native absence
+verification.
 Destroy and verification run after success, an experiment failure, `SIGINT`, or
 `SIGTERM`; verification is still attempted if destroy itself raises an error.
 Cleanup derives the current or pending EC2 tier from the manifest journal rather

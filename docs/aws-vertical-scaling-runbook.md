@@ -5,7 +5,7 @@ RDS-backed synchronous infrastructure-scaling experiment. It is intentionally
 separate from the implementation details in
 `docs/aws-vertical-scaling-experiment.md`.
 
-The experiment runs the same six-rate workload on:
+The experiment uses the same ordered six-rate candidate ladder on:
 
 ```text
 t4g.small -> c8g.large -> c8g.4xlarge
@@ -276,13 +276,16 @@ make aws-scaling-session \
 The runner performs, in order:
 
 1. Freeze the exact image, RDS, workload, hardware, and guardrail controls.
-2. Run the six rates for 180 seconds each on `t4g.small`.
+2. Run 180-second candidates on `t4g.small`, stopping after the first fully
+   collected failed point.
 3. Preserve evidence, reset synthetic state, and validate the in-place move to
    `c8g.large`.
-4. Replay the same six rates on `c8g.large`.
+4. Replay the candidate ladder from its lowest rate on `c8g.large`, again
+   stopping after the first failure.
 5. Preserve evidence, reset state, and validate the in-place move to
    `c8g.4xlarge`.
-6. Replay the same six rates on `c8g.4xlarge`.
+6. Replay the candidate ladder from its lowest rate on `c8g.4xlarge`, stopping
+   after the first failure.
 7. Generate the two-transition comparison and bottleneck report.
 8. Destroy the complete Terraform stack.
 9. Verify empty Terraform state, the generic tag inventory, and all native

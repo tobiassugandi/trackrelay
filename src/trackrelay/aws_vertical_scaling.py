@@ -169,7 +169,7 @@ class LoadExecutionWindow(BaseModel):
 
 
 class VerticalScalingTierDefinition(BaseModel):
-    """Portable inputs and driver context for one hardware treatment."""
+    """Portable candidate inputs and driver context for one hardware treatment."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -599,7 +599,7 @@ def run_current_vertical_scaling_tier(
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     uuid_factory: Callable[[], UUID] = uuid4,
 ) -> VerticalScalingTierSummary:
-    """Run and preserve the complete rate ladder for the current EC2 tier."""
+    """Run the current EC2 tier through its first complete failing rate."""
     manifest, revision = require_applied_clean_revision(session, runner=runner)
     if manifest.get("status") != "vertical_scaling_ready":
         raise AwsRehostError("the current Stage 9.3 tier is not ready to run")
@@ -849,6 +849,8 @@ def run_current_vertical_scaling_tier(
             )
             _write_model(compact_result, rate_result_path)
             rate_results.append(compact_result)
+            if not compact_result.complete_experiment_passed:
+                break
 
     summary = _derive_tier_summary(
         instance_type=session.rehost_instance_type,

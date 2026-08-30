@@ -8,7 +8,7 @@ from subprocess import CompletedProcess
 from uuid import UUID
 
 import httpx
-from pytest import raises
+from pytest import mark, raises
 
 from tests.test_aws_rehost import (
     COMMAND_ID,
@@ -292,8 +292,17 @@ def cloudwatch_evidence(
     )
 
 
-def test_current_tier_runner_preserves_every_rate_and_evidence_source(
+@mark.parametrize(
+    ("first_failing_rate", "executed_rates"),
+    (
+        (None, (10, 25, 50, 100, 250, 500)),
+        (50, (10, 25, 50)),
+    ),
+)
+def test_current_tier_runner_preserves_evidence_and_stops_at_first_failure(
     tmp_path: Path,
+    first_failing_rate: int | None,
+    executed_rates: tuple[int, ...],
 ) -> None:
     session = prepare_rds_session(tmp_path)
     prepare_vertical_scaling_experiment(
@@ -378,7 +387,7 @@ def test_current_tier_runner_preserves_every_rate_and_evidence_source(
         result = execute_with_load_window(
             test_run_id,
             lambda: (
-                0,
+                99 if rate == first_failing_rate else 0,
                 samples,
                 {
                     "metrics": {
@@ -387,7 +396,11 @@ def test_current_tier_runner_preserves_every_rate_and_evidence_source(
                         "http_reqs": {
                             "values": {"count": expected, "rate": rate}
                         },
-                        "dropped_iterations": {"values": {"count": 0}},
+                        "dropped_iterations": {
+                            "values": {
+                                "count": 1 if rate == first_failing_rate else 0
+                            }
+                        },
                     }
                 },
             ),
@@ -482,13 +495,18 @@ def test_current_tier_runner_preserves_every_rate_and_evidence_source(
         uuid_factory=lambda: next(identifiers),
     )
 
-    assert summary.maximum_sustainable_rate_per_second == 500
+    assert summary.maximum_sustainable_rate_per_second == (
+        500 if first_failing_rate is None else 25
+    )
+    assert summary.first_failing_rate_per_second == first_failing_rate
     assert summary.instance_type == "t4g.small"
-    assert len(summary.rate_results) == 6
-    assert stopped_rates == [10, 25, 50, 100, 250, 500]
+    assert tuple(
+        result.offered_rate_per_second for result in summary.rate_results
+    ) == executed_rates
+    assert stopped_rates == list(executed_rates)
     assert remote_actions == [
         action
-        for rate in (10, 25, 50, 100, 250, 500)
+        for rate in executed_rates
         for action in (("prepare", rate), ("collect", rate))
     ]
     assert all((end - start).total_seconds() == 180 for start, end in cloudwatch_windows)
@@ -501,7 +519,7 @@ def test_current_tier_runner_preserves_every_rate_and_evidence_source(
         "performance-result.json",
         "rate-result.json",
     ):
-        assert len(tuple(tier_root.rglob(evidence_name))) == 6
+        assert len(tuple(tier_root.rglob(evidence_name))) == len(executed_rates)
     for performance_path in tier_root.rglob("performance-result.json"):
         PerformanceExperimentResult.model_validate_json(
             performance_path.read_text(encoding="utf-8")

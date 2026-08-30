@@ -23,6 +23,7 @@ from trackrelay.aws_session import load_manifest, write_manifest
 from trackrelay.aws_vertical_scaling import (
     InfrastructureTransitionPlanEvidence,
     LoadExecutionWindow,
+    VerticalScalingTierSummary,
     VerticalScalingTransitionEvidence,
     _derive_tier_summary,
     prepare_vertical_scaling_experiment,
@@ -54,7 +55,6 @@ from trackrelay.runtime_metrics import (
     RuntimeMetricsSnapshot,
 )
 
-RATES = (10, 25, 50, 100, 250, 500)
 STARTED_AT = datetime(2026, 8, 29, 12, tzinfo=UTC)
 ENDED_AT = STARTED_AT + timedelta(seconds=180)
 
@@ -359,18 +359,15 @@ def write_tier(session, *, instance_type: str, integer_offset: int) -> None:
         test_run_id=boundary_id,
         ec2_cpu_percent=90 if instance_type == "t4g.small" else 50,
     )
-    results = []
-    for rate in RATES:
-        results.append(
-            boundary
-            if rate == 25
-            else compact_point(
-                instance_type=instance_type,
-                rate=rate,
-                test_run_id=UUID(int=integer_offset + rate),
-                passed=rate == 10,
-            )
-        )
+    results = [
+        compact_point(
+            instance_type=instance_type,
+            rate=10,
+            test_run_id=UUID(int=integer_offset + 10),
+            passed=True,
+        ),
+        boundary,
+    ]
     summary = _derive_tier_summary(
         instance_type=instance_type,
         rate_results=results,
@@ -527,6 +524,39 @@ def test_complete_report_aligns_all_tiers_and_stays_local(tmp_path: Path) -> Non
         "json": "vertical-scaling/report/comparison-report.json",
         "markdown": "vertical-scaling/report/comparison-report.md",
     }
+
+
+def test_report_rejects_a_truncated_tier_without_a_failing_boundary(
+    tmp_path: Path,
+) -> None:
+    session = complete_experiment_session(tmp_path)
+    summary_path = (
+        session.evidence_dir
+        / "vertical-scaling"
+        / "tiers"
+        / "t4g.small"
+        / "summary.json"
+    )
+    summary = VerticalScalingTierSummary.model_validate_json(
+        summary_path.read_text(encoding="utf-8")
+    )
+    truncated = _derive_tier_summary(
+        instance_type="t4g.small",
+        rate_results=summary.rate_results[:1],
+        completed_at=summary.completed_at,
+    )
+    summary_path.write_text(
+        truncated.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+
+    with raises(AwsRehostError, match="tier summary differs"):
+        generate_vertical_scaling_report(
+            session,
+            runner=clean_revision_runner,
+        )
+
+    assert not (session.evidence_dir / "vertical-scaling" / "report").exists()
 
 
 def test_report_rejects_a_missing_transition_before_writing_output(

@@ -567,13 +567,29 @@ def _load_tier(
     )
     summary = _read_model(summary_path, VerticalScalingTierSummary)
     expected_rates = definition.controls.workload.offered_rates_per_second
+    observed_rates = tuple(
+        result.offered_rate_per_second for result in summary.rate_results
+    )
+    stopped_at_first_failure = (
+        bool(summary.rate_results)
+        and not summary.rate_results[-1].complete_experiment_passed
+        and all(
+            result.complete_experiment_passed
+            for result in summary.rate_results[:-1]
+        )
+    )
+    completed_candidate_ladder = (
+        observed_rates == expected_rates
+        and all(
+            result.complete_experiment_passed
+            for result in summary.rate_results
+        )
+    )
     if (
         summary.instance_type != instance_type
         or summary.tier_role != _tier_role(instance_type)
-        or tuple(
-            result.offered_rate_per_second for result in summary.rate_results
-        )
-        != expected_rates
+        or observed_rates != expected_rates[: len(observed_rates)]
+        or not (stopped_at_first_failure or completed_candidate_ladder)
     ):
         raise AwsRehostError("tier summary differs from the frozen experiment")
     if _derive_tier_summary(

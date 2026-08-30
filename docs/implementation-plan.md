@@ -392,20 +392,17 @@ Goal: demonstrate two progressively stronger cloud capabilities:
    capacity as demand changes while continuing to meet its latency, completion,
    and correctness requirements?
 
-The first supporting result will be a three-tier hardware story:
+The first supporting result will be a deliberately short two-machine story:
 
-> **With the application and RDS configuration held constant, TrackRelay moved
-> from economical burstable compute to compute-optimized and memory-optimized
-> profiles, changing its sustainable healthy-downstream rate from X to Y to Z
-> events/s without an application redesign.**
+> **With the application and RDS configuration held constant, TrackRelay changed
+> from `t3.small` to `c7i-flex.large` and increased its highest passing 10-second
+> load point from X to Y events/s without an application redesign.**
 
 This hardware-flexibility experiment answers the reasonable question, "Why
-not choose more suitable hardware first?" The `t3.small` to `c7i-flex.large`
-transition tests escaping burst-credit throttling and moving to a
-compute-optimized profile. The `c7i-flex.large` to `m7i-flex.large` transition
-holds processor generation and the two-vCPU count fixed while doubling memory.
-Both must identify observed bottlenecks honestly; neither is automatic
-elasticity.
+not choose more suitable hardware first?" It tests the practical benefit of
+changing to a more suitable cloud machine without acquiring physical hardware.
+It does not diagnose which changed hardware property caused the result, and it
+is not automatic elasticity.
 
 The primary cloud-specific question remains:
 
@@ -426,7 +423,7 @@ The local legacy baseline remains important as the starting point and benchmark 
 AWS is **off by default**. Application code, container builds, experiment automation, and infrastructure definitions are developed and tested locally. AWS is used only for bounded validation or measurement sessions:
 
 1. **Cloud session 1 — synchronous migration:** validate Stages 9.1 and 9.2, collect evidence, then destroy the stack.
-2. **Cloud session 2 — hardware flexibility:** run the RDS-backed synchronous system on `t3.small`, `c7i-flex.large`, and `m7i-flex.large`, collect evidence, then destroy the stack.
+2. **Cloud session 2 — hardware flexibility:** run the same short RDS-backed ladder on `t3.small` and `c7i-flex.large`, collect the simple comparison, then destroy the stack.
 3. **Cloud session 3 — asynchronous integration:** validate Stages 9.4 and 9.5 with tiny workloads, collect evidence, then destroy the stack.
 4. **Cloud session 4 — headline experiment:** provision once, run the Stage 9.6 fixed control and Stage 9.7 elastic treatment back-to-back, collect both result sets, then destroy the stack.
 
@@ -443,7 +440,7 @@ Most of Phase 9 remains Codex implementation work. The human owner is needed onl
 | 9.0 | **You + Codex** | You create or secure the AWS account, enable MFA, establish the working identity, receive budget alerts, privately complete authentication, and approve the region and spending ceiling. Codex supplies guidance, repository configuration, checks, and documentation. |
 | 9.1 | **Codex** | No routine input after the Stage 9.0 choices; review only if a deployment choice changes scope or expected cost. |
 | 9.2 | **Codex, with your cloud-session approval** | Before cloud session 1, explicitly authorize the session and its budget and complete MFA or browser sign-in if AWS requests it. Codex provisions, validates, collects evidence, destroys, and verifies teardown. |
-| 9.3 | **Codex, with your cloud-session approval** | Approve cloud session 2 and its hardware-flexibility cost ceiling after reviewing all three EC2 configurations and complete any private authentication. |
+| 9.3 | **Codex, with your cloud-session approval** | Approve cloud session 2 and its hardware-flexibility cost ceiling after reviewing both primary EC2 configurations and complete any private authentication. |
 | 9.4 | **Codex** | No routine input; this is local application development and testing. |
 | 9.5 | **Codex, with your cloud-session approval** | Provide the same authorization and private authentication handoff for cloud session 3. |
 | 9.6–9.7 | **Codex, with your cloud-session approval** | Approve cloud session 4 and its experiment cost ceiling and complete any private authentication. Codex runs both treatments in the same session and tears everything down only after both result sets are secured. |
@@ -512,7 +509,7 @@ RDS provides the stable managed data layer for the target architecture; it is se
   - [x] Define productive throughput as zero for every rate that fails execution, SLO, or reconciliation guardrails, even when the failed run consumed substantial CPU.
   - [x] Collect aligned downstream-process resource measurements every five seconds throughout each rate and aggregate persisted delivery outcomes and p95 latency into matching UTC intervals.
   - [x] Collect aligned EC2 and RDS CloudWatch measurements, including resolution-honest burst-credit evidence for `t3.small`.
-- [ ] Automate all three runs, evidence-preserving resets, both EC2 transitions, a two-transition comparison report, and unconditional teardown. Do not use the earlier host-local-PostgreSQL result as the `t3.small` RDS-backed baseline.
+- [x] Reframe and automate the primary result as the same 10-second `10, 25, 50, 100, 200` events/s ladder on `t3.small` and `c7i-flex.large`, one strict trial per point, stopping each machine at its first failure, followed by one compact comparison and unconditional teardown. Keep the former 180-second CloudWatch/bottleneck protocol as an optional later diagnostic study.
   - [x] Bind the applied image, verified RDS deployment, hardware catalog, frozen controls, and starting tier into one self-contained experiment definition before traffic begins; record exact driver-side load windows separately from setup and metric polling.
   - [x] Run and preserve one RDS-backed candidate rate ladder for the current hardware tier, including exact load windows and complete process, downstream, reconciliation, and CloudWatch evidence at every executed rate.
   - [x] Stop each hardware tier after fully preserving its first failed rate; do not spend time or cloud budget on higher rates outside the measured performance envelope. Start every new hardware tier again at the lowest frozen candidate, and run all six only if they all pass.
@@ -534,19 +531,18 @@ RDS provides the stable managed data layer for the target architecture; it is se
   - [x] Correct protocol v3's initial load-driver over-allocation after the 500 events/s portability checkpoint attempted to initialize 1,000 VUs and exited before traffic or summary generation. Keep the 100-VU low-rate floor, preallocate half the offered rate above it, cap growth at one VU per event/s, and report the k6 exit code when no summary exists. A local 500 events/s initialization test produced all 5,000 scheduled requests with zero driver drops; the failed AWS session was completely destroyed and passed every native absence check.
   - [x] Remove the transition-validation startup race exposed after the successful `c7i-flex.large` treatment. SSM became executable four seconds after the `m7i-flex.large` resize, before Docker had restored the API, so a one-shot inspection failed and triggered correct teardown. Follow SSM readiness with a bounded on-host Docker/API readiness gate, fail immediately on immutable-image or RDS-TLS drift, and retain sanitized timeout diagnostics.
   - [x] Remove protocol v3's 100-VU low-rate floor after the next run showed that it manufactured TCP connection fan-out: successful API p95 remained 53–163 ms and host/RDS utilization retained headroom, while connection setup intermittently reached 2–20 seconds and made every 10 events/s trial fail. Preallocate the half-rate concurrency implied by the 500 ms SLO and cap growth at one VU per event/s; use the three-trial majority, not unused VUs, to handle boundary variability.
-  - [ ] Execute both revised EC2 transitions in a newly approved cloud session while preserving the image, RDS, controls, and prior evidence.
-  - [ ] Generate the report from the completed cloud evidence, then guarantee teardown and native empty-inventory verification.
+  - [ ] Execute the revised single EC2 transition in a newly approved cloud session while preserving the image, RDS, controls, and prior evidence.
+  - [ ] Generate the short comparison from the completed cloud evidence, then guarantee teardown and native empty-inventory verification.
 
 Use the next cloud session for the revised hardware-flexibility experiment:
 
-- [ ] **You:** Explicitly authorize the revised session after reviewing all three x86_64 EC2 configurations, every other resource, region, estimated duration, cost guardrail, and teardown command.
-- [ ] Provision the synchronous API against fixed RDS on `t3.small` and run the healthy-downstream envelope with CPU-credit evidence.
+- [ ] **You:** Explicitly authorize the revised session after reviewing both x86_64 EC2 configurations, every other resource, region, estimated duration, cost guardrail, and teardown command.
+- [ ] Provision the synchronous API against fixed RDS on `t3.small` and run the short healthy-downstream ladder.
 - [ ] Preserve and reset experiment state, switch to `c7i-flex.large`, verify unchanged controls, and replay the identical envelope.
-- [ ] Preserve and reset again, switch to `m7i-flex.large`, verify unchanged controls, and replay the identical envelope.
-- [ ] Report X→Y as burstable-to-compute-optimized migration and Y→Z as compute-to-memory-optimized migration, alongside the first observed bottleneck at each tier.
+- [ ] Report whether `c7i-flex.large` passed a strictly higher short-run rate than `t3.small`; do not present it as a long-duration capacity estimate or bottleneck diagnosis.
 - [ ] Collect the complete comparison evidence, destroy the session-2 stack, and verify empty Terraform state plus zero native resource inventories.
 
-This result demonstrates rapid cloud hardware flexibility, not automatic elasticity. All three tiers have two vCPUs, so any gain must not be described as the effect of adding CPU count. The later fixed-worker-versus-autoscaled-worker experiment remains the elasticity proof. A separate evidence-backed database-resizing experiment would require its own single-variable plan and approval if RDS proves to be the constraint.
+This result demonstrates rapid cloud hardware flexibility, not automatic elasticity. Both tiers have two vCPUs, so any gain must not be described as the effect of adding CPU count. The later fixed-worker-versus-autoscaled-worker experiment remains the elasticity proof. A separate evidence-backed database-resizing experiment would require its own single-variable plan and approval if RDS proves to be the constraint.
 
 ### Stage 9.4 — Decouple downstream delivery with SQS and a worker
 

@@ -82,7 +82,6 @@ def test_committed_controls_freeze_every_non_hardware_input() -> None:
     assert controls.tier_order == (
         "t3.small",
         "c7i-flex.large",
-        "m7i-flex.large",
     )
     assert controls.application.api_process_count == 1
     assert controls.application.database_pool_size == 5
@@ -96,13 +95,11 @@ def test_committed_controls_freeze_every_non_hardware_input() -> None:
         25,
         50,
         100,
-        250,
-        500,
+        200,
     )
-    assert controls.workload.tier_duration_seconds == 180
+    assert controls.workload.tier_duration_seconds == 10
+    assert controls.workload.trials_per_rate == 1
     assert controls.workload.runtime_sample_interval_seconds == 5
-    assert controls.workload.ec2_rds_cloudwatch_period_seconds == 60
-    assert controls.workload.cpu_credit_cloudwatch_period_seconds == 300
     assert controls.workload.post_load_settle_timeout_seconds == 30
     assert controls.workload.post_load_stable_window_seconds == 2
 

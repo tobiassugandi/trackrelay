@@ -7,6 +7,10 @@ from decimal import Decimal
 from signal import SIGTERM, getsignal, signal
 from typing import NoReturn
 
+from trackrelay.aws_flexibility_report import (
+    HardwareFlexibilityReport,
+    generate_hardware_flexibility_report,
+)
 from trackrelay.aws_rehost import AwsRehostError
 from trackrelay.aws_session import (
     AwsSession,
@@ -24,15 +28,14 @@ from trackrelay.aws_vertical_scaling import (
     run_current_vertical_scaling_tier,
     transition_to_next_vertical_scaling_tier,
 )
-from trackrelay.aws_vertical_scaling_report import (
-    VerticalScalingComparisonReport,
-    generate_vertical_scaling_report,
+from trackrelay.experiments.vertical_scaling import (
+    ALLOWED_INSTANCE_TYPES,
+    PRIMARY_FLEXIBILITY_INSTANCE_TYPES,
 )
-from trackrelay.experiments.vertical_scaling import ALLOWED_INSTANCE_TYPES
 
-EXPECTED_TIER_ORDER = ",".join(ALLOWED_INSTANCE_TYPES)
+EXPECTED_TIER_ORDER = ",".join(PRIMARY_FLEXIBILITY_INSTANCE_TYPES)
 SessionAction = Callable[..., object]
-ReportAction = Callable[..., VerticalScalingComparisonReport]
+ReportAction = Callable[..., HardwareFlexibilityReport]
 
 
 class VerticalScalingSessionError(RuntimeError):
@@ -134,10 +137,10 @@ def run_vertical_scaling_session(
     preparer: SessionAction = prepare_vertical_scaling_experiment,
     tier_runner: SessionAction = run_current_vertical_scaling_tier,
     transition_runner: SessionAction = transition_to_next_vertical_scaling_tier,
-    reporter: ReportAction = generate_vertical_scaling_report,
+    reporter: ReportAction = generate_hardware_flexibility_report,
     destroyer: SessionAction = destroy_session,
     teardown_verifier: SessionAction = verify_destroyed,
-) -> VerticalScalingComparisonReport:
+) -> HardwareFlexibilityReport:
     """Run all treatments; after preflight, cleanup is never conditional."""
     validate_session_approval(
         session,
@@ -150,12 +153,12 @@ def run_vertical_scaling_session(
     )
 
     current_session = session
-    report: VerticalScalingComparisonReport | None = None
+    report: HardwareFlexibilityReport | None = None
     workflow_error: BaseException | None = None
     try:
         preparer(current_session)
         tier_runner(current_session)
-        for target_instance_type in ALLOWED_INSTANCE_TYPES[1:]:
+        for target_instance_type in PRIMARY_FLEXIBILITY_INSTANCE_TYPES[1:]:
             transition_runner(
                 current_session,
                 target_instance_type=target_instance_type,
@@ -222,7 +225,7 @@ def build_parser() -> ArgumentParser:
     return parser
 
 
-def run_from_arguments(arguments: Namespace) -> VerticalScalingComparisonReport:
+def run_from_arguments(arguments: Namespace) -> HardwareFlexibilityReport:
     """Build the shared session object and execute the armed workflow."""
     return run_vertical_scaling_session(
         session_from_arguments(arguments),

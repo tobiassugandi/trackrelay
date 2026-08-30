@@ -1,26 +1,23 @@
 # Stage 9.3 AWS hardware-flexibility runbook
 
-This is the operator-facing procedure for running TrackRelay's complete
-RDS-backed synchronous hardware-flexibility experiment. It is intentionally
-separate from the implementation details in
-`docs/aws-vertical-scaling-experiment.md`.
+This is the operator-facing procedure for TrackRelay's short, RDS-backed
+hardware-flexibility demonstration. The first priority is one observable result,
+not a detailed bottleneck study.
 
-The experiment uses the same ordered six-rate candidate ladder on:
+The same five-rate ladder runs on two machines:
 
 ```text
-t3.small -> c7i-flex.large -> m7i-flex.large
+t3.small -> c7i-flex.large
 ```
 
-All three types are x86_64 and expose two vCPUs. Only the EC2 instance type changes. The application revision and image, one API
+Both types are x86_64 and expose two vCPUs. Only the EC2 instance type changes. The application revision and image, one API
 process, connection pool, private RDS database, downstream simulator, load
 driver, rates, duration, and pass/fail rules remain fixed.
 
-Each tier receives the same 30-second warm-up, clean reset, and 60-second quiet
-period. Each candidate is then run three times for 180 seconds and classified by
-a two-of-three majority. State is reset after every trial, and the runner never
-offers a higher rate after a majority-confirmed failure. This repetition is
-intentional: a single small number of dropped iterations is not enough to rank
-the hardware tiers.
+Each rate runs once for 10 seconds in this order: `10, 25, 50, 100, 200` events/s.
+State is reset after each point. A machine stops at its first strict failure;
+the next machine restarts at 10 events/s. The result succeeds only when
+`c7i-flex.large` passes a higher offered rate than `t3.small`.
 
 The fixed-rate driver preallocates half the offered rate, which is the
 concurrency implied by the 500 ms p95 SLO, and may grow to one VU per event/s.
@@ -66,7 +63,7 @@ trackrelay_public_ipv4="$(
 )"
 export TRACKRELAY_RUN_API_CIDR="${trackrelay_public_ipv4}/32"
 
-export TRACKRELAY_RUN_TIER_ORDER='t3.small,c7i-flex.large,m7i-flex.large'
+export TRACKRELAY_RUN_TIER_ORDER='t3.small,c7i-flex.large'
 test ! -e "results/aws-sessions/$TRACKRELAY_RUN_SESSION_ID"
 printf 'session: %s\ningress: %s\ntiers: %s\n' \
   "$TRACKRELAY_RUN_SESSION_ID" \
@@ -102,7 +99,7 @@ export TRACKRELAY_RUN_API_CIDR="$(
   jq -er '.api_ingress_cidr' "$TRACKRELAY_RUN_SESSION_FILE"
 )"
 export TRACKRELAY_RUN_COST_CEILING_USD='REVIEWED_APPROVAL_CEILING'
-export TRACKRELAY_RUN_TIER_ORDER='t3.small,c7i-flex.large,m7i-flex.large'
+export TRACKRELAY_RUN_TIER_ORDER='t3.small,c7i-flex.large'
 ```
 
 Verify that the selected plan is still the approved, unmodified plan:
@@ -291,7 +288,7 @@ Do not continue unless all four scenarios pass and the session status is
 
 ## 6. Hand ownership to the failure-safe experiment runner
 
-This is the long-running experiment command:
+Run the short two-machine experiment:
 
 ```shell
 make aws-scaling-session \
@@ -307,20 +304,16 @@ make aws-scaling-session \
 The runner performs, in order:
 
 1. Freeze the exact image, RDS, workload, hardware, and guardrail controls.
-2. Warm and reset `t3.small`, then run three 180-second trials per candidate,
-   stopping after the first fully collected majority-confirmed failed point.
-3. Preserve evidence, reset synthetic state, and validate the in-place move to
+2. Run `10, 25, 50, 100, 200` events/s for 10 seconds each on `t3.small`,
+   resetting after each point and stopping immediately after the first failure.
+3. Preserve the evidence and validate the in-place move to
    `c7i-flex.large`.
-4. Warm, reset, and replay the candidate ladder from its lowest rate on
-   `c7i-flex.large`, again using three trials and stopping after a confirmed
-   failure.
-5. Preserve evidence, reset state, and validate the in-place move to
-   `m7i-flex.large`.
-6. Warm, reset, and replay the candidate ladder from its lowest rate on
-   `m7i-flex.large`, stopping after a confirmed failure.
-7. Generate the two-transition comparison and bottleneck report.
-8. Destroy the complete Terraform stack.
-9. Verify empty Terraform state, the generic tag inventory, and all native
+4. Replay the identical short ladder on `c7i-flex.large`, starting at 10/s and
+   again stopping after the first failure.
+5. Generate a compact report stating whether the stronger machine passed a
+   higher rate.
+6. Destroy the complete Terraform stack.
+7. Verify empty Terraform state, the generic tag inventory, and all native
    service inventories.
 
 During each transition, an SSM `Online` response is followed by a bounded
@@ -329,7 +322,7 @@ API readiness. This absorbs normal stop/start ordering without using a blind
 fixed delay. An image or TLS mismatch fails immediately; container/API startup
 gets at most 75 seconds.
 
-For every trial, it requires:
+For every rate point, it requires:
 
 - Exact k6 process boundaries and the complete k6 summary.
 - A detached private sampler ready before load begins.
@@ -349,18 +342,19 @@ For every trial, it requires:
   and terminal delivery statuses remain in the per-rate evidence directory.
 - Proof that the run-specific sampler container was removed.
 - Complete database and downstream reconciliation.
-- EC2 and RDS CloudWatch evidence with continuous native-bucket coverage of the
-  exact load window. Independently delayed metric series keep polling until
-  their trailing buckets arrive; an uncovered leading, interior, or trailing
-  interval is never accepted as complete.
 - A valid pass/fail interpretation; failed overload is never counted as useful
   throughput merely because it consumed CPU.
-- A successful post-trial synthetic-state reset. The saved rate assessment must
-  contain exactly three unique run identities and a two-of-three outcome.
+- A successful post-trial synthetic-state reset.
 
-Long quiet periods are expected while CloudWatch metrics publish, EC2 changes
-state, SSM comes back online, or RDS is being destroyed. Do not start a second
-controller during those waits.
+This primary run does not wait for CloudWatch metrics and does not claim a
+long-duration capacity envelope or a bottleneck diagnosis. The earlier
+180-second, repeated protocol is deferred as an optional follow-up after the
+simple hardware-flexibility result exists.
+
+The terminal may still show k6 `level=error` for `checks` or
+`dropped_iterations` at the first failing rate. That is a measured application
+result when the enclosing runner continues to reconciliation. By contrast,
+`AWS vertical-scaling session failed` means the workflow itself failed.
 
 ## 7. Verify the terminal result
 

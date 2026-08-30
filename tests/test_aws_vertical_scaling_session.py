@@ -117,11 +117,9 @@ def test_complete_session_runs_in_order_then_destroys_and_verifies(
         ("tier", "t3.small"),
         ("transition", "t3.small->c7i-flex.large"),
         ("tier", "c7i-flex.large"),
-        ("transition", "c7i-flex.large->m7i-flex.large"),
-        ("tier", "m7i-flex.large"),
-        ("report", "m7i-flex.large"),
-        ("destroy", "m7i-flex.large"),
-        ("verify", "m7i-flex.large"),
+        ("report", "c7i-flex.large"),
+        ("destroy", "c7i-flex.large"),
+        ("verify", "c7i-flex.large"),
     ]
 
 
@@ -237,7 +235,7 @@ def test_destroy_failure_does_not_skip_native_verification(tmp_path: Path) -> No
             teardown_verifier=verifier,
         )
 
-    assert verification_calls == ["m7i-flex.large"]
+    assert verification_calls == ["c7i-flex.large"]
     assert len(failure.value.cleanup_errors) == 1
     assert failure.value.workflow_error is None
 

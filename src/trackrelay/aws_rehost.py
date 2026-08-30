@@ -311,7 +311,7 @@ def build_rds_ssm_payload(
     database_identifier: str,
     smoke_suffix: str,
 ) -> dict[str, list[str]]:
-    """Build an RDS switch payload without its endpoint or credential."""
+    """Build an RDS deployment payload without its endpoint or credential."""
     files.validate()
     if RDS_IDENTIFIER_PATTERN.fullmatch(database_identifier) is None:
         raise AwsRehostError("invalid RDS database identifier")
@@ -331,6 +331,7 @@ def build_rds_ssm_payload(
             "chmod 0700 /opt/trackrelay/install-rds.sh",
             f"TRACKRELAY_API_IMAGE='{image_reference}' \\",
             f"TRACKRELAY_AWS_REGION='{region}' \\",
+            f"TRACKRELAY_POSTGRES_IMAGE='{POSTGRES_IMAGE}' \\",
             f"TRACKRELAY_RDS_IDENTIFIER='{database_identifier}' \\",
             f"TRACKRELAY_SMOKE_SUFFIX='{smoke_suffix}' \\",
             "/opt/trackrelay/install-rds.sh",
@@ -545,14 +546,15 @@ def deploy_rds_rehost(
     sleeper: Sleeper = sleep,
     now: datetime | None = None,
 ) -> None:
-    """Switch the deployed rehost to private RDS and smoke-test persistence."""
+    """Deploy directly against private RDS and smoke-test persistence."""
     manifest, revision = require_applied_clean_revision(session, runner=runner)
-    required_status = (
-        "rehost_deployed" if canary_only else "rehost_workload_collected"
-    )
-    if manifest.get("status") != required_status:
+    if manifest.get("status") not in {
+        "image_published",
+        "rehost_deployed",
+        "rehost_workload_collected",
+    }:
         raise AwsRehostError(
-            "the required rehost checkpoint is incomplete before RDS"
+            "the approved image must be published before RDS deployment"
         )
     image_reference = deployed_image_reference(
         session,
@@ -668,7 +670,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
                 canary_only=arguments.command == "deploy-rds-canary",
             )
-            print("switched the synchronous rehost to private RDS")
+            print("deployed the synchronous application against private RDS")
         elif arguments.command == "correctness-rds":
             from trackrelay.aws_rds_correctness import collect_rds_correctness
 

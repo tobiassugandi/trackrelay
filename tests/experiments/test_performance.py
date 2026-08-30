@@ -204,15 +204,12 @@ def test_k6_command_mounts_the_manifest_and_run_directory() -> None:
     assert command[-2:] == ("run", "/scripts/fixed-rate.js")
 
 
-def test_fixed_rate_driver_preallocates_slo_derived_concurrency() -> None:
+def test_fixed_rate_driver_preallocates_every_permitted_vu() -> None:
     script = (
         Path(__file__).resolve().parents[2] / "load" / "fixed-rate.js"
     ).read_text(encoding="utf-8")
 
-    assert (
-        "const preAllocatedVUs = Math.max(1, Math.ceil(requestRate / 2));"
-        in script
-    )
+    assert "const preAllocatedVUs = requestRate;" in script
     assert "const maxVUs = requestRate;" in script
     assert "preAllocatedVUs," in script
     assert "maxVUs," in script

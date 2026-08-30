@@ -1,54 +1,49 @@
 # Stage 9.3 AWS hardware-flexibility runbook
 
-This is the operator-facing procedure for TrackRelay's short, RDS-backed
-hardware-flexibility demonstration. The first priority is one observable result,
-not a detailed bottleneck study.
-
-The same five-rate ladder runs on two machines:
+This procedure runs one short RDS-backed comparison:
 
 ```text
 t3.small -> c7i-flex.large
 ```
 
-Both types are x86_64 and expose two vCPUs. Only the EC2 instance type changes. The application revision and image, one API
-process, connection pool, private RDS database, downstream simulator, load
-driver, rates, duration, and pass/fail rules remain fixed.
+The application, image digest, API process count, database pool, RDS instance,
+downstream simulator, load driver, and pass rules stay fixed. Each machine gets
+`10, 25, 50, 100, 200` events/s for ten seconds per point and stops at its first
+failure. The result asks only whether `c7i-flex.large` passes a higher offered
+rate. It is a short cloud hardware-flexibility demonstration, not an autoscaling
+or long-duration capacity claim.
 
-Each rate runs once for 10 seconds in this order: `10, 25, 50, 100, 200` events/s.
-State is reset after each point. A machine stops at its first strict failure;
-the next machine restarts at 10 events/s. The result succeeds only when
-`c7i-flex.large` passes a higher offered rate than `t3.small`.
+k6 initializes one VU per offered event/s before each timed point. Thus the
+largest point initializes 200 VUs, and k6 never grows the VU pool during the
+measurement.
 
-The fixed-rate driver preallocates half the offered rate, which is the
-concurrency implied by the 500 ms p95 SLO, and may grow to one VU per event/s.
-This avoids both unnecessary low-rate TCP connection fan-out and asking local
-Docker to construct 1,000 VUs before the 500 events/s overload checkpoint. A k6
-process that exits before writing its summary is a driver failure, never an
-application rate result.
+## Operator workflow
 
-## Important ownership rule
+The normal workflow has only three commands:
 
-Before `aws-scaling-session` starts, you are responsible for running setup or
-teardown commands. Once `aws-scaling-session` starts, it becomes the only
-controller: do not run another scaling, transition, report, destroy, or verify
-command in parallel.
+```text
+make aws-plan
+      ↓ explicit approval
+make aws-up
+      ↓
+make aws-scaling-session
+```
 
-The armed runner attempts destroy and native verification after success,
-ordinary failure, `Ctrl-C`, or `SIGTERM`. It cannot recover from destruction of
-the local machine, loss of Terraform state, or `SIGKILL`; keep the workspace and
-session evidence on durable storage.
+Do not run `aws-rehost-deploy`, `aws-rehost-workload`, `aws-rds-deploy`, or
+`aws-rds-correctness` between these commands. Those remain useful historical
+Stage 9.1/9.2 tools, but their workload changes the T3 CPU-credit starting
+condition and is not Stage 9.3 preparation.
 
-## 1. Set the session inputs
+`aws-up` is kept separate as the explicit spending boundary. After
+`aws-scaling-session` validates its approval, that process owns image
+publication, direct RDS deployment, correctness, clean-state preparation,
+measurement, reporting, teardown, and native absence verification. Do not run a
+second controller in parallel.
 
-Run from the repository root with a clean worktree. There are two distinct
-modes. Do not generate a new session ID when executing a plan that already
-exists.
+## 1. Create a fresh session identity
 
-### Mode A — create a fresh proposal
-
-Generate the UTC session timestamp instead of handwriting it. Obtain the public
-IPv4 from the same machine that will run k6, validate it with Python's standard
-library, and convert it to the single-address CIDR accepted by Terraform:
+Run from the repository root with a clean worktree. Generate the UTC identity
+and derive the public `/32` of the machine that will run k6:
 
 ```shell
 export TRACKRELAY_RUN_SESSION_ID="cloud-session-2-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -62,8 +57,8 @@ trackrelay_public_ipv4="$(
     "$trackrelay_public_ipv4"
 )"
 export TRACKRELAY_RUN_API_CIDR="${trackrelay_public_ipv4}/32"
-
 export TRACKRELAY_RUN_TIER_ORDER='t3.small,c7i-flex.large'
+
 test ! -e "results/aws-sessions/$TRACKRELAY_RUN_SESSION_ID"
 printf 'session: %s\ningress: %s\ntiers: %s\n' \
   "$TRACKRELAY_RUN_SESSION_ID" \
@@ -71,27 +66,14 @@ printf 'session: %s\ningress: %s\ntiers: %s\n' \
   "$TRACKRELAY_RUN_TIER_ORDER"
 ```
 
-The `test ! -e` guard prevents accidental session reuse. Do not set the cost
-ceiling yet: it is a human authorization decision made after the saved plan and
-cost estimate have been reviewed.
+Do not choose a cost ceiling until the saved plan and estimated session cost
+have been reviewed.
 
-Continue through the preflight below and run `make aws-plan` in section 2. That
-command creates `session.json` and `terraform.tfplan`. The human-readable
-`proposal.md` is then written beside them during plan and cost review; it is not
-created by Terraform itself.
-
-### Mode B — execute an approved plan that already exists
-
-Select the exact approved session record deliberately. Derive its session ID
-and CIDR from that record rather than regenerating either value. The cost
-ceiling must be copied from the explicit approval because treating a file as
-authority for its own spending limit would make the approval check circular.
-
-Replace `APPROVED_SESSION_ID` once with the exact ID from the approval:
+If an approved plan already exists, recover its values instead of generating a
+new identity:
 
 ```shell
 export TRACKRELAY_RUN_SESSION_FILE='results/aws-sessions/APPROVED_SESSION_ID/session.json'
-
 export TRACKRELAY_RUN_SESSION_ID="$(
   jq -er '.session_id' "$TRACKRELAY_RUN_SESSION_FILE"
 )"
@@ -102,7 +84,7 @@ export TRACKRELAY_RUN_COST_CEILING_USD='REVIEWED_APPROVAL_CEILING'
 export TRACKRELAY_RUN_TIER_ORDER='t3.small,c7i-flex.large'
 ```
 
-Verify that the selected plan is still the approved, unmodified plan:
+For an existing plan, verify its status, revision, and digest:
 
 ```shell
 test "$(jq -er '.status' "$TRACKRELAY_RUN_SESSION_FILE")" = 'planned'
@@ -118,20 +100,9 @@ trackrelay_actual_plan_sha="$(
     awk '{print $1}'
 )"
 test "$trackrelay_actual_plan_sha" = "$trackrelay_expected_plan_sha"
-
-printf 'session: %s\ningress: %s\nceiling: USD %s\ntiers: %s\nplan SHA-256: %s\n' \
-  "$TRACKRELAY_RUN_SESSION_ID" \
-  "$TRACKRELAY_RUN_API_CIDR" \
-  "$TRACKRELAY_RUN_COST_CEILING_USD" \
-  "$TRACKRELAY_RUN_TIER_ORDER" \
-  "$trackrelay_actual_plan_sha"
 ```
 
-These task-specific variables deliberately avoid ambient `AWS_PROFILE` and
-Terraform variables. The Makefile supplies the project profile
-`trackrelay-admin` and region `ap-southeast-3` explicitly.
-
-Confirm the revision and toolchain:
+## 2. Run local preflight
 
 ```shell
 git status --short
@@ -142,34 +113,19 @@ make infra-check
 make test
 ```
 
-Confirm that the account deliberately remains on the Free plan and that its
-credit balance is visible before proposing resources:
-
-```shell
-aws \
-  --profile trackrelay-admin \
-  --region us-east-1 \
-  freetier get-account-plan-state \
-  --query '{plan:accountPlanType,status:accountPlanStatus,remainingCredits:accountPlanRemainingCredits}' \
-  --output table
-```
-
-This revised ladder avoids the paid-plan-only C8g types. Regional
-`DescribeInstanceTypes` output alone is not sufficient: architecture must also
-match across every in-place transition, which is why the run begins on x86_64
-`t3.small` instead of ARM64 `t4g.small`.
-
-Expected checkpoints:
+Required checkpoints:
 
 - Git status is empty.
-- AWS preflight reports `trackrelay-admin`, Jakarta, and no resource changes.
-- Terraform validation and all Terraform tests pass.
-- The ordinary test suite passes.
+- The AWS identity is `trackrelay-admin` in `ap-southeast-3`.
+- Terraform formatting, validation, and tests pass.
+- The Python test suite passes.
 
-If you are in Mode A, continue to section 2. If you are in Mode B, the approved
-plan already exists: **skip section 2 and continue directly to section 3**.
+The Makefile passes the profile and region explicitly; no Codex-specific or
+ambient AWS configuration is required.
 
-## 2. Create—but do not apply—the plan (Mode A only)
+## 3. Save and review the plan
+
+Skip this section only when executing an existing approved plan.
 
 ```shell
 make aws-plan \
@@ -178,25 +134,25 @@ make aws-plan \
   API_INGRESS_CIDR="$TRACKRELAY_RUN_API_CIDR"
 ```
 
-This contacts read-only AWS data sources and writes a speculative saved plan; it
-does not create resources. Inspect:
+Inspect the saved plan:
 
 ```shell
 terraform -chdir=infra/terraform show \
   "../../results/aws-sessions/$TRACKRELAY_RUN_SESSION_ID/terraform.tfplan"
-
-sed -n '1,240p' \
-  "results/aws-sessions/$TRACKRELAY_RUN_SESSION_ID/proposal.md"
 ```
 
-Do not apply until the exact session ID, plan digest, resource list, frozen tier
-order, cost ceiling, and unconditional teardown have explicit approval. Any Git
-commit after planning invalidates the plan automatically; create a new session
-and plan instead of trying to repair the old one.
+Review the exact session ID, Git revision, plan digest, Jakarta resource list,
+`t3.small,c7i-flex.large` order, estimated duration, cost ceiling, and
+unconditional teardown. Record the approved ceiling only after that review:
 
-## 3. Apply only the approved saved plan
+```shell
+export TRACKRELAY_RUN_COST_CEILING_USD='REVIEWED_APPROVAL_CEILING'
+```
 
-Record the UTC start time and start the approved duration timer. Then run:
+Any commit after planning invalidates the saved plan. Create a new session and
+plan rather than attempting to repair it.
+
+## 4. Apply the approved infrastructure
 
 ```shell
 make aws-up \
@@ -207,88 +163,12 @@ make aws-up \
   API_INGRESS_CIDR="$TRACKRELAY_RUN_API_CIDR"
 ```
 
-Notes:
+This applies the saved plan, which creates the disposable EC2 host, private RDS
+database, ECR repository, and networking. RDS is normally the longest quiet
+step. If apply fails, use manual teardown below. If it succeeds, proceed
+directly to the armed session—do not run a preliminary workload.
 
-- The command applies the saved plan file, not a newly generated plan.
-- RDS creation is normally the longest quiet provisioning step.
-- Detailed provider output is saved privately under the session directory.
-- If this or any following setup command fails before the armed runner starts,
-  immediately use the manual teardown procedure below.
-
-## 4. Publish and smoke-test the synchronous deployment
-
-Publish the exact committed Linux AMD64 image:
-
-```shell
-make aws-rehost-publish \
-  SESSION_ID="$TRACKRELAY_RUN_SESSION_ID" \
-  REHOST_INSTANCE_TYPE=t3.small \
-  API_INGRESS_CIDR="$TRACKRELAY_RUN_API_CIDR"
-```
-
-Deploy the digest-pinned image through SSM and run the small on-host smoke test:
-
-```shell
-make aws-rehost-deploy \
-  SESSION_ID="$TRACKRELAY_RUN_SESSION_ID" \
-  REHOST_INSTANCE_TYPE=t3.small \
-  API_INGRESS_CIDR="$TRACKRELAY_RUN_API_CIDR"
-```
-
-Expected checkpoints:
-
-- The session manifest contains a Linux AMD64 image digest.
-- The deployment uses that digest, not a mutable tag.
-- Migrations, API readiness, downstream readiness, ingestion, and persistence
-  pass without SSH access.
-
-## 5. Preserve the portability checkpoint and switch to RDS
-
-Run the frozen short host-local portability workload required by the normal
-Stage 9.3 state machine:
-
-```shell
-make aws-rehost-workload \
-  SESSION_ID="$TRACKRELAY_RUN_SESSION_ID" \
-  REHOST_INSTANCE_TYPE=t3.small \
-  API_INGRESS_CIDR="$TRACKRELAY_RUN_API_CIDR"
-```
-
-This is setup evidence, not the RDS-backed Stage 9.3 baseline. It runs six short
-rate points and saves each reconciliation result under `rehost-workload/`.
-At rates above the small host's capacity, k6 may print `level=error` because the
-`dropped_iterations` threshold was crossed. That is an expected measured
-overload result. The checkpoint itself passes only when the enclosing
-`make aws-rehost-workload` command finishes successfully and advances the
-session; an `AWS rehost command failed` message is not an expected k6 result.
-
-Switch the same deployment to the already provisioned private RDS instance:
-
-```shell
-make aws-rds-deploy \
-  SESSION_ID="$TRACKRELAY_RUN_SESSION_ID" \
-  REHOST_INSTANCE_TYPE=t3.small \
-  API_INGRESS_CIDR="$TRACKRELAY_RUN_API_CIDR"
-```
-
-Do not use `aws-rds-deploy-canary` here. That shortcut exists only for a
-proposal explicitly limited to the non-publishable sampler canary.
-
-Run the four RDS correctness scenarios:
-
-```shell
-make aws-rds-correctness \
-  SESSION_ID="$TRACKRELAY_RUN_SESSION_ID" \
-  REHOST_INSTANCE_TYPE=t3.small \
-  API_INGRESS_CIDR="$TRACKRELAY_RUN_API_CIDR"
-```
-
-Do not continue unless all four scenarios pass and the session status is
-`rds_correctness_collected`.
-
-## 6. Hand ownership to the failure-safe experiment runner
-
-Run the short two-machine experiment:
+## 5. Run the complete failure-safe session
 
 ```shell
 make aws-scaling-session \
@@ -301,64 +181,42 @@ make aws-scaling-session \
   API_INGRESS_CIDR="$TRACKRELAY_RUN_API_CIDR"
 ```
 
-The runner performs, in order:
+The runner performs these steps internally:
 
-1. Freeze the exact image, RDS, workload, hardware, and guardrail controls.
-2. Run `10, 25, 50, 100, 200` events/s for 10 seconds each on `t3.small`,
-   resetting after each point and stopping immediately after the first failure.
-3. Preserve the evidence and validate the in-place move to
-   `c7i-flex.large`.
-4. Replay the identical short ladder on `c7i-flex.large`, starting at 10/s and
-   again stopping after the first failure.
-5. Generate a compact report stating whether the stronger machine passed a
-   higher rate.
-6. Destroy the complete Terraform stack.
-7. Verify empty Terraform state, the generic tag inventory, and all native
-   service inventories.
+1. Publish the approved Git revision as a digest-pinned Linux AMD64 image.
+2. Install TrackRelay directly against private RDS on the fresh EC2 host. It
+   does not deploy or benchmark host-local PostgreSQL.
+3. Run all four RDS correctness scenarios.
+4. Reset the generated database rows and downstream receipts, read them back as
+   empty, and save reset evidence.
+5. Verify that T3 is in Standard credit mode and wait for a recent CloudWatch
+   `CPUCreditBalance` datapoint of at least `1.0` credit.
+6. Freeze the experiment definition and run the short T3 ladder, resetting
+   after every point and stopping at its first failure.
+7. Reset again, apply and validate the in-place move to `c7i-flex.large`, then
+   run the identical ladder from 10/s.
+8. Generate the compact comparison report.
+9. Destroy the entire stack and verify Terraform, tagged, and native AWS
+   inventories.
 
-During each transition, an SSM `Online` response is followed by a bounded
-on-host gate for Docker, the digest-pinned container, RDS TLS configuration, and
-API readiness. This absorbs normal stop/start ordering without using a blind
-fixed delay. An image or TLS mismatch fails immediately; container/API startup
-gets at most 75 seconds.
+T3 Standard receives no launch credits. It earns 24 credits/hour while running,
+and AWS publishes `CPUCreditBalance` at five-minute resolution. Consequently,
+the credit gate can be a quiet several-minute wait. It is intentional: a
+missing, stale, depleted, or Unlimited-mode reading aborts before traffic rather
+than producing another ambiguous baseline.
 
-For every rate point, it requires:
+At a first failing rate, k6 can print `level=error` for `checks` or
+`dropped_iterations`. That is measured overload when the enclosing runner
+continues through reconciliation. `AWS vertical-scaling session failed` means
+the workflow itself failed and should be diagnosed from the saved session
+evidence.
 
-- Exact k6 process boundaries and the complete k6 summary.
-- A detached private sampler ready before load begins.
-- A completed controller stop handshake immediately after k6 exits, followed
-  by one final process-observation attempt; the duration-plus-150-second timeout is
-  only an orphan-safety bound.
-- Timestamped API and downstream observation attempts containing the whole
-  load window. Individual overload-time gaps are retained explicitly instead
-  of crashing the observer; diagnostic calculations use successful snapshots
-  and remain fail-closed when those snapshots are insufficient.
-- Sanitized driver-side runtime-observation gaps. A strict pre-load sample must
-  pass, but a one-second metrics timeout during or after overload cannot discard
-  the completed k6 result or prevent reconciliation.
-- A bounded post-load SSM recovery probe before reconciliation. Collection is
-  retried only after `Undeliverable` or `DeliveryTimedOut` with response code
-  -1; any command that began execution is never replayed. All command attempts
-  and terminal delivery statuses remain in the per-rate evidence directory.
-- Proof that the run-specific sampler container was removed.
-- Complete database and downstream reconciliation.
-- A valid pass/fail interpretation; failed overload is never counted as useful
-  throughput merely because it consumed CPU.
-- A successful post-trial synthetic-state reset.
+The session attempts destroy and native verification after publication,
+deployment, correctness, measurement, reporting, ordinary failures, `Ctrl-C`,
+and `SIGTERM`. `SIGKILL`, destruction of the controller machine, or loss of
+Terraform state cannot be caught; use manual recovery in those cases.
 
-This primary run does not wait for CloudWatch metrics and does not claim a
-long-duration capacity envelope or a bottleneck diagnosis. The earlier
-180-second, repeated protocol is deferred as an optional follow-up after the
-simple hardware-flexibility result exists.
-
-The terminal may still show k6 `level=error` for `checks` or
-`dropped_iterations` at the first failing rate. That is a measured application
-result when the enclosing runner continues to reconciliation. By contrast,
-`AWS vertical-scaling session failed` means the workflow itself failed.
-
-## 7. Verify the terminal result
-
-After the command returns, inspect compact, non-secret evidence:
+## 6. Verify the terminal result
 
 ```shell
 uv run --locked python - <<'PY'
@@ -369,10 +227,7 @@ from pathlib import Path
 root = Path("results/aws-sessions") / os.environ["TRACKRELAY_RUN_SESSION_ID"]
 manifest = json.loads((root / "session.json").read_text())
 print("session status:", manifest["status"])
-print(
-    "report:",
-    manifest.get("vertical_scaling", {}).get("report"),
-)
+print("report:", manifest.get("vertical_scaling", {}).get("report"))
 native = json.loads(
     (root / "aws-native-inventory-after-destroy.json").read_text()
 )
@@ -380,27 +235,24 @@ print("nonzero native inventory:", {k: v for k, v in native.items() if v})
 PY
 ```
 
-Required terminal state:
+Required final state:
 
 - `session status: teardown_verified`
-- A saved Stage 9.3 comparison report
+- A saved Stage 9.3 report
 - Empty Terraform state
 - No nonzero native inventory count
 
-Raw experiment evidence lives under:
+Private raw evidence is retained under:
 
 ```text
 results/aws-sessions/<session ID>/vertical-scaling/
 ```
 
-This directory is intentionally ignored by Git because it can contain private
-operational evidence. The final reviewed, portable result should be copied into
-the repository only through a separate, deliberate reporting step.
-
 ## Manual teardown and recovery
 
-Use this immediately if setup fails before `aws-scaling-session` starts, or if
-the runner is lost because the local process or machine disappears:
+Use this if apply fails, the armed runner cannot start, or its local process is
+lost. Read the journaled instance type and pending transition from
+`session.json`; do not guess after a resize.
 
 ```shell
 make aws-down \
@@ -414,22 +266,20 @@ make aws-verify-down \
   API_INGRESS_CIDR="$TRACKRELAY_RUN_API_CIDR"
 ```
 
-Read `rehost_instance_type` and any pending transition target from the session's
-`session.json`; do not guess the cleanup tier. If destroy fails, still run
-verification, preserve both errors, diagnose the exact remaining resource, and
-retry complete destroy. Do not use targeted destroy as the normal recovery.
+If destroy fails, still run verification, preserve both errors, diagnose the
+specific remaining resource, and retry the complete destroy. Targeted destroy
+is not the normal recovery path.
 
-## What not to do
+## Do not
 
-- Do not reuse a prior session ID or saved plan.
-- Do not run with a dirty worktree or a different Git revision.
-- Do not broaden API ingress beyond the approved `/32`.
-- Do not use ambient Codex-specific environment configuration.
-- Do not resize RDS, change worker counts, tune the pool, or alter the downstream
-  limit during the experiment.
-- Do not interpret host-local portability evidence as the RDS-backed baseline.
-- Do not turn a diagnostic canary into a publishable rate point.
-- Do not leave the stack alive for interactive analysis after the runner ends.
+- Reuse a prior session ID or saved plan.
+- Run from a dirty or different Git revision.
+- Broaden ingress beyond the approved `/32`.
+- Run any host-local portability workload before Stage 9.3.
+- Resize RDS, alter process/pool settings, or change downstream capacity.
+- Run another lifecycle command while the armed session owns the stack.
+- Present the short result as autoscaling or a long-duration capacity limit.
+- Leave the stack alive for interactive analysis after the session.
 
 See also:
 

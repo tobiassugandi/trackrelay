@@ -55,28 +55,45 @@ Each machine receives the same increasing ladder:
 ```
 
 Each point runs once for 10 seconds. A fresh run identity is used, and synthetic
-database/downstream state is reset after the point. The machine stops immediately
-after its first failed point. The stronger machine always restarts at 10/s; it
-does not inherit the weaker machine's starting boundary.
+database/downstream state is reset before the first machine, after every point,
+and before the hardware transition. The machine stops immediately after its
+first failed point. The stronger machine always restarts at 10/s; it does not
+inherit the weaker machine's starting boundary.
 
 One trial is sufficient for this first demonstration because the aim is to find
 an obvious separation quickly, not publish a precise capacity estimate. The
 report must call it a short-run result.
 
-The k6 driver preallocates:
+The k6 driver preallocates and caps the point at:
 
 ```text
-max(1, ceil(offered rate / 2))
+offered rate VUs
 ```
 
-and may grow to at most one VU per offered event/s. The removed 100-VU floor was
-counterproductive at 10 events/s: it created unnecessary connection fan-out and
-was associated with intermittent multi-second connection setup and dial
-timeouts even while successful API latency and server utilization had headroom.
+All permitted VUs therefore exist before the timed interval, and no VU growth
+occurs during the measurement. The largest frozen point uses only 200 VUs. This
+keeps dynamic allocation out of the comparison without recreating the removed
+100-VU low-rate floor or the failed 1,000-VU driver configuration.
 
-That fix reduces the artificial pressure; it does not redefine success. A real
+That allocation reduces driver ambiguity; it does not redefine success. A real
 `dial: i/o timeout` means a request never reached TrackRelay, so that rate still
 fails the strict experiment.
+
+## Clean starting condition
+
+The experiment runner begins immediately after the approved Terraform apply. It
+publishes the image, installs TrackRelay directly against private RDS, runs the
+four correctness scenarios, and then proves that their database rows and
+downstream receipts were removed. It never runs the historical host-local
+PostgreSQL workload before the comparison.
+
+The economical machine is deliberately configured as T3 Standard. T3 receives
+no launch credits, so the runner does not treat “fresh instance” as proof of
+burst capacity. Before traffic, it requires a recent CloudWatch
+`CPUCreditBalance` observation of at least 1.0 credit and saves that observation
+with the experiment. A missing, stale, lower, or Unlimited-mode value aborts
+before measurement. This makes the short T3 starting condition explicit rather
+than allowing preliminary setup traffic to choose it accidentally.
 
 ## Pass and stop rules
 
@@ -126,14 +143,15 @@ keep searching until a favorable result appears.
 
 ## Evidence and safety retained
 
-The short protocol deliberately omits CloudWatch publication waits, 180-second
-loads, warm-up rounds, one-minute quiet periods, and three-trial majorities. It
-retains the parts needed for an honest and safe cloud run:
+The short protocol deliberately omits per-rate CloudWatch publication waits,
+180-second loads, warm-up rounds, one-minute quiet periods, and repeated-trial
+majorities. It retains the parts needed for an honest and safe cloud run:
 
 - exact k6 process boundaries and summary;
 - detached API/downstream runtime sampling with a stop handshake;
 - complete database and downstream reconciliation;
 - per-rate state reset;
+- a clean pre-baseline reset and explicit T3 credit starting condition;
 - the immutable image, RDS, and configuration identities;
 - a saved Terraform transition plan restricted to the EC2 host;
 - post-transition SSM, Docker, image, TLS, and API validation;

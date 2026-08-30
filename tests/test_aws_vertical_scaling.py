@@ -32,6 +32,7 @@ from trackrelay.aws_rehost_workload import (
 )
 from trackrelay.aws_session import load_manifest, write_manifest
 from trackrelay.aws_vertical_scaling import (
+    VerticalScalingCreditStartingCondition,
     build_transition_validation_payload,
     execute_timed_local_load,
     execute_with_load_window,
@@ -40,6 +41,7 @@ from trackrelay.aws_vertical_scaling import (
     run_remote_experiment_reset,
     transition_to_next_vertical_scaling_tier,
     validate_transition_plan,
+    wait_for_economical_baseline_credit_condition,
 )
 from trackrelay.experiments.performance import PerformanceExperimentResult
 from trackrelay.experiments.reconciliation import ReconciliationReport
@@ -95,7 +97,29 @@ def clean_revision_runner(
         return completed(call)
     if call == ("git", "rev-parse", "HEAD"):
         return completed(call, stdout=GIT_REVISION)
+    if terraform_output_name(call) == "rehost_instance_id":
+        return completed(call, stdout=INSTANCE_ID)
     raise AssertionError(f"unexpected external command: {call}")
+
+
+def prepare_test_experiment(
+    session,
+    *,
+    prepared_at: datetime,
+):
+    return prepare_vertical_scaling_experiment(
+        session,
+        runner=clean_revision_runner,
+        resetter=lambda *_args, **_kwargs: reset_evidence(),
+        credit_reader=lambda *_args, **_kwargs: (
+            VerticalScalingCreditStartingCondition(
+                observed_balance=1.5,
+                metric_observed_at=prepared_at - timedelta(minutes=5),
+                collected_at=prepared_at,
+            )
+        ),
+        now=lambda: prepared_at,
+    )
 
 
 def test_preparation_binds_deployment_and_controls_without_contacting_aws(
@@ -104,11 +128,7 @@ def test_preparation_binds_deployment_and_controls_without_contacting_aws(
     session = prepare_rds_session(tmp_path)
     prepared_at = datetime(2026, 8, 29, 13, tzinfo=UTC)
 
-    definition = prepare_vertical_scaling_experiment(
-        session,
-        runner=clean_revision_runner,
-        now=lambda: prepared_at,
-    )
+    definition = prepare_test_experiment(session, prepared_at=prepared_at)
 
     assert definition.application_image_digest == IMAGE_DIGEST
     assert definition.rds_engine_version == "17.6"
@@ -131,6 +151,71 @@ def test_preparation_binds_deployment_and_controls_without_contacting_aws(
     saved_definition = definition_path.read_text(encoding="utf-8")
     assert "123456789012" not in saved_definition
     assert "rds.amazonaws.com" not in saved_definition
+
+
+def test_credit_gate_waits_for_a_recent_standard_mode_balance(tmp_path) -> None:
+    session = prepare_rds_session(tmp_path)
+    observed_at = datetime(2026, 8, 29, 12, 55, tzinfo=UTC)
+    collected_at = datetime(2026, 8, 29, 13, tzinfo=UTC)
+    balances = iter((0.5, 1.25))
+    sleeps = []
+
+    def runner(arguments, input_text):
+        del input_text
+        call = tuple(arguments)
+        if "describe-instance-credit-specifications" in call:
+            return completed(call, stdout="standard\n")
+        if "get-metric-statistics" in call:
+            return completed(
+                call,
+                stdout=dumps(
+                    {
+                        "Datapoints": [
+                            {
+                                "Average": next(balances),
+                                "Timestamp": observed_at.isoformat(),
+                            }
+                        ]
+                    }
+                ),
+            )
+        raise AssertionError(f"unexpected external command: {call}")
+
+    evidence = wait_for_economical_baseline_credit_condition(
+        session,
+        instance_id=INSTANCE_ID,
+        minimum_balance=1.0,
+        runner=runner,
+        sleeper=sleeps.append,
+        now=lambda: collected_at,
+        attempts=2,
+    )
+
+    assert sleeps == [30]
+    assert evidence.credit_mode == "standard"
+    assert evidence.minimum_balance == 1.0
+    assert evidence.observed_balance == 1.25
+    assert evidence.metric_observed_at == observed_at
+
+
+def test_credit_gate_rejects_unlimited_mode_before_cloudwatch(tmp_path) -> None:
+    session = prepare_rds_session(tmp_path)
+
+    def runner(arguments, input_text):
+        del input_text
+        call = tuple(arguments)
+        assert "describe-instance-credit-specifications" in call
+        return completed(call, stdout="unlimited\n")
+
+    with raises(AwsRehostError, match="not in standard mode"):
+        wait_for_economical_baseline_credit_condition(
+            session,
+            instance_id=INSTANCE_ID,
+            minimum_balance=1.0,
+            runner=runner,
+            sleeper=lambda _seconds: None,
+            attempts=1,
+        )
 
 
 def test_preparation_rejects_rds_drift_without_leaving_partial_output(
@@ -238,10 +323,9 @@ def test_default_timing_uses_k6_callbacks_not_executor_boundaries(
 
 def test_saved_definition_hash_is_bound_into_session_manifest(tmp_path) -> None:
     session = prepare_rds_session(tmp_path)
-    prepare_vertical_scaling_experiment(
+    prepare_test_experiment(
         session,
-        runner=clean_revision_runner,
-        now=lambda: datetime(2026, 8, 29, 13, tzinfo=UTC),
+        prepared_at=datetime(2026, 8, 29, 13, tzinfo=UTC),
     )
 
     manifest = loads(session.manifest_path.read_text(encoding="utf-8"))
@@ -348,10 +432,9 @@ def test_current_tier_runner_preserves_evidence_and_stops_at_first_failure(
     executed_rates: tuple[int, ...],
 ) -> None:
     session = prepare_rds_session(tmp_path)
-    prepare_vertical_scaling_experiment(
+    prepare_test_experiment(
         session,
-        runner=clean_revision_runner,
-        now=lambda: datetime(2026, 8, 29, 13, tzinfo=UTC),
+        prepared_at=datetime(2026, 8, 29, 13, tzinfo=UTC),
     )
     runner_calls: list[tuple[str, ...]] = []
 
@@ -582,11 +665,7 @@ def test_current_tier_runner_cleans_the_sampler_when_load_execution_fails(
 ) -> None:
     session = prepare_rds_session(tmp_path)
     prepared_at = datetime(2026, 8, 29, 13, tzinfo=UTC)
-    prepare_vertical_scaling_experiment(
-        session,
-        runner=clean_revision_runner,
-        now=lambda: prepared_at,
-    )
+    prepare_test_experiment(session, prepared_at=prepared_at)
 
     def runner(arguments, input_text):
         call = tuple(arguments)
@@ -673,10 +752,9 @@ def test_current_tier_runner_cleans_the_sampler_when_load_execution_fails(
 def prepared_completed_baseline_session(tmp_path: Path):
     """Prepare a session whose first RDS-backed hardware tier is complete."""
     session = prepare_rds_session(tmp_path)
-    prepare_vertical_scaling_experiment(
+    prepare_test_experiment(
         session,
-        runner=clean_revision_runner,
-        now=lambda: datetime(2026, 8, 29, 13, tzinfo=UTC),
+        prepared_at=datetime(2026, 8, 29, 13, tzinfo=UTC),
     )
     manifest = load_manifest(session)
     manifest["status"] = "vertical_scaling_tier_collected"

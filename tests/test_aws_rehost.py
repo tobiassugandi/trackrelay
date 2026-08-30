@@ -10,6 +10,7 @@ from subprocess import CompletedProcess
 from pytest import mark, raises
 
 from trackrelay.aws_rehost import (
+    POSTGRES_IMAGE,
     AwsRehostError,
     RehostFiles,
     deploy_rds_rehost,
@@ -125,6 +126,14 @@ def test_rds_installer_waits_for_readiness_after_api_restart() -> None:
     )
 
     assert restart_position < readiness_position < persisted_read_position
+
+
+def test_rds_installer_can_initialize_a_fresh_host_environment() -> None:
+    installer = RDS_INSTALLER.read_text(encoding="utf-8")
+
+    assert "synchronous rehost must be deployed" not in installer
+    assert 'if [[ -f "${runtime_environment}" ]]; then' in installer
+    assert "TRACKRELAY_POSTGRES_IMAGE must be set" in installer
 
 
 def test_publish_pushes_only_x86_64_and_records_digest_without_credentials(
@@ -313,7 +322,7 @@ def test_deploy_refuses_an_image_from_a_different_revision(
 @mark.parametrize(
     ("prior_status", "canary_only", "deployment_purpose"),
     (
-        ("rehost_workload_collected", False, "stage-9.3"),
+        ("image_published", False, "stage-9.3"),
         ("rehost_deployed", True, "sampler-canary"),
     ),
 )
@@ -387,6 +396,7 @@ def test_rds_deploy_discovers_connection_data_on_host_without_persisting_it(
     assert "rds_endpoint" not in command
     assert "secret_arn" not in command
     assert "POSTGRES_PASSWORD=" not in command
+    assert f"TRACKRELAY_POSTGRES_IMAGE='{POSTGRES_IMAGE}'" in command
 
     saved_text = session.manifest_path.read_text(encoding="utf-8")
     saved_manifest = loads(saved_text)

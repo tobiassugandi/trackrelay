@@ -42,7 +42,7 @@ def ready_session(tmp_path: Path) -> AwsSession:
             "region": session.region,
             "rehost_instance_type": "t3.small",
             "session_id": session.session_id,
-            "status": "rds_correctness_collected",
+            "status": "applied",
         },
     )
     return session
@@ -54,6 +54,22 @@ def approval_arguments(session: AwsSession) -> dict[str, str]:
         "approved_cost_ceiling_usd": "3.50",
         "approved_tier_order": EXPECTED_TIER_ORDER,
         "approved_unconditional_teardown_session_id": session.session_id,
+    }
+
+
+def setup_arguments(actions=None):
+    def record(name, session, **_kwargs):
+        if actions is not None:
+            actions.append((name, session.rehost_instance_type))
+
+    return {
+        "publisher": lambda session: record("publish", session),
+        "rds_deployer": lambda session, **kwargs: record(
+            "deploy-rds", session, **kwargs
+        ),
+        "correctness_collector": lambda session: record(
+            "correctness", session
+        ),
     }
 
 
@@ -103,6 +119,7 @@ def test_complete_session_runs_in_order_then_destroys_and_verifies(
     observed = run_vertical_scaling_session(
         session,
         **approval_arguments(session),
+        **setup_arguments(actions),
         preparer=preparer,
         tier_runner=tier_runner,
         transition_runner=transition_runner,
@@ -113,6 +130,9 @@ def test_complete_session_runs_in_order_then_destroys_and_verifies(
 
     assert observed is report
     assert actions == [
+        ("publish", "t3.small"),
+        ("deploy-rds", "t3.small"),
+        ("correctness", "t3.small"),
         ("prepare", "t3.small"),
         ("tier", "t3.small"),
         ("transition", "t3.small->c7i-flex.large"),
@@ -150,6 +170,7 @@ def test_tier_failure_still_destroys_and_verifies_the_journaled_tier(
         run_vertical_scaling_session(
             session,
             **approval_arguments(session),
+            **setup_arguments(),
             preparer=lambda _session: None,
             tier_runner=tier_runner,
             transition_runner=transition_runner,
@@ -164,6 +185,30 @@ def test_tier_failure_still_destroys_and_verifies_the_journaled_tier(
         ("destroy", "c7i-flex.large"),
         ("verify", "c7i-flex.large"),
     ]
+
+
+def test_publication_failure_still_destroys_and_verifies(tmp_path: Path) -> None:
+    session = ready_session(tmp_path)
+    actions = []
+
+    def fail_publication(_session):
+        actions.append("publish")
+        raise RuntimeError("simulated publication failure")
+
+    with raises(RuntimeError, match="simulated publication failure"):
+        run_vertical_scaling_session(
+            session,
+            **approval_arguments(session),
+            publisher=fail_publication,
+            rds_deployer=lambda *_args, **_kwargs: actions.append("deploy"),
+            correctness_collector=lambda _session: actions.append(
+                "correctness"
+            ),
+            destroyer=lambda _session: actions.append("destroy"),
+            teardown_verifier=lambda _session: actions.append("verify"),
+        )
+
+    assert actions == ["publish", "destroy", "verify"]
 
 
 def test_transition_failure_cleans_up_the_pending_journaled_tier(
@@ -188,6 +233,7 @@ def test_transition_failure_cleans_up_the_pending_journaled_tier(
         run_vertical_scaling_session(
             session,
             **approval_arguments(session),
+            **setup_arguments(),
             preparer=lambda _session: None,
             tier_runner=lambda _session: None,
             transition_runner=transition_runner,
@@ -227,6 +273,7 @@ def test_destroy_failure_does_not_skip_native_verification(tmp_path: Path) -> No
         run_vertical_scaling_session(
             session,
             **approval_arguments(session),
+            **setup_arguments(),
             preparer=lambda _session: None,
             tier_runner=lambda _session: None,
             transition_runner=transition_runner,
@@ -258,6 +305,7 @@ def test_keyboard_interrupt_still_destroys_and_verifies(tmp_path: Path) -> None:
         run_vertical_scaling_session(
             session,
             **approval_arguments(session),
+            **setup_arguments(),
             preparer=lambda _session: None,
             tier_runner=tier_runner,
             destroyer=destroyer,
@@ -284,6 +332,7 @@ def test_approval_mismatch_has_no_workflow_or_cleanup_side_effect(
                 **approval_arguments(session),
                 "approved_tier_order": "t3.small,m7i-flex.large",
             },
+            **setup_arguments(actions),
             preparer=lambda _session: actions.append("prepare"),
             destroyer=lambda _session: actions.append("destroy"),
             teardown_verifier=lambda _session: actions.append("verify"),

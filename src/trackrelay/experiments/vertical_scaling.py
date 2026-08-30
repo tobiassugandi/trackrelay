@@ -102,7 +102,7 @@ class WorkloadControls(BaseModel):
     partner_id: Literal["load-alpha"]
     k6_image: Literal["grafana/k6:2.1.0"]
     benchmark_driver_identity: Literal["same-host-and-container-image"]
-    k6_vu_allocation: Literal["preallocate-half-rate-cap-one-per-rate"]
+    k6_vu_allocation: Literal["preallocate-one-vu-per-event-per-second"]
     matching_trials_required: Literal[1]
     trials_per_rate: Literal[1]
     p95_latency_limit_ms: Literal[500.0]
@@ -128,6 +128,8 @@ class InfrastructureScalingControls(BaseModel):
     only_changed_deployment_input: Literal["ec2-instance-type"]
     tier_order: tuple[str, ...]
     experiment_state: Literal["fresh-identity-namespace-per-tier"]
+    economical_baseline_cpu_credit_mode: Literal["standard"]
+    economical_baseline_minimum_cpu_credit_balance: Literal[1.0]
     application: ApplicationControls
     rds: RdsControls
     downstream: DownstreamControls

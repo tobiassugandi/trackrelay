@@ -56,13 +56,9 @@ Store the compact, non-secret session record under `results/aws-sessions/<sessio
 
 - [ ] Record the UTC start time and start the session-duration timer.
 - [ ] Apply only the saved, approved plan with `make aws-up SESSION_ID=<session ID> API_INGRESS_CIDR=<approved IPv4>/32 APPROVED_SESSION_ID=<same session ID> APPROVED_COST_CEILING_USD=<approved ceiling>`.
-- [ ] Publish the exact approved Git revision as a Linux AMD64 image with `make aws-rehost-publish SESSION_ID=<session ID> API_INGRESS_CIDR=<approved IPv4>/32`; confirm that session evidence contains its digest.
-- [ ] Deploy the digest-pinned runtime and execute its tiny on-host smoke check with `make aws-rehost-deploy SESSION_ID=<session ID> API_INGRESS_CIDR=<approved IPv4>/32`.
-- [ ] Except for a proposal explicitly limited to the sampler canary, run the exact frozen Step 8.6 workload from the approved benchmark machine with `make aws-rehost-workload SESSION_ID=<session ID> API_INGRESS_CIDR=<approved IPv4>/32`; confirm that all six rate points and their reconciliation evidence were saved under the session evidence directory.
-- [ ] Switch the deployed API to private RDS with `make aws-rds-deploy SESSION_ID=<session ID> API_INGRESS_CIDR=<approved IPv4>/32`. A sampler-canary-only proposal instead uses `make aws-rds-deploy-canary` directly after the deployment smoke and records that limited purpose. Confirm that the session record contains the resolved PostgreSQL minor and non-secret RDS configuration, never its endpoint or credential.
-- [ ] Run `make aws-rds-correctness SESSION_ID=<session ID> API_INGRESS_CIDR=<approved IPv4>/32`; confirm that all four scenario results and their passing reconciliation counts were saved in `rds-correctness/suite.json` without endpoints or credentials.
+- [ ] For a historical Stage 9.1/9.2 session only, run the separately approved publication, rehost deployment, portability workload, RDS deployment, and RDS correctness commands. Do not carry that host-local workload into Stage 9.3.
 - [ ] For a dedicated sampler-canary proposal only, arm `make aws-scaling-canary` by repeating the approved session ID, recorded cost ceiling, and unconditional-teardown session ID. Let it own the single 10 events/s × 30-second point, destroy, and native verification; do not also start the full scaling runner.
-- [ ] For cloud session 2 only, arm `make aws-scaling-session` after the RDS correctness checkpoint by repeating the approved session ID, recorded cost ceiling, exact `t3.small,c7i-flex.large` tier order, and unconditional-teardown session ID. From that point, let this single runner own both short treatments, the one transition, reporting, destroy, and native absence verification; do not run a competing controller.
+- [ ] For cloud session 2 only, invoke `make aws-scaling-session` immediately after the approved apply by repeating the approved session ID, recorded cost ceiling, exact `t3.small,c7i-flex.large` tier order, and unconditional-teardown session ID. Let it own image publication, direct RDS deployment, correctness, clean-state and CPU-credit gates, both short treatments, the transition, reporting, destroy, and native absence verification; do not run a competing controller.
 - [ ] Do not create untracked resources in the AWS console. If emergency diagnosis creates or changes anything, record it immediately and bring it under Terraform or remove it before continuing.
 - [ ] Run only the validation or experiment named in the approved proposal.
 - [ ] Collect evidence continuously so an interrupted run can still be diagnosed.
@@ -71,7 +67,7 @@ Store the compact, non-secret session record under `results/aws-sessions/<sessio
 
 ## Teardown
 
-- [ ] Confirm workload generation has stopped and both `rehost-workload/summary.json` and `rds-correctness/suite.json` are readable before teardown.
+- [ ] Confirm workload generation has stopped and the evidence required by the approved workflow is readable before teardown. Stage 9.3 requires its comparison report and internal correctness evidence, not a host-local `rehost-workload` result.
 - [ ] Save `terraform state list` and an AWS inventory filtered by both `Project=TrackRelay` and the session ID.
 - [ ] Generate and review a destroy plan covering every object in the pre-destroy Terraform state.
 - [ ] Run `make aws-down SESSION_ID=<session ID> API_INGRESS_CIDR=<approved IPv4>/32` to generate and apply the complete destroy plan. This command deliberately has no approval gate; do not rely on targeted destroy for normal teardown.

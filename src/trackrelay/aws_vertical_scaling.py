@@ -5,7 +5,7 @@ from argparse import ArgumentParser, Namespace
 from base64 import b64decode
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from ipaddress import IPv4Address
 from pathlib import Path
 from shlex import quote
@@ -111,6 +111,7 @@ TimedLocalLoadExecutor = Callable[
 RemoteResetter = Callable[..., RehostExperimentResetEvidence]
 SsmWaiter = Callable[..., None]
 DeploymentValidator = Callable[..., str]
+CreditConditionReader = Callable[..., "VerticalScalingCreditStartingCondition"]
 
 
 class VerticalScalingExperimentDefinition(BaseModel):
@@ -206,7 +207,7 @@ class VerticalScalingTrialResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[1] = 1
-    trial_number: int = Field(ge=1, le=3)
+    trial_number: Literal[1] = 1
     result: LegacyBaselineRateResult
     post_trial_reset: RehostExperimentResetEvidence
 
@@ -218,8 +219,8 @@ class VerticalScalingRateAssessment(BaseModel):
 
     schema_version: Literal[1] = 1
     offered_rate_per_second: int = Field(gt=0)
-    matching_trials_required: int = Field(default=2, ge=1, le=2)
-    trials_per_rate: int = Field(default=3, ge=1, le=3)
+    matching_trials_required: Literal[1] = 1
+    trials_per_rate: Literal[1] = 1
     passed: bool
     trials: tuple[VerticalScalingTrialResult, ...]
 
@@ -266,6 +267,22 @@ class VerticalScalingRateAssessment(BaseModel):
     @property
     def failing_trial_count(self) -> int:
         return len(self.trials) - self.passing_trial_count
+
+
+class VerticalScalingCreditStartingCondition(BaseModel):
+    """Observed burst capacity required before the economical tier starts."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    instance_type: Literal["t3.small"] = "t3.small"
+    credit_mode: Literal["standard"] = "standard"
+    metric_name: Literal["CPUCreditBalance"] = "CPUCreditBalance"
+    metric_period_seconds: Literal[300] = 300
+    minimum_balance: Literal[1.0] = 1.0
+    observed_balance: float = Field(ge=1.0)
+    metric_observed_at: AwareDatetime
+    collected_at: AwareDatetime
 
 
 class VerticalScalingTierSummary(BaseModel):
@@ -524,13 +541,122 @@ def build_experiment_definition(
     )
 
 
+def wait_for_economical_baseline_credit_condition(
+    session: AwsSession,
+    *,
+    instance_id: str,
+    minimum_balance: float,
+    runner: ProcessRunner = run_process,
+    sleeper: Callable[[float], None] = sleep,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    attempts: int = 21,
+) -> VerticalScalingCreditStartingCondition:
+    """Wait for one recent T3 credit datapoint above the frozen floor."""
+    if session.rehost_instance_type != ECONOMICAL_BASELINE_INSTANCE_TYPE:
+        raise AwsRehostError("CPU-credit gating applies only to the baseline tier")
+    if INSTANCE_ID_PATTERN.fullmatch(instance_id) is None:
+        raise AwsRehostError("invalid EC2 instance ID for CPU-credit gating")
+    if minimum_balance != 1.0:
+        raise AwsRehostError("the Stage 9.3 CPU-credit floor must remain 1.0")
+    if attempts < 1:
+        raise AwsRehostError("CPU-credit polling needs at least one attempt")
+
+    credit_mode = invoke(
+        runner,
+        (
+            *aws_prefix(session),
+            "ec2",
+            "describe-instance-credit-specifications",
+            "--instance-ids",
+            instance_id,
+            "--query",
+            "InstanceCreditSpecifications[0].CpuCredits",
+            "--output",
+            "text",
+        ),
+        action="EC2 CPU-credit mode inspection",
+    ).stdout.strip()
+    if credit_mode != "standard":
+        raise AwsRehostError("the economical baseline is not in standard mode")
+
+    last_balance: float | None = None
+    for attempt in range(attempts):
+        collected_at = now()
+        response = invoke(
+            runner,
+            (
+                *aws_prefix(session),
+                "cloudwatch",
+                "get-metric-statistics",
+                "--namespace",
+                "AWS/EC2",
+                "--metric-name",
+                "CPUCreditBalance",
+                "--dimensions",
+                f"Name=InstanceId,Value={instance_id}",
+                "--statistics",
+                "Average",
+                "--period",
+                "300",
+                "--start-time",
+                (collected_at - timedelta(minutes=15)).isoformat(),
+                "--end-time",
+                collected_at.isoformat(),
+                "--output",
+                "json",
+            ),
+            action="CloudWatch CPU-credit inspection",
+        )
+        try:
+            document = json.loads(response.stdout)
+            datapoints = document["Datapoints"]
+            parsed = tuple(
+                (
+                    datetime.fromisoformat(str(point["Timestamp"])),
+                    float(point["Average"]),
+                )
+                for point in datapoints
+            )
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise AwsRehostError(
+                "CloudWatch returned invalid CPU-credit evidence"
+            ) from error
+        recent = tuple(
+            (observed_at, balance)
+            for observed_at, balance in parsed
+            if observed_at.tzinfo is not None
+            and timedelta(0) <= collected_at - observed_at <= timedelta(minutes=10)
+            and balance >= 0
+        )
+        if recent:
+            observed_at, last_balance = max(recent, key=lambda point: point[0])
+            if last_balance >= minimum_balance:
+                return VerticalScalingCreditStartingCondition(
+                    observed_balance=last_balance,
+                    metric_observed_at=observed_at,
+                    collected_at=collected_at,
+                )
+        if attempt < attempts - 1:
+            sleeper(30)
+    observed = "no recent datapoint" if last_balance is None else str(last_balance)
+    raise AwsRehostError(
+        "t3.small CPUCreditBalance did not reach the frozen 1.0-credit "
+        f"minimum ({observed})"
+    )
+
+
 def prepare_vertical_scaling_experiment(
     session: AwsSession,
     *,
     runner: ProcessRunner = run_process,
+    resetter: RemoteResetter | None = None,
+    credit_reader: CreditConditionReader = (
+        wait_for_economical_baseline_credit_condition
+    ),
+    sleeper: Callable[[float], None] = sleep,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> VerticalScalingExperimentDefinition:
-    """Freeze Stage 9.3 locally after RDS correctness has passed."""
+    """Reset and freeze Stage 9.3 after RDS correctness has passed."""
     manifest, revision = require_applied_clean_revision(session, runner=runner)
     if manifest.get("status") != "rds_correctness_collected":
         raise AwsRehostError(
@@ -544,6 +670,33 @@ def prepare_vertical_scaling_experiment(
     )
     output_root = session.evidence_dir / "vertical-scaling"
     output_root.mkdir(parents=True, exist_ok=False)
+    instance_id = terraform_output(
+        session,
+        "rehost_instance_id",
+        runner=runner,
+    )
+    if INSTANCE_ID_PATTERN.fullmatch(instance_id) is None:
+        raise AwsRehostError("Terraform returned an invalid EC2 instance ID")
+    active_resetter = resetter or run_remote_experiment_reset
+    reset_evidence = active_resetter(
+        session,
+        instance_id=instance_id,
+        runner=runner,
+    )
+    reset_path = output_root / "baseline-preparation-reset.json"
+    _write_model(reset_evidence, reset_path)
+    credit_condition = credit_reader(
+        session,
+        instance_id=instance_id,
+        minimum_balance=(
+            definition.controls.economical_baseline_minimum_cpu_credit_balance
+        ),
+        runner=runner,
+        sleeper=sleeper,
+        now=now,
+    )
+    credit_path = output_root / "baseline-credit-starting-condition.json"
+    _write_model(credit_condition, credit_path)
     definition_path = output_root / "experiment-definition.json"
     definition_path.write_text(
         f"{definition.model_dump_json(indent=2)}\n",
@@ -558,6 +711,12 @@ def prepare_vertical_scaling_experiment(
                 "definition": "vertical-scaling/experiment-definition.json",
                 "definition_sha256": file_sha256(definition_path),
                 "prepared_at": definition.prepared_at.isoformat(),
+                "baseline_preparation_reset": str(
+                    reset_path.relative_to(session.evidence_dir)
+                ),
+                "baseline_credit_starting_condition": str(
+                    credit_path.relative_to(session.evidence_dir)
+                ),
             },
         }
     )

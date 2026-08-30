@@ -79,6 +79,8 @@ def test_committed_controls_freeze_every_non_hardware_input() -> None:
     controls = load_experiment_controls()
 
     assert controls.only_changed_deployment_input == "ec2-instance-type"
+    assert controls.economical_baseline_cpu_credit_mode == "standard"
+    assert controls.economical_baseline_minimum_cpu_credit_balance == 1.0
     assert controls.tier_order == (
         "t3.small",
         "c7i-flex.large",
@@ -99,6 +101,11 @@ def test_committed_controls_freeze_every_non_hardware_input() -> None:
     )
     assert controls.workload.tier_duration_seconds == 10
     assert controls.workload.trials_per_rate == 1
+    assert controls.workload.matching_trials_required == 1
+    assert (
+        controls.workload.k6_vu_allocation
+        == "preallocate-one-vu-per-event-per-second"
+    )
     assert controls.workload.runtime_sample_interval_seconds == 5
     assert controls.workload.post_load_settle_timeout_seconds == 30
     assert controls.workload.post_load_stable_window_seconds == 2
@@ -117,6 +124,15 @@ def test_controls_reject_a_changed_pool_size() -> None:
     data["application"]["database_pool_size"] = 10
 
     with raises(ValidationError, match="Input should be 5"):
+        InfrastructureScalingControls.model_validate(data)
+
+
+def test_protocol_v4_rejects_more_than_one_trial() -> None:
+    data = deepcopy(load_experiment_controls().model_dump(mode="json"))
+    data["workload"]["matching_trials_required"] = 2
+    data["workload"]["trials_per_rate"] = 3
+
+    with raises(ValidationError):
         InfrastructureScalingControls.model_validate(data)
 
 

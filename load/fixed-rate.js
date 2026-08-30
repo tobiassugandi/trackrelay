@@ -31,7 +31,7 @@ const expectedHttpStatus = positiveInteger(
 );
 const expectedRequests = requestRate * durationSeconds;
 const activeDurationMilliseconds = durationSeconds * 1000 - 1;
-const preAllocatedVUs = Math.max(1, Math.ceil(requestRate / 2));
+const preAllocatedVUs = requestRate;
 const maxVUs = requestRate;
 const apiUrl = __ENV.TRACKRELAY_API_URL || "http://host.docker.internal:8000";
 const summaryPath =
@@ -51,9 +51,9 @@ export const options = {
       rate: requestRate,
       timeUnit: "1s",
       duration: `${activeDurationMilliseconds}ms`,
-      // Half-rate preallocation supplies the concurrency implied by the 500 ms
-      // p95 SLO. Growth to one VU per event/s covers slower tails without
-      // manufacturing low-rate TCP connection churn or exhausting the driver.
+      // Initialize every permitted VU before the timed interval. This keeps
+      // runtime VU allocation out of the short capacity comparison while the
+      // one-VU-per-event/s cap still bounds load-driver resource use.
       preAllocatedVUs,
       maxVUs,
       gracefulStop: "10s",

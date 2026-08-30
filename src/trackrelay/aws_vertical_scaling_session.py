@@ -4,6 +4,7 @@ from argparse import ArgumentParser, Namespace
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from decimal import Decimal
+from pathlib import Path
 from signal import SIGTERM, getsignal, signal
 from typing import NoReturn
 
@@ -11,7 +12,13 @@ from trackrelay.aws_flexibility_report import (
     HardwareFlexibilityReport,
     generate_hardware_flexibility_report,
 )
-from trackrelay.aws_rehost import AwsRehostError
+from trackrelay.aws_rds_correctness import collect_rds_correctness
+from trackrelay.aws_rehost import (
+    AwsRehostError,
+    RehostFiles,
+    deploy_rds_rehost,
+    publish_image,
+)
 from trackrelay.aws_session import (
     AwsSession,
     AwsSessionError,
@@ -34,6 +41,11 @@ from trackrelay.experiments.vertical_scaling import (
 )
 
 EXPECTED_TIER_ORDER = ",".join(PRIMARY_FLEXIBILITY_INSTANCE_TYPES)
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+DIRECT_RDS_FILES = RehostFiles(
+    compose=REPOSITORY_ROOT / "deploy" / "rehost" / "compose.yaml",
+    installer=REPOSITORY_ROOT / "deploy" / "rehost" / "install-rds.sh",
+)
 SessionAction = Callable[..., object]
 ReportAction = Callable[..., HardwareFlexibilityReport]
 
@@ -86,9 +98,9 @@ def validate_session_approval(
         field_name="approved cost ceiling",
     )
     manifest = load_manifest(session)
-    if manifest.get("status") != "rds_correctness_collected":
+    if manifest.get("status") != "applied":
         raise AwsSessionError(
-            "Stage 9.3 session automation requires completed RDS correctness"
+            "Stage 9.3 session automation must start immediately after apply"
         )
     if approved_ceiling != _approved_cost_ceiling(manifest):
         raise AwsSessionError("approved cost ceiling differs from Terraform apply")
@@ -134,6 +146,9 @@ def run_vertical_scaling_session(
     approved_cost_ceiling_usd: str,
     approved_tier_order: str,
     approved_unconditional_teardown_session_id: str,
+    publisher: SessionAction = publish_image,
+    rds_deployer: SessionAction = deploy_rds_rehost,
+    correctness_collector: SessionAction = collect_rds_correctness,
     preparer: SessionAction = prepare_vertical_scaling_experiment,
     tier_runner: SessionAction = run_current_vertical_scaling_tier,
     transition_runner: SessionAction = transition_to_next_vertical_scaling_tier,
@@ -141,7 +156,7 @@ def run_vertical_scaling_session(
     destroyer: SessionAction = destroy_session,
     teardown_verifier: SessionAction = verify_destroyed,
 ) -> HardwareFlexibilityReport:
-    """Run all treatments; after preflight, cleanup is never conditional."""
+    """Prepare and run both treatments, then unconditionally clean up."""
     validate_session_approval(
         session,
         approved_session_id=approved_session_id,
@@ -156,6 +171,9 @@ def run_vertical_scaling_session(
     report: HardwareFlexibilityReport | None = None
     workflow_error: BaseException | None = None
     try:
+        publisher(current_session)
+        rds_deployer(current_session, files=DIRECT_RDS_FILES)
+        correctness_collector(current_session)
         preparer(current_session)
         tier_runner(current_session)
         for target_instance_type in PRIMARY_FLEXIBILITY_INSTANCE_TYPES[1:]:

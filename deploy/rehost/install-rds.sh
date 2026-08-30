@@ -4,6 +4,7 @@ set -euo pipefail
 
 : "${TRACKRELAY_API_IMAGE:?TRACKRELAY_API_IMAGE must be set}"
 : "${TRACKRELAY_AWS_REGION:?TRACKRELAY_AWS_REGION must be set}"
+: "${TRACKRELAY_POSTGRES_IMAGE:?TRACKRELAY_POSTGRES_IMAGE must be set}"
 : "${TRACKRELAY_RDS_IDENTIFIER:?TRACKRELAY_RDS_IDENTIFIER must be set}"
 : "${TRACKRELAY_SMOKE_SUFFIX:?TRACKRELAY_SMOKE_SUFFIX must be set}"
 
@@ -20,8 +21,8 @@ logout_registry() {
 }
 trap logout_registry EXIT
 
-if [[ ! -f "${compose_file}" || ! -f "${runtime_environment}" ]]; then
-    printf 'The synchronous rehost must be deployed before the RDS switch.\n' >&2
+if [[ ! -f "${compose_file}" ]]; then
+    printf 'The TrackRelay Compose file is missing.\n' >&2
     exit 1
 fi
 
@@ -87,11 +88,14 @@ print(
 '
 )"
 
-local_database_password="$(
-    awk -F= \
-        '$1 == "POSTGRES_PASSWORD" {print substr($0, index($0, "=") + 1)}' \
-        "${runtime_environment}"
-)"
+local_database_password=""
+if [[ -f "${runtime_environment}" ]]; then
+    local_database_password="$(
+        awk -F= \
+            '$1 == "POSTGRES_PASSWORD" {print substr($0, index($0, "=") + 1)}' \
+            "${runtime_environment}"
+    )"
+fi
 if [[ ! "${local_database_password}" =~ ^[0-9a-f]{48}$ ]]; then
     local_database_password="$(openssl rand -hex 24)"
 fi
@@ -102,7 +106,7 @@ runtime_environment_temporary="$(mktemp "${deployment_directory}/.env.XXXXXX")"
     printf 'TRACKRELAY_API_IMAGE=%s\n' "${TRACKRELAY_API_IMAGE}"
     printf 'TRACKRELAY_IMAGE_PULL_POLICY=always\n'
     printf 'TRACKRELAY_POSTGRES_IMAGE=%s\n' \
-        "$(awk -F= '$1 == "TRACKRELAY_POSTGRES_IMAGE" {print substr($0, index($0, "=") + 1)}' "${runtime_environment}")"
+        "${TRACKRELAY_POSTGRES_IMAGE}"
     printf 'TRACKRELAY_POSTGRES_PULL_POLICY=missing\n'
     printf 'TRACKRELAY_API_BIND_ADDRESS=0.0.0.0\n'
     printf 'TRACKRELAY_API_PORT=8000\n'
@@ -151,8 +155,8 @@ aws ecr get-login-password --region "${TRACKRELAY_AWS_REGION}" | \
         >/dev/null
 
 compose pull --quiet api downstream
-compose stop api postgres >/dev/null
-compose rm --force api migrate postgres >/dev/null
+compose stop api postgres >/dev/null 2>&1 || true
+compose rm --force api migrate postgres >/dev/null 2>&1 || true
 compose up --detach --wait --wait-timeout 120 downstream
 compose run --rm --no-deps migrate alembic upgrade head
 compose up --detach --force-recreate --wait --wait-timeout 120 api

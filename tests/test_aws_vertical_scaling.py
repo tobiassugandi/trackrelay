@@ -284,15 +284,29 @@ def cloudwatch_evidence(
             statistic=definition.statistic,
             unit=definition.unit,
             period_seconds=definition.period_seconds,
-            datapoints=(
+            datapoints=tuple(
                 CloudWatchDatapoint(
-                    interval_started_at=started_at,
+                    interval_started_at=(
+                        started_at
+                        + timedelta(
+                            seconds=index * definition.period_seconds
+                        )
+                    ),
                     value=1,
                     load_window_overlap_seconds=min(
                         definition.period_seconds,
-                        (ended_at - started_at).total_seconds(),
+                        (ended_at - started_at).total_seconds()
+                        - index * definition.period_seconds,
                     ),
-                ),
+                )
+                for index in range(
+                    (
+                        int((ended_at - started_at).total_seconds())
+                        + definition.period_seconds
+                        - 1
+                    )
+                    // definition.period_seconds
+                )
             ),
         )
         for definition in metric_definitions("t3.small")

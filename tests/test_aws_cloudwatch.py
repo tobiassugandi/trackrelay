@@ -46,6 +46,41 @@ def cloudwatch_response(instance_type: str) -> str:
     return json.dumps({"MetricDataResults": results})
 
 
+def response_without_final_rds_cpu_bucket(instance_type: str) -> str:
+    document = json.loads(cloudwatch_response(instance_type))
+    rds_cpu = next(
+        result
+        for result in document["MetricDataResults"]
+        if result["Id"] == "rds_cpu"
+    )
+    rds_cpu["Timestamps"].pop()
+    rds_cpu["Values"].pop()
+    return json.dumps(document)
+
+
+def response_without_middle_rds_cpu_bucket(instance_type: str) -> str:
+    document = json.loads(cloudwatch_response(instance_type))
+    rds_cpu = next(
+        result
+        for result in document["MetricDataResults"]
+        if result["Id"] == "rds_cpu"
+    )
+    rds_cpu["Timestamps"].pop(1)
+    rds_cpu["Values"].pop(1)
+    return json.dumps(document)
+
+
+def response_with_overlapping_rds_cpu_bucket(instance_type: str) -> str:
+    document = json.loads(cloudwatch_response(instance_type))
+    rds_cpu = next(
+        result
+        for result in document["MetricDataResults"]
+        if result["Id"] == "rds_cpu"
+    )
+    rds_cpu["Timestamps"][1] = "2026-08-29T12:02:30Z"
+    return json.dumps(document)
+
+
 def test_query_uses_native_periods_and_private_resource_dimensions() -> None:
     query = build_cloudwatch_query(
         instance_id=INSTANCE_ID,
@@ -159,6 +194,124 @@ def test_collection_retries_until_every_metric_is_published(
         "ap-southeast-3",
         "cloudwatch",
     )
+
+
+def test_collection_waits_for_a_delayed_trailing_metric_bucket(
+    tmp_path: Path,
+) -> None:
+    session = make_session(tmp_path)
+    responses = [
+        response_without_final_rds_cpu_bucket("t3.small"),
+        cloudwatch_response("t3.small"),
+    ]
+    sleeps: list[float] = []
+
+    def runner(
+        arguments: Sequence[str],
+        input_text: str | None,
+    ) -> CompletedProcess[str]:
+        del input_text
+        return completed(tuple(arguments), stdout=responses.pop(0))
+
+    evidence = collect_cloudwatch_evidence(
+        session,
+        instance_id=INSTANCE_ID,
+        rds_identifier=RDS_IDENTIFIER,
+        test_run_id=TEST_RUN_ID,
+        load_started_at=LOAD_STARTED_AT,
+        load_ended_at=LOAD_ENDED_AT,
+        runner=runner,
+        sleeper=sleeps.append,
+        now=lambda: datetime(2026, 8, 29, 12, 8, tzinfo=UTC),
+        maximum_attempts=2,
+        retry_interval_seconds=1,
+    )
+
+    assert str(evidence.test_run_id) == TEST_RUN_ID
+    assert responses == []
+    assert sleeps == [1]
+
+
+def test_parser_reports_the_exact_unpublished_tail() -> None:
+    with raises(
+        AwsRehostError,
+        match=(
+            "rds_cpu\\[2026-08-29T12:05:00\\+00:00"
+            "\\.\\.2026-08-29T12:05:10\\+00:00\\]"
+        ),
+    ):
+        parse_cloudwatch_response(
+            response_without_final_rds_cpu_bucket("t3.small"),
+            test_run_id=TEST_RUN_ID,
+            instance_type="t3.small",
+            load_started_at=LOAD_STARTED_AT,
+            load_ended_at=LOAD_ENDED_AT,
+            collected_at=datetime(2026, 8, 29, 12, 8, tzinfo=UTC),
+        )
+
+
+def test_parser_rejects_an_interior_metric_gap() -> None:
+    with raises(
+        AwsRehostError,
+        match=(
+            "rds_cpu\\[2026-08-29T12:03:00\\+00:00"
+            "\\.\\.2026-08-29T12:04:00\\+00:00\\]"
+        ),
+    ):
+        parse_cloudwatch_response(
+            response_without_middle_rds_cpu_bucket("t3.small"),
+            test_run_id=TEST_RUN_ID,
+            instance_type="t3.small",
+            load_started_at=LOAD_STARTED_AT,
+            load_ended_at=LOAD_ENDED_AT,
+            collected_at=datetime(2026, 8, 29, 12, 8, tzinfo=UTC),
+        )
+
+
+def test_parser_rejects_overlapping_native_buckets() -> None:
+    with raises(
+        AwsRehostError,
+        match="overlapping native buckets: rds_cpu@2026-08-29T12:02:30\\+00:00",
+    ):
+        parse_cloudwatch_response(
+            response_with_overlapping_rds_cpu_bucket("t3.small"),
+            test_run_id=TEST_RUN_ID,
+            instance_type="t3.small",
+            load_started_at=LOAD_STARTED_AT,
+            load_ended_at=LOAD_ENDED_AT,
+            collected_at=datetime(2026, 8, 29, 12, 8, tzinfo=UTC),
+        )
+
+
+def test_collection_timeout_preserves_the_last_coverage_diagnostic(
+    tmp_path: Path,
+) -> None:
+    session = make_session(tmp_path)
+    partial_response = response_without_final_rds_cpu_bucket("t3.small")
+
+    def runner(
+        arguments: Sequence[str],
+        input_text: str | None,
+    ) -> CompletedProcess[str]:
+        del input_text
+        return completed(tuple(arguments), stdout=partial_response)
+
+    with raises(
+        AwsRehostError,
+        match="last observation:.*rds_cpu",
+    ):
+        collect_cloudwatch_evidence(
+            session,
+            instance_id=INSTANCE_ID,
+            rds_identifier=RDS_IDENTIFIER,
+            test_run_id=TEST_RUN_ID,
+            load_started_at=LOAD_STARTED_AT,
+            load_ended_at=LOAD_ENDED_AT,
+            runner=runner,
+            sleeper=lambda _: None,
+            maximum_attempts=2,
+            retry_interval_seconds=1,
+        )
 
 
 def test_incomplete_cloudwatch_evidence_is_rejected() -> None:

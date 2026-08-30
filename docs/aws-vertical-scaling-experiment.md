@@ -203,8 +203,11 @@ mislabel those buckets as per-minute observations or apportion a whole-bucket
 credit value to only its overlapping seconds. Both non-burstable treatments omit credit
 queries because they are non-burstable. The collector polls for a bounded ten
 minutes after a load so the final five-minute bucket can close and be published;
-it rejects the rate as incomplete evidence if any required series remains
-absent.
+each poll must provide continuous native-bucket coverage from the exact load
+start through the exact load end for every required series. A missing leading,
+interior, or trailing bucket keeps the collector polling. If the bound expires,
+the rate is retained but rejected as incomplete evidence with the affected
+metric names and uncovered UTC ranges recorded in the error.
 
 ## Interpretation and stopping rules
 

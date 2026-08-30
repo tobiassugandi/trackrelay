@@ -1,7 +1,7 @@
 """Collect UTC-aligned EC2 and RDS evidence for one AWS load point."""
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from math import ceil, floor, isfinite
 from tempfile import NamedTemporaryFile
@@ -29,6 +29,7 @@ MetricSource = Literal["ec2", "rds"]
 Statistic = Literal["Average", "Minimum", "Sum"]
 Sleeper = Callable[[float], None]
 Now = Callable[[], datetime]
+COVERAGE_TOLERANCE_SECONDS = 0.001
 
 
 class CloudWatchDatapoint(BaseModel):
@@ -101,6 +102,13 @@ class CloudWatchRunEvidence(BaseModel):
             raise ValueError("CloudWatch evidence is missing or duplicates metrics")
         if any(not metric.datapoints for metric in self.series):
             raise ValueError("every CloudWatch metric must overlap the load window")
+        coverage_error = cloudwatch_coverage_error(
+            self.series,
+            load_started_at=self.load_started_at,
+            load_ended_at=self.load_ended_at,
+        )
+        if coverage_error is not None:
+            raise ValueError(coverage_error)
         return self
 
 
@@ -155,6 +163,124 @@ BURST_CREDIT_METRICS = (
         "ec2_cpu_credit_balance", "ec2", "CPUCreditBalance", "Average", "Count", 300
     ),
 )
+
+
+def _overlap_seconds(
+    interval_started_at: datetime,
+    interval_ended_at: datetime,
+    *,
+    load_started_at: datetime,
+    load_ended_at: datetime,
+) -> float:
+    return max(
+        0.0,
+        (
+            min(interval_ended_at, load_ended_at)
+            - max(interval_started_at, load_started_at)
+        ).total_seconds(),
+    )
+
+
+def _coverage_gaps(
+    series: CloudWatchMetricSeries,
+    *,
+    load_started_at: datetime,
+    load_ended_at: datetime,
+) -> tuple[tuple[datetime, datetime], ...]:
+    """Return uncovered load-window ranges using the metric's native buckets."""
+    cursor = load_started_at
+    gaps: list[tuple[datetime, datetime]] = []
+    for point in series.datapoints:
+        interval_started_at = max(point.interval_started_at, load_started_at)
+        interval_ended_at = min(
+            point.interval_started_at
+            + timedelta(seconds=series.period_seconds),
+            load_ended_at,
+        )
+        if interval_ended_at <= cursor:
+            continue
+        if interval_started_at > cursor:
+            gaps.append((cursor, interval_started_at))
+        cursor = max(cursor, interval_ended_at)
+    if cursor < load_ended_at:
+        gaps.append((cursor, load_ended_at))
+    return tuple(gaps)
+
+
+def cloudwatch_coverage_error(
+    series: Sequence[CloudWatchMetricSeries],
+    *,
+    load_started_at: datetime,
+    load_ended_at: datetime,
+) -> str | None:
+    """Describe invalid overlaps or gaps instead of accepting partial evidence."""
+    invalid_overlaps: list[str] = []
+    overlapping_buckets: list[str] = []
+    incomplete: list[str] = []
+    for metric in series:
+        coverage_cursor = load_started_at
+        for point in metric.datapoints:
+            interval_started_at = max(
+                point.interval_started_at,
+                load_started_at,
+            )
+            interval_ended_at = min(
+                point.interval_started_at
+                + timedelta(seconds=metric.period_seconds),
+                load_ended_at,
+            )
+            expected_overlap = _overlap_seconds(
+                point.interval_started_at,
+                point.interval_started_at + timedelta(seconds=metric.period_seconds),
+                load_started_at=load_started_at,
+                load_ended_at=load_ended_at,
+            )
+            if (
+                expected_overlap <= 0
+                or abs(point.load_window_overlap_seconds - expected_overlap)
+                > COVERAGE_TOLERANCE_SECONDS
+            ):
+                invalid_overlaps.append(
+                    f"{metric.query_id}@{point.interval_started_at.isoformat()}"
+                )
+            if (
+                interval_ended_at > load_started_at
+                and interval_started_at < load_ended_at
+                and (
+                    coverage_cursor - interval_started_at
+                ).total_seconds()
+                > COVERAGE_TOLERANCE_SECONDS
+            ):
+                overlapping_buckets.append(
+                    f"{metric.query_id}@{point.interval_started_at.isoformat()}"
+                )
+            coverage_cursor = max(coverage_cursor, interval_ended_at)
+        gaps = _coverage_gaps(
+            metric,
+            load_started_at=load_started_at,
+            load_ended_at=load_ended_at,
+        )
+        if gaps:
+            rendered_gaps = ", ".join(
+                f"{started_at.isoformat()}..{ended_at.isoformat()}"
+                for started_at, ended_at in gaps
+            )
+            incomplete.append(f"{metric.query_id}[{rendered_gaps}]")
+    problems = []
+    if invalid_overlaps:
+        problems.append(
+            "invalid bucket overlaps: " + ", ".join(invalid_overlaps)
+        )
+    if overlapping_buckets:
+        problems.append(
+            "overlapping native buckets: " + ", ".join(overlapping_buckets)
+        )
+    if incomplete:
+        problems.append(
+            "series do not cover the complete load window: "
+            + ", ".join(incomplete)
+        )
+    return "; ".join(problems) if problems else None
 
 
 def metric_definitions(instance_type: str) -> tuple[MetricDefinition, ...]:
@@ -281,12 +407,11 @@ def parse_cloudwatch_response(
                 interval_end = interval_start + timedelta(
                     seconds=definition.period_seconds
                 )
-                overlap = max(
-                    0.0,
-                    (
-                        min(interval_end, load_ended_at)
-                        - max(interval_start, load_started_at)
-                    ).total_seconds(),
+                overlap = _overlap_seconds(
+                    interval_start,
+                    interval_end,
+                    load_started_at=load_started_at,
+                    load_ended_at=load_ended_at,
                 )
                 numeric_value = float(value)
             except (AttributeError, TypeError, ValueError) as error:
@@ -312,6 +437,13 @@ def parse_cloudwatch_response(
                 ),
             )
         )
+    coverage_error = cloudwatch_coverage_error(
+        series,
+        load_started_at=load_started_at,
+        load_ended_at=load_ended_at,
+    )
+    if coverage_error is not None:
+        raise AwsRehostError(f"CloudWatch evidence is incomplete: {coverage_error}")
     try:
         return CloudWatchRunEvidence(
             test_run_id=test_run_id,
@@ -347,6 +479,7 @@ def collect_cloudwatch_evidence(
         load_started_at=load_started_at,
         load_ended_at=load_ended_at,
     )
+    last_error: AwsRehostError | None = None
     for attempt in range(maximum_attempts):
         with NamedTemporaryFile(
             mode="w",
@@ -379,10 +512,12 @@ def collect_cloudwatch_evidence(
                 load_ended_at=load_ended_at,
                 collected_at=now(),
             )
-        except AwsRehostError:
+        except AwsRehostError as error:
+            last_error = error
             if attempt + 1 == maximum_attempts:
                 raise AwsRehostError(
-                    "CloudWatch did not publish complete aligned evidence in time"
+                    "CloudWatch did not publish complete aligned evidence in time; "
+                    f"last observation: {last_error}"
                 ) from None
             sleeper(retry_interval_seconds)
     raise AssertionError("unreachable CloudWatch polling state")

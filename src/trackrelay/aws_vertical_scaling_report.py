@@ -8,7 +8,10 @@ from typing import Annotated, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
-from trackrelay.aws_cloudwatch import CloudWatchRunEvidence
+from trackrelay.aws_cloudwatch import (
+    CloudWatchRunEvidence,
+    cloudwatch_coverage_error,
+)
 from trackrelay.aws_rehost import (
     AwsRehostError,
     ProcessRunner,
@@ -205,13 +208,6 @@ def _metric(cloudwatch: CloudWatchRunEvidence, query_id: str):
 def _weighted_average(cloudwatch: CloudWatchRunEvidence, query_id: str) -> float:
     series = _metric(cloudwatch, query_id)
     weight = sum(point.load_window_overlap_seconds for point in series.datapoints)
-    expected_weight = (
-        cloudwatch.load_ended_at - cloudwatch.load_started_at
-    ).total_seconds()
-    if abs(weight - expected_weight) > 0.001:
-        raise AwsRehostError(
-            f"CloudWatch evidence does not cover the load window for {query_id}"
-        )
     return sum(
         point.value * point.load_window_overlap_seconds
         for point in series.datapoints
@@ -227,26 +223,13 @@ def _minimum(cloudwatch: CloudWatchRunEvidence, query_id: str) -> float:
 
 
 def _require_full_cloudwatch_coverage(cloudwatch: CloudWatchRunEvidence) -> None:
-    expected = (
-        cloudwatch.load_ended_at - cloudwatch.load_started_at
-    ).total_seconds()
-    incomplete = tuple(
-        series.query_id
-        for series in cloudwatch.series
-        if abs(
-            sum(
-                point.load_window_overlap_seconds
-                for point in series.datapoints
-            )
-            - expected
-        )
-        > 0.001
+    coverage_error = cloudwatch_coverage_error(
+        cloudwatch.series,
+        load_started_at=cloudwatch.load_started_at,
+        load_ended_at=cloudwatch.load_ended_at,
     )
-    if incomplete:
-        raise AwsRehostError(
-            "CloudWatch series do not cover the complete load window: "
-            f"{incomplete}"
-        )
+    if coverage_error is not None:
+        raise AwsRehostError(f"incomplete CloudWatch evidence: {coverage_error}")
 
 
 def _downstream_process_metrics(

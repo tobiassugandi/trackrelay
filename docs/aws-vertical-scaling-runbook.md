@@ -328,7 +328,10 @@ For every rate, it requires:
   and terminal delivery statuses remain in the per-rate evidence directory.
 - Proof that the run-specific sampler container was removed.
 - Complete database and downstream reconciliation.
-- EC2 and RDS CloudWatch evidence aligned to the load window.
+- EC2 and RDS CloudWatch evidence with continuous native-bucket coverage of the
+  exact load window. Independently delayed metric series keep polling until
+  their trailing buckets arrive; an uncovered leading, interior, or trailing
+  interval is never accepted as complete.
 - A valid pass/fail interpretation; failed overload is never counted as useful
   throughput merely because it consumed CPU.
 

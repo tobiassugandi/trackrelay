@@ -689,6 +689,12 @@ def run_current_vertical_scaling_tier(
                 run_directory / "performance-result.json"
             )
             rate_result_path = run_directory / "rate-result.json"
+            prepare_attempts_path = (
+                run_directory / "ssm-prepare-command-attempts.json"
+            )
+            collect_attempts_path = (
+                run_directory / "ssm-collect-command-attempts.json"
+            )
             write_input_manifest(point.manifest(), input_manifest_path)
 
             remote_action(
@@ -697,6 +703,7 @@ def run_current_vertical_scaling_tier(
                 action="prepare",
                 point=point,
                 runner=runner,
+                attempt_evidence_path=prepare_attempts_path,
             )
             configuration = PerformanceExperimentConfiguration(
                 scenario="healthy",
@@ -801,6 +808,7 @@ def run_current_vertical_scaling_tier(
                 action="collect",
                 point=point,
                 runner=runner,
+                attempt_evidence_path=collect_attempts_path,
             )
             if server_evidence is None:
                 raise AwsRehostError("SSM collection returned no evidence")

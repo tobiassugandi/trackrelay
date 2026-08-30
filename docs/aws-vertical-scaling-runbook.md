@@ -302,6 +302,10 @@ For every rate, it requires:
   load window. Individual overload-time gaps are retained explicitly instead
   of crashing the observer; diagnostic calculations use successful snapshots
   and remain fail-closed when those snapshots are insufficient.
+- A bounded post-load SSM recovery probe before reconciliation. Collection is
+  retried only after `Undeliverable` or `DeliveryTimedOut` with response code
+  -1; any command that began execution is never replayed. All command attempts
+  and terminal delivery statuses remain in the per-rate evidence directory.
 - Proof that the run-specific sampler container was removed.
 - Complete database and downstream reconciliation.
 - EC2 and RDS CloudWatch evidence aligned to the load window.

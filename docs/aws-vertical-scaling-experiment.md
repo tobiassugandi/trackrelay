@@ -154,6 +154,16 @@ and exits; a second bounded SSM command returns its logs, checks its exit code,
 and removes it. Interrupted loads invoke an idempotent, run-specific cleanup
 command.
 
+After overload evidence has been collected, the controller does not immediately
+assume that the EC2 management plane is ready for reconciliation. It submits a
+bounded harmless SSM probe with a 30-second delivery timeout until the agent
+actually executes it. The reconciliation command may be resubmitted only when
+its terminal invocation is `Undeliverable` or `DeliveryTimedOut` with response
+code -1, which proves that the command never ran. A command that started and
+then failed, timed out, or returned any other status is never replayed. Every
+probe and reconciliation command ID, status, and response code is journaled in
+the ignored per-rate experiment evidence.
+
 The normal lifetime is therefore controlled by actual load completion rather
 than a predicted tail. An absolute fail-safe timeout still bounds an orphaned
 sampler at the configured traffic duration plus 120 seconds for process startup,

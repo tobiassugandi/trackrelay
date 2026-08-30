@@ -21,6 +21,7 @@ from tests.test_aws_rehost import (
 from trackrelay.aws_rehost import AwsRehostError
 from trackrelay.aws_rehost_workload import (
     RemoteRuntimeSampler,
+    SsmWorkloadCommandEvidence,
     build_remote_action_payload,
     build_runtime_sampling_cleanup_payload,
     build_runtime_sampling_collect_payload,
@@ -29,6 +30,7 @@ from trackrelay.aws_rehost_workload import (
     collect_remote_runtime_sampling,
     execute_rehost_workload,
     frozen_rehost_definition,
+    run_remote_action,
     runtime_sampler_container_name,
     start_remote_runtime_sampling,
     stop_remote_runtime_sampling,
@@ -115,6 +117,151 @@ def test_remote_payload_uses_private_compose_services_without_secrets() -> None:
     cleanup_payload = build_runtime_sampling_cleanup_payload(point)
     assert container_name in cleanup_payload["commands"][0]
     assert cleanup_payload["executionTimeout"] == ["30"]
+
+
+def workload_evidence(point: RehostWorkloadPoint) -> RehostServerEvidence:
+    expected = point.request_rate_per_second * point.duration_seconds
+    return RehostServerEvidence(
+        point=point,
+        reconciliation=ReconciliationReport(
+            test_run_id=point.test_run_id,
+            generated=expected,
+            accepted=expected,
+            rejected=0,
+            unique=expected,
+            processed=expected,
+            failed=0,
+            pending=0,
+            unaccounted=0,
+            simulator_receipts=expected,
+            simulator_unique_events=expected,
+        ),
+    )
+
+
+def test_collect_recovers_ssm_and_retries_only_commands_never_delivered(
+    tmp_path: Path,
+) -> None:
+    session = make_session(tmp_path, status="rehost_deployed")
+    point = RehostWorkloadPoint(
+        test_run_id="00000000-0000-0000-0000-000000000906",
+        request_rate_per_second=100,
+        duration_seconds=180,
+        partner_id="load-alpha",
+    )
+    statuses = (
+        ("Undeliverable", -1),
+        ("Success", 0),
+        ("DeliveryTimedOut", -1),
+        ("Success", 0),
+        ("Success", 0),
+    )
+    status_by_command: dict[str, tuple[str, int]] = {}
+    submitted_commands: list[str] = []
+
+    def runner(arguments, _input_text):
+        call = tuple(arguments)
+        if "send-command" in call:
+            command_id = f"00000000-0000-0000-0000-{len(submitted_commands) + 1:012x}"
+            status_by_command[command_id] = statuses[len(submitted_commands)]
+            submitted_commands.append(command_id)
+            assert call[call.index("--timeout-seconds") + 1] == "30"
+            return completed(call, stdout=command_id)
+        command_id = call[call.index("--command-id") + 1]
+        status, response_code = status_by_command[command_id]
+        if "wait" in call:
+            return completed(
+                call,
+                returncode=0 if status == "Success" else 255,
+            )
+        query = call[call.index("--query") + 1]
+        if query == "[Status,ResponseCode]":
+            return completed(call, stdout=f"{status}\t{response_code}")
+        assert query == "StandardOutputContent"
+        return completed(
+            call,
+            stdout=f"{encoded_evidence(workload_evidence(point))}\n",
+        )
+
+    attempt_path = tmp_path / "ssm-attempts.json"
+    delays: list[float] = []
+    observed = run_remote_action(
+        session,
+        instance_id=INSTANCE_ID,
+        action="collect",
+        point=point,
+        runner=runner,
+        attempt_evidence_path=attempt_path,
+        sleeper=delays.append,
+    )
+
+    assert observed == workload_evidence(point)
+    assert delays == [5]
+    saved = SsmWorkloadCommandEvidence.model_validate_json(
+        attempt_path.read_text(encoding="utf-8")
+    )
+    assert tuple(attempt.purpose for attempt in saved.attempts) == (
+        "recovery-probe",
+        "recovery-probe",
+        "collect",
+        "recovery-probe",
+        "collect",
+    )
+    assert tuple(attempt.status for attempt in saved.attempts) == tuple(
+        status for status, _response_code in statuses
+    )
+
+
+def test_collect_never_retries_a_command_that_started_and_failed(
+    tmp_path: Path,
+) -> None:
+    session = make_session(tmp_path, status="rehost_deployed")
+    point = RehostWorkloadPoint(
+        test_run_id="00000000-0000-0000-0000-000000000907",
+        request_rate_per_second=100,
+        duration_seconds=180,
+        partner_id="load-alpha",
+    )
+    statuses = (("Success", 0), ("Failed", 1))
+    status_by_command: dict[str, tuple[str, int]] = {}
+    submitted_commands: list[str] = []
+
+    def runner(arguments, _input_text):
+        call = tuple(arguments)
+        if "send-command" in call:
+            command_id = f"00000000-0000-0000-0000-{len(submitted_commands) + 1:012x}"
+            status_by_command[command_id] = statuses[len(submitted_commands)]
+            submitted_commands.append(command_id)
+            return completed(call, stdout=command_id)
+        command_id = call[call.index("--command-id") + 1]
+        status, response_code = status_by_command[command_id]
+        if "wait" in call:
+            return completed(
+                call,
+                returncode=0 if status == "Success" else 255,
+            )
+        return completed(call, stdout=f"{status}\t{response_code}")
+
+    attempt_path = tmp_path / "ssm-attempts.json"
+    with raises(AwsRehostError, match="not proven undelivered"):
+        run_remote_action(
+            session,
+            instance_id=INSTANCE_ID,
+            action="collect",
+            point=point,
+            runner=runner,
+            attempt_evidence_path=attempt_path,
+            sleeper=lambda _seconds: None,
+        )
+
+    assert len(submitted_commands) == 2
+    saved = SsmWorkloadCommandEvidence.model_validate_json(
+        attempt_path.read_text(encoding="utf-8")
+    )
+    assert tuple(attempt.status for attempt in saved.attempts) == (
+        "Success",
+        "Failed",
+    )
 
 
 def test_runtime_sampler_shell_payloads_parse_as_bash() -> None:
@@ -433,6 +580,8 @@ def test_workload_saves_all_frozen_points_without_the_temporary_endpoint(
             elif 'docker logs "$container_name"' in payload_command:
                 active_action = "sample-collect"
                 assert active_point is not None
+            elif payload_command == "set -euo pipefail\ntrue":
+                active_action = "recovery-probe"
             else:
                 active_action, active_point = point_from_payload(payload_path)
             return completed(call, stdout=COMMAND_ID)

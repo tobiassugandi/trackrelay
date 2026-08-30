@@ -12,6 +12,7 @@ from ipaddress import IPv4Address
 from pathlib import Path
 from shlex import quote
 from tempfile import NamedTemporaryFile
+from time import sleep
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
@@ -81,6 +82,13 @@ LocalLoadExecutor = Callable[
 RUNTIME_SAMPLER_COLLECTION_MAX_WAIT_SECONDS = 120
 RUNTIME_SAMPLER_COLLECTION_EXECUTION_TIMEOUT_SECONDS = 150
 RUNTIME_SAMPLER_STOP_FILE = "/tmp/trackrelay-load-complete"
+SSM_COMMAND_DELIVERY_TIMEOUT_SECONDS = 30
+SSM_RECOVERY_MAX_PROBES = 8
+SSM_RECOVERY_RETRY_INTERVAL_SECONDS = 5
+SSM_COLLECTION_MAX_ATTEMPTS = 3
+RETRYABLE_SSM_DELIVERY_STATUSES = frozenset(
+    {"DeliveryTimedOut", "Undeliverable"}
+)
 
 
 class RemoteRuntimeSampler(BaseModel):
@@ -92,6 +100,39 @@ class RemoteRuntimeSampler(BaseModel):
         pattern=r"^trackrelay-runtime-[0-9a-f]{32}$"
     )
     ready_at: AwareDatetime
+
+
+class SsmWorkloadCommandAttempt(BaseModel):
+    """One submitted SSM command and its last observed delivery outcome."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    purpose: Literal["prepare", "recovery-probe", "collect"]
+    command_id: str = Field(
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    )
+    status: str
+    response_code: int | None = None
+
+
+class SsmWorkloadCommandEvidence(BaseModel):
+    """Every SSM attempt made for one workload action."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    test_run_id: UUID
+    action: Literal["prepare", "collect"]
+    attempts: tuple[SsmWorkloadCommandAttempt, ...]
+
+
+def _ssm_command_was_never_delivered(
+    attempt: SsmWorkloadCommandAttempt,
+) -> bool:
+    return (
+        attempt.status in RETRYABLE_SSM_DELIVERY_STATUSES
+        and attempt.response_code == -1
+    )
 
 
 class BenchmarkDriverEnvironment(BaseModel):
@@ -619,16 +660,15 @@ def validate_runtime_timeline_covers_load(
         raise AwsRehostError("runtime sampling ended before the load")
 
 
-def run_remote_action(
+def _submit_workload_ssm_command(
     session: AwsSession,
     *,
     instance_id: str,
-    action: Literal["prepare", "collect"],
-    point: RehostWorkloadPoint,
+    payload: dict[str, list[str]],
+    comment: str,
     runner: ProcessRunner,
-) -> RehostServerEvidence | None:
-    """Execute one bounded SSM action and return only compact evidence."""
-    payload = build_remote_action_payload(action, point)
+) -> str:
+    """Submit one workload-related command with a bounded delivery window."""
     with NamedTemporaryFile(
         mode="w",
         encoding="utf-8",
@@ -648,20 +688,32 @@ def run_remote_action(
                 "--document-name",
                 "AWS-RunShellScript",
                 "--comment",
-                f"TrackRelay rehost workload {action}",
+                comment,
                 "--parameters",
                 f"file://{payload_file.name}",
+                "--timeout-seconds",
+                str(SSM_COMMAND_DELIVERY_TIMEOUT_SECONDS),
                 "--query",
                 "Command.CommandId",
                 "--output",
                 "text",
             ),
-            action=f"SSM workload {action}",
+            action="SSM workload command submission",
         ).stdout.strip()
     if COMMAND_ID_PATTERN.fullmatch(command_id) is None:
         raise AwsRehostError("SSM returned an invalid workload command ID")
-    invoke(
-        runner,
+    return command_id
+
+
+def _wait_for_workload_ssm_command(
+    session: AwsSession,
+    *,
+    instance_id: str,
+    command_id: str,
+    runner: ProcessRunner,
+) -> tuple[str, int]:
+    """Observe the terminal invocation even when the AWS waiter returns nonzero."""
+    runner(
         (
             *aws_prefix(session),
             "ssm",
@@ -672,9 +724,9 @@ def run_remote_action(
             "--instance-id",
             instance_id,
         ),
-        action=f"SSM workload {action} completion",
+        None,
     )
-    status = invoke(
+    invocation = invoke(
         runner,
         (
             *aws_prefix(session),
@@ -689,12 +741,194 @@ def run_remote_action(
             "--output",
             "text",
         ),
-        action=f"SSM workload {action} status",
+        action="SSM workload command status",
     ).stdout.split()
-    if status != ["Success", "0"]:
-        raise AwsRehostError(f"SSM workload {action} did not report success")
+    if len(invocation) != 2:
+        raise AwsRehostError("SSM workload command returned an invalid status")
+    try:
+        response_code = int(invocation[1])
+    except ValueError as error:
+        raise AwsRehostError(
+            "SSM workload command returned an invalid response code"
+        ) from error
+    return invocation[0], response_code
+
+
+def _write_ssm_workload_attempts(
+    path: Path | None,
+    *,
+    point: RehostWorkloadPoint,
+    action: Literal["prepare", "collect"],
+    attempts: Sequence[SsmWorkloadCommandAttempt],
+) -> None:
+    if path is None:
+        return
+    _write_model(
+        SsmWorkloadCommandEvidence(
+            test_run_id=point.test_run_id,
+            action=action,
+            attempts=tuple(attempts),
+        ),
+        path,
+    )
+
+
+def _execute_workload_ssm_attempt(
+    session: AwsSession,
+    *,
+    instance_id: str,
+    payload: dict[str, list[str]],
+    comment: str,
+    purpose: Literal["prepare", "recovery-probe", "collect"],
+    point: RehostWorkloadPoint,
+    action: Literal["prepare", "collect"],
+    attempts: list[SsmWorkloadCommandAttempt],
+    attempt_evidence_path: Path | None,
+    runner: ProcessRunner,
+) -> SsmWorkloadCommandAttempt:
+    """Submit, journal, and observe one command without hiding delivery failure."""
+    command_id = _submit_workload_ssm_command(
+        session,
+        instance_id=instance_id,
+        payload=payload,
+        comment=comment,
+        runner=runner,
+    )
+    submitted = SsmWorkloadCommandAttempt(
+        purpose=purpose,
+        command_id=command_id,
+        status="Submitted",
+    )
+    attempts.append(submitted)
+    _write_ssm_workload_attempts(
+        attempt_evidence_path,
+        point=point,
+        action=action,
+        attempts=attempts,
+    )
+    status, response_code = _wait_for_workload_ssm_command(
+        session,
+        instance_id=instance_id,
+        command_id=command_id,
+        runner=runner,
+    )
+    completed = submitted.model_copy(
+        update={"status": status, "response_code": response_code}
+    )
+    attempts[-1] = completed
+    _write_ssm_workload_attempts(
+        attempt_evidence_path,
+        point=point,
+        action=action,
+        attempts=attempts,
+    )
+    return completed
+
+
+def _wait_for_post_load_ssm_recovery(
+    session: AwsSession,
+    *,
+    instance_id: str,
+    point: RehostWorkloadPoint,
+    attempts: list[SsmWorkloadCommandAttempt],
+    attempt_evidence_path: Path | None,
+    runner: ProcessRunner,
+    sleeper: Callable[[float], None],
+) -> None:
+    """Require the overloaded host to execute a harmless command before collect."""
+    probe_payload = {
+        "commands": ["set -euo pipefail\ntrue"],
+        "executionTimeout": ["10"],
+    }
+    for probe_number in range(SSM_RECOVERY_MAX_PROBES):
+        attempt = _execute_workload_ssm_attempt(
+            session,
+            instance_id=instance_id,
+            payload=probe_payload,
+            comment="TrackRelay post-load SSM recovery probe",
+            purpose="recovery-probe",
+            point=point,
+            action="collect",
+            attempts=attempts,
+            attempt_evidence_path=attempt_evidence_path,
+            runner=runner,
+        )
+        if (attempt.status, attempt.response_code) == ("Success", 0):
+            return
+        if not _ssm_command_was_never_delivered(attempt):
+            raise AwsRehostError(
+                "post-load SSM recovery probe did not succeed safely"
+            )
+        if probe_number < SSM_RECOVERY_MAX_PROBES - 1:
+            sleeper(SSM_RECOVERY_RETRY_INTERVAL_SECONDS)
+    raise AwsRehostError("post-load SSM recovery gate timed out")
+
+
+def run_remote_action(
+    session: AwsSession,
+    *,
+    instance_id: str,
+    action: Literal["prepare", "collect"],
+    point: RehostWorkloadPoint,
+    runner: ProcessRunner,
+    attempt_evidence_path: Path | None = None,
+    sleeper: Callable[[float], None] = sleep,
+) -> RehostServerEvidence | None:
+    """Execute one delivery-aware SSM action and return compact evidence."""
+    attempts: list[SsmWorkloadCommandAttempt] = []
+    payload = build_remote_action_payload(action, point)
     if action == "prepare":
+        attempt = _execute_workload_ssm_attempt(
+            session,
+            instance_id=instance_id,
+            payload=payload,
+            comment="TrackRelay rehost workload prepare",
+            purpose="prepare",
+            point=point,
+            action=action,
+            attempts=attempts,
+            attempt_evidence_path=attempt_evidence_path,
+            runner=runner,
+        )
+        if (attempt.status, attempt.response_code) != ("Success", 0):
+            raise AwsRehostError("SSM workload prepare did not report success")
         return None
+
+    command_id = ""
+    for collection_number in range(SSM_COLLECTION_MAX_ATTEMPTS):
+        _wait_for_post_load_ssm_recovery(
+            session,
+            instance_id=instance_id,
+            point=point,
+            attempts=attempts,
+            attempt_evidence_path=attempt_evidence_path,
+            runner=runner,
+            sleeper=sleeper,
+        )
+        attempt = _execute_workload_ssm_attempt(
+            session,
+            instance_id=instance_id,
+            payload=payload,
+            comment="TrackRelay rehost workload collect",
+            purpose="collect",
+            point=point,
+            action=action,
+            attempts=attempts,
+            attempt_evidence_path=attempt_evidence_path,
+            runner=runner,
+        )
+        command_id = attempt.command_id
+        if (attempt.status, attempt.response_code) == ("Success", 0):
+            break
+        if not _ssm_command_was_never_delivered(attempt):
+            raise AwsRehostError(
+                "SSM workload collect did not succeed and was not proven "
+                "undelivered"
+            )
+        if collection_number == SSM_COLLECTION_MAX_ATTEMPTS - 1:
+            raise AwsRehostError(
+                "SSM workload collect exhausted safe delivery retries"
+            )
 
     output = invoke(
         runner,
@@ -851,6 +1085,12 @@ def execute_rehost_workload(
             )
             server_evidence_path = run_directory / "server-evidence.json"
             rate_result_path = run_directory / "rate-result.json"
+            prepare_attempts_path = (
+                run_directory / "ssm-prepare-command-attempts.json"
+            )
+            collect_attempts_path = (
+                run_directory / "ssm-collect-command-attempts.json"
+            )
             write_input_manifest(point.manifest(), manifest_path)
 
             run_remote_action(
@@ -859,6 +1099,7 @@ def execute_rehost_workload(
                 action="prepare",
                 point=point,
                 runner=runner,
+                attempt_evidence_path=prepare_attempts_path,
             )
             configuration = PerformanceExperimentConfiguration(
                 scenario="healthy",
@@ -960,6 +1201,7 @@ def execute_rehost_workload(
                 action="collect",
                 point=point,
                 runner=runner,
+                attempt_evidence_path=collect_attempts_path,
             )
             if server_evidence is None:
                 raise AwsRehostError("SSM collection returned no evidence")

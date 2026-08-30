@@ -323,6 +323,12 @@ The runner performs, in order:
 9. Verify empty Terraform state, the generic tag inventory, and all native
    service inventories.
 
+During each transition, an SSM `Online` response is followed by a bounded
+on-host gate for Docker, the digest-pinned container, RDS TLS configuration, and
+API readiness. This absorbs normal stop/start ordering without using a blind
+fixed delay. An image or TLS mismatch fails immediately; container/API startup
+gets at most 75 seconds.
+
 For every trial, it requires:
 
 - Exact k6 process boundaries and the complete k6 summary.

@@ -371,6 +371,13 @@ same RDS identifier, the requested instance type, the same digest-pinned image,
 an RDS TLS connection string, and a ready API. Only then does the next tier
 become runnable.
 
+SSM reporting `Online` is necessary but does not prove that Docker and Compose
+have finished returning after an EC2 stop/start. The transition validator
+therefore executes a bounded 75-second application-readiness gate on the host.
+It retries only the side-effect-free container and health checks, immediately
+rejects an unexpected image or invalid RDS TLS configuration, and emits a
+sanitized timeout state if the container or API never becomes ready.
+
 This transition command is stateful and can incur AWS charges. Its existence is
 not authorization to run it: cloud session 2 still needs the separately
 reviewed resource list, duration, cost ceiling, and explicit user approval.

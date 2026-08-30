@@ -32,6 +32,7 @@ from trackrelay.aws_rehost_workload import (
 )
 from trackrelay.aws_session import load_manifest, write_manifest
 from trackrelay.aws_vertical_scaling import (
+    build_transition_validation_payload,
     execute_timed_local_load,
     execute_with_load_window,
     prepare_vertical_scaling_experiment,
@@ -246,6 +247,20 @@ def test_saved_definition_hash_is_bound_into_session_manifest(tmp_path) -> None:
 
     manifest = loads(session.manifest_path.read_text(encoding="utf-8"))
     assert len(manifest["vertical_scaling"]["definition_sha256"]) == 64
+
+
+def test_transition_validation_waits_for_the_restarted_runtime() -> None:
+    payload = build_transition_validation_payload(
+        image_reference=f"{REPOSITORY_URL}@{IMAGE_DIGEST}"
+    )
+    command = payload["commands"][0]
+
+    assert "for attempt in $(seq 1 15); do" in command
+    assert 'if test "${attempt}" -lt 15; then sleep 5; fi' in command
+    assert "docker inspect" in command
+    assert "api-not-ready" in command
+    assert "transition validation timed out" in command
+    assert payload["executionTimeout"] == ["120"]
 
 
 def api_sample(captured_at: datetime, cpu_seconds: float) -> RuntimeMetricsSnapshot:

@@ -1388,21 +1388,39 @@ def build_transition_validation_payload(
     command = "\n".join(
         (
             "set -euo pipefail",
+            "last_state=container-not-running",
+            "for attempt in $(seq 1 15); do",
             (
-                "actual_image=\"$(docker inspect --format "
-                "'{{.Config.Image}}' trackrelay-rehost-api-1)\""
+                "  if actual_image=\"$(docker inspect --format "
+                "'{{.Config.Image}}' trackrelay-rehost-api-1 2>/dev/null)\"; then"
             ),
-            f"test \"${{actual_image}}\" = {expected_image}",
+            f"    if test \"${{actual_image}}\" != {expected_image}; then",
+            "      echo 'transition validation found an unexpected image' >&2",
+            "      exit 1",
+            "    fi",
             (
-                "grep --quiet "
+                "    if ! grep --quiet "
                 "'^TRACKRELAY_DATABASE_URL=.*sslmode=require$' "
-                "/opt/trackrelay/.env"
+                "/opt/trackrelay/.env; then"
             ),
+            "      echo 'transition validation found invalid RDS TLS config' >&2",
+            "      exit 1",
+            "    fi",
             (
-                "test \"$(curl --silent --fail --max-time 5 "
-                "http://127.0.0.1:8000/health/ready)\" "
-                "= '{\"status\":\"ready\"}'"
+                "    readiness=\"$(curl --silent --fail --max-time 5 "
+                "http://127.0.0.1:8000/health/ready || true)\""
             ),
+            "    if test \"${readiness}\" = '{\"status\":\"ready\"}'; then",
+            "      exit 0",
+            "    fi",
+            "    last_state=api-not-ready",
+            "  fi",
+            "  if test \"${attempt}\" -lt 15; then sleep 5; fi",
+            "done",
+            (
+                "echo \"transition validation timed out: ${last_state}\" >&2"
+            ),
+            "exit 1",
         )
     )
     payload = {"commands": [command], "executionTimeout": ["120"]}

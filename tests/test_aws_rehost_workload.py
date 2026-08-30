@@ -28,6 +28,7 @@ from trackrelay.aws_rehost_workload import (
     build_runtime_sampling_start_payload,
     build_runtime_sampling_stop_payload,
     collect_remote_runtime_sampling,
+    execute_local_load,
     execute_rehost_workload,
     frozen_rehost_definition,
     run_remote_action,
@@ -52,6 +53,24 @@ from trackrelay.runtime_metrics import (
 )
 
 PUBLIC_IP = "198.51.100.25"
+
+
+def test_missing_k6_summary_reports_the_process_exit_code(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        "trackrelay.aws_rehost_workload.run_k6_with_resource_sampling",
+        lambda *_args, **_kwargs: (137, ()),
+    )
+
+    with raises(AwsRehostError, match="exited with code 137"):
+        execute_local_load(
+            ("docker", "run"),
+            object(),
+            5,
+            tmp_path / "k6-summary.json",
+        )
 
 
 def test_frozen_definition_copies_step_8_6_without_local_endpoints() -> None:

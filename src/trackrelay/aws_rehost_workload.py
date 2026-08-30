@@ -997,6 +997,10 @@ def execute_local_load(
     try:
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
+        if exit_code != 0:
+            raise AwsRehostError(
+                f"k6 exited with code {exit_code} without producing a valid summary"
+            ) from error
         raise AwsRehostError("k6 did not produce a valid summary") from error
     if not isinstance(summary, dict):
         raise AwsRehostError("k6 summary must be a JSON object")

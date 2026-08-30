@@ -209,9 +209,13 @@ def test_fixed_rate_driver_preallocates_tail_latency_headroom() -> None:
         Path(__file__).resolve().parents[2] / "load" / "fixed-rate.js"
     ).read_text(encoding="utf-8")
 
-    assert "const preAllocatedVUs = Math.max(100, requestRate * 2);" in script
+    assert (
+        "const preAllocatedVUs = Math.max(100, Math.ceil(requestRate / 2));"
+        in script
+    )
+    assert "const maxVUs = Math.max(100, requestRate);" in script
     assert "preAllocatedVUs," in script
-    assert "maxVUs: preAllocatedVUs," in script
+    assert "maxVUs," in script
 
 
 def runtime_sample(

@@ -22,6 +22,13 @@ offers a higher rate after a majority-confirmed failure. This repetition is
 intentional: a single small number of dropped iterations is not enough to rank
 the hardware tiers.
 
+The fixed-rate driver keeps at least 100 VUs ready. Above 200 events/s it
+preallocates half the offered rate and may grow to one VU per event/s. This
+preserves low-rate tail-latency headroom without asking the local Docker runtime
+to construct 1,000 VUs before the 500 events/s overload checkpoint. A k6 process
+that exits before writing its summary is a driver failure, never an application
+rate result.
+
 ## Important ownership rule
 
 Before `aws-scaling-session` starts, you are responsible for running setup or

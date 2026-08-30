@@ -83,8 +83,10 @@ The experiment reuses the Step 8.6 workload shape, offered-rate ladder,
 reconciliation invariants, and initial SLO. Every request represents one unique
 shipment in the `CREATED` state. Before measurement, every hardware tier runs a
 2 events/s, 30-second warm-up, resets both stores, and waits 60 seconds. The k6
-driver preallocates `max(100, 2 × offered rate)` VUs so cold paths, dynamic VU
-creation, and a few tail-latency outliers cannot masquerade as an EC2 limit.
+driver preallocates `max(100, ceil(offered rate / 2))` VUs and may grow to
+`max(100, offered rate)`. The 100-VU floor keeps low-rate tail latency from
+masquerading as an EC2 limit without exhausting the local driver merely to
+initialize a high-rate overload point.
 
 Each candidate rate is classified by three independent 180-second trials after
 an evidence-preserving reset. Two passing trials classify the rate as passing;

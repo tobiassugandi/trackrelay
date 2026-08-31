@@ -26,9 +26,11 @@ from trackrelay.models import TestRun as ExperimentRunModel
 from trackrelay.partners import PARTNER_ADAPTERS
 from trackrelay.runtime_metrics import RuntimeMetricsSnapshot, capture_runtime_metrics
 from trackrelay.services import (
-    DeliveryResult,
+    DownstreamDeliveryJob,
+    DownstreamDeliveryQueue,
+    DownstreamDeliveryQueueError,
     EventPersistenceResult,
-    deliver_and_record_normalized_event,
+    RecordingDownstreamDeliveryQueue,
     list_shipment_events,
     persist_normalized_event,
 )
@@ -37,18 +39,18 @@ settings = Settings()
 app = FastAPI(title=settings.app_name, debug=settings.debug)
 
 EventPersister = Callable[[NormalizedEvent], EventPersistenceResult]
-EventDeliverer = Callable[[NormalizedEvent, UUID], DeliveryResult]
 NonNegativeCount = Annotated[int, Field(ge=0)]
+local_downstream_delivery_queue = RecordingDownstreamDeliveryQueue()
 
 
-class CreatedEventResponse(BaseModel):
-    """Outcome when a logical event is created and delivered."""
+class QueuedEventResponse(BaseModel):
+    """Outcome when a new logical event is persisted and scheduled."""
 
     event_id: UUID
     processing_status: Literal["processed"]
     duplicate: Literal[False]
-    delivery_status: Literal["delivered"]
-    downstream_status_code: int
+    delivery_status: Literal["queued"]
+    downstream_status_code: None
 
 
 class DuplicateEventResponse(BaseModel):
@@ -61,7 +63,7 @@ class DuplicateEventResponse(BaseModel):
     downstream_status_code: None
 
 
-IngestionResponse = CreatedEventResponse | DuplicateEventResponse
+IngestionResponse = QueuedEventResponse | DuplicateEventResponse
 
 
 class ShipmentHistoryEventResponse(BaseModel):
@@ -155,18 +157,9 @@ def get_event_persister() -> EventPersister:
     return persist_normalized_event
 
 
-def get_event_deliverer() -> EventDeliverer:
-    """Provide synchronous delivery configured for the local downstream service."""
-
-    def deliver(event: NormalizedEvent, event_id: UUID) -> DeliveryResult:
-        return deliver_and_record_normalized_event(
-            event,
-            event_id=event_id,
-            downstream_url=settings.downstream_url,
-            timeout_seconds=settings.downstream_timeout_seconds,
-        )
-
-    return deliver
+def get_downstream_delivery_queue() -> DownstreamDeliveryQueue:
+    """Provide the temporary process-local queue used during local development."""
+    return local_downstream_delivery_queue
 
 
 @app.get("/health/live", tags=["health"])
@@ -368,10 +361,13 @@ def get_event(
     response_model=IngestionResponse,
     responses={
         status.HTTP_502_BAD_GATEWAY: {
-            "description": "Event persisted, but downstream delivery failed."
+            "description": "A transitional inline queue failed downstream."
         },
         status.HTTP_504_GATEWAY_TIMEOUT: {
-            "description": "Event persisted, but downstream delivery timed out."
+            "description": "A transitional inline queue timed out downstream."
+        },
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "description": "Event persisted, but delivery work was not queued."
         },
     },
     tags=["events"],
@@ -382,10 +378,13 @@ def ingest_partner_event(
     response: Response,
     session: Annotated[Session, Depends(get_session)],
     persist_event: Annotated[EventPersister, Depends(get_event_persister)],
-    deliver_event: Annotated[EventDeliverer, Depends(get_event_deliverer)],
+    delivery_queue: Annotated[
+        DownstreamDeliveryQueue,
+        Depends(get_downstream_delivery_queue),
+    ],
     test_run_id: Annotated[UUID | None, Header(alias="X-Test-Run-ID")] = None,
 ) -> IngestionResponse:
-    """Validate, normalize, persist, and deliver one configured partner event."""
+    """Validate, normalize, persist, and schedule one configured partner event."""
     partner = session.get(Partner, partner_id)
     if partner is None:
         raise HTTPException(
@@ -404,8 +403,8 @@ def ingest_partner_event(
             detail="Partner adapter is not supported",
         )
     configured_partner_id = partner.id
-    # Persistence and delivery-attempt recording use separate transactions.
-    # Release the lookup connection before they acquire their connections.
+    # Persistence and queue publishing currently remain separate operations.
+    # Release the lookup connection before persistence acquires its connection.
     session.close()
 
     try:
@@ -437,8 +436,9 @@ def ingest_partner_event(
             downstream_status_code=None,
         )
 
+    job = DownstreamDeliveryJob(event_id=persistence.event_id)
     try:
-        delivery = deliver_event(normalized_event, persistence.event_id)
+        delivery_queue.enqueue(job)
     except httpx.TimeoutException as error:
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
@@ -449,11 +449,16 @@ def ingest_partner_event(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Downstream delivery failed; event remains persisted",
         ) from error
+    except DownstreamDeliveryQueueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Event persisted, but downstream delivery was not queued",
+        ) from error
 
-    return CreatedEventResponse(
+    return QueuedEventResponse(
         event_id=persistence.event_id,
         processing_status="processed",
         duplicate=False,
-        delivery_status=delivery.status,
-        downstream_status_code=delivery.downstream_status_code,
+        delivery_status="queued",
+        downstream_status_code=None,
     )

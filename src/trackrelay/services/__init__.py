@@ -3,6 +3,8 @@
 from trackrelay.services.delivery_queue import (
     DownstreamDeliveryJob,
     DownstreamDeliveryQueue,
+    DownstreamDeliveryQueueError,
+    RecordingDownstreamDeliveryQueue,
 )
 from trackrelay.services.downstream_delivery import (
     DeliveryResult,
@@ -20,7 +22,9 @@ __all__ = [
     "DeliveryResult",
     "DownstreamDeliveryJob",
     "DownstreamDeliveryQueue",
+    "DownstreamDeliveryQueueError",
     "EventPersistenceResult",
+    "RecordingDownstreamDeliveryQueue",
     "deliver_and_record_normalized_event",
     "deliver_normalized_event",
     "list_shipment_events",

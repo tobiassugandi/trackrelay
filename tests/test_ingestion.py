@@ -3,17 +3,26 @@
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 
-import httpx
 from fastapi.testclient import TestClient
 from pytest import fixture
 
 from trackrelay.database import get_session
 from trackrelay.domain import NormalizedEvent, ShipmentStatus
-from trackrelay.main import app, get_event_deliverer, get_event_persister
+from trackrelay.main import (
+    app,
+    get_downstream_delivery_queue,
+    get_event_persister,
+)
 from trackrelay.models import Partner
-from trackrelay.services import DeliveryResult, EventPersistenceResult
+from trackrelay.services import (
+    DownstreamDeliveryJob,
+    DownstreamDeliveryQueue,
+    DownstreamDeliveryQueueError,
+    EventPersistenceResult,
+    RecordingDownstreamDeliveryQueue,
+)
 
 
 class StubSession:
@@ -54,7 +63,7 @@ def valid_payload() -> dict[str, str]:
 def configure_dependencies(
     partner: Partner | None,
     persist_event: Callable[[NormalizedEvent], EventPersistenceResult],
-    deliver_event: Callable[[NormalizedEvent, UUID], DeliveryResult] | None = None,
+    delivery_queue: DownstreamDeliveryQueue | None = None,
 ) -> StubSession:
     session = StubSession(partner)
 
@@ -63,9 +72,8 @@ def configure_dependencies(
 
     app.dependency_overrides[get_session] = override_session
     app.dependency_overrides[get_event_persister] = lambda: persist_event
-    app.dependency_overrides[get_event_deliverer] = lambda: (
-        deliver_event
-        or (lambda event, event_id: DeliveryResult(downstream_status_code=202))
+    app.dependency_overrides[get_downstream_delivery_queue] = lambda: (
+        delivery_queue or RecordingDownstreamDeliveryQueue()
     )
     return session
 
@@ -87,7 +95,7 @@ def test_ingestion_normalizes_and_persists_an_alpha_event(
 ) -> None:
     persisted_event_id = uuid4()
     persisted: list[NormalizedEvent] = []
-    delivered: list[NormalizedEvent] = []
+    delivery_queue = RecordingDownstreamDeliveryQueue()
     session: StubSession
 
     def persist_event(event: NormalizedEvent) -> EventPersistenceResult:
@@ -98,14 +106,10 @@ def test_ingestion_normalizes_and_persists_an_alpha_event(
             duplicate=False,
         )
 
-    def deliver_event(event: NormalizedEvent, event_id: UUID) -> DeliveryResult:
-        delivered.append(event)
-        return DeliveryResult(downstream_status_code=202)
-
     session = configure_dependencies(
         configured_partner(),
         persist_event,
-        deliver_event,
+        delivery_queue,
     )
 
     response = client.post(
@@ -118,8 +122,8 @@ def test_ingestion_normalizes_and_persists_an_alpha_event(
         "event_id": str(persisted_event_id),
         "processing_status": "processed",
         "duplicate": False,
-        "delivery_status": "delivered",
-        "downstream_status_code": 202,
+        "delivery_status": "queued",
+        "downstream_status_code": None,
     }
     assert len(persisted) == 1
     assert persisted[0].partner_id == "courier-alpha"
@@ -127,7 +131,9 @@ def test_ingestion_normalizes_and_persists_an_alpha_event(
     assert persisted[0].tracking_number == "TRK-001"
     assert persisted[0].status is ShipmentStatus.PICKED_UP
     assert persisted[0].raw_payload == valid_payload
-    assert delivered == persisted
+    assert delivery_queue.enqueued_jobs == (
+        DownstreamDeliveryJob(event_id=persisted_event_id),
+    )
 
 
 def test_ingestion_attaches_test_run_metadata_outside_the_partner_payload(
@@ -137,7 +143,7 @@ def test_ingestion_attaches_test_run_metadata_outside_the_partner_payload(
     persisted_event_id = uuid4()
     test_run_id = uuid4()
     persisted: list[NormalizedEvent] = []
-    delivered: list[NormalizedEvent] = []
+    delivery_queue = RecordingDownstreamDeliveryQueue()
 
     def persist_event(event: NormalizedEvent) -> EventPersistenceResult:
         persisted.append(event)
@@ -146,11 +152,7 @@ def test_ingestion_attaches_test_run_metadata_outside_the_partner_payload(
             duplicate=False,
         )
 
-    def deliver_event(event: NormalizedEvent, event_id: UUID) -> DeliveryResult:
-        delivered.append(event)
-        return DeliveryResult(downstream_status_code=202)
-
-    configure_dependencies(configured_partner(), persist_event, deliver_event)
+    configure_dependencies(configured_partner(), persist_event, delivery_queue)
 
     response = client.post(
         "/api/v1/partners/courier-alpha/events",
@@ -162,7 +164,9 @@ def test_ingestion_attaches_test_run_metadata_outside_the_partner_payload(
     assert len(persisted) == 1
     assert persisted[0].test_run_id == test_run_id
     assert persisted[0].raw_payload == valid_payload
-    assert delivered == persisted
+    assert delivery_queue.enqueued_jobs == (
+        DownstreamDeliveryJob(event_id=persisted_event_id),
+    )
 
 
 def test_ingestion_skips_delivery_and_returns_the_original_duplicate(
@@ -170,7 +174,7 @@ def test_ingestion_skips_delivery_and_returns_the_original_duplicate(
     valid_payload: dict[str, str],
 ) -> None:
     original_event_id = uuid4()
-    delivered: list[NormalizedEvent] = []
+    delivery_queue = RecordingDownstreamDeliveryQueue()
 
     def persist_duplicate(event: NormalizedEvent) -> EventPersistenceResult:
         return EventPersistenceResult(
@@ -178,11 +182,11 @@ def test_ingestion_skips_delivery_and_returns_the_original_duplicate(
             duplicate=True,
         )
 
-    def deliver_event(event: NormalizedEvent, event_id: UUID) -> DeliveryResult:
-        delivered.append(event)
-        return DeliveryResult(downstream_status_code=202)
-
-    configure_dependencies(configured_partner(), persist_duplicate, deliver_event)
+    configure_dependencies(
+        configured_partner(),
+        persist_duplicate,
+        delivery_queue,
+    )
 
     response = client.post(
         "/api/v1/partners/courier-alpha/events",
@@ -197,7 +201,7 @@ def test_ingestion_skips_delivery_and_returns_the_original_duplicate(
         "delivery_status": "skipped_duplicate",
         "downstream_status_code": None,
     }
-    assert delivered == []
+    assert delivery_queue.enqueued_jobs == ()
 
 
 def test_ingestion_separates_partner_identity_from_beta_adapter_type(
@@ -290,7 +294,7 @@ def test_ingestion_selects_gamma_for_a_nested_utc_payload(
     assert persisted[0].raw_payload == gamma_payload
 
 
-def test_ingestion_reports_a_downstream_server_error_after_persistence(
+def test_ingestion_reports_queue_failure_after_persistence(
     client: TestClient,
     valid_payload: dict[str, str],
 ) -> None:
@@ -300,53 +304,20 @@ def test_ingestion_reports_a_downstream_server_error_after_persistence(
         persisted.append(event)
         return EventPersistenceResult(event_id=uuid4(), duplicate=False)
 
-    def fail_delivery(event: NormalizedEvent, event_id: UUID) -> DeliveryResult:
-        request = httpx.Request("POST", "http://downstream.test/events")
-        response = httpx.Response(500, request=request)
-        raise httpx.HTTPStatusError(
-            "simulated downstream failure",
-            request=request,
-            response=response,
-        )
+    class FailingQueue:
+        def enqueue(self, job: DownstreamDeliveryJob) -> None:
+            raise DownstreamDeliveryQueueError("simulated publish failure")
 
-    configure_dependencies(configured_partner(), persist_event, fail_delivery)
+    configure_dependencies(configured_partner(), persist_event, FailingQueue())
 
     response = client.post(
         "/api/v1/partners/courier-alpha/events",
         json=valid_payload,
     )
 
-    assert response.status_code == 502
+    assert response.status_code == 503
     assert response.json() == {
-        "detail": "Downstream delivery failed; event remains persisted"
-    }
-    assert len(persisted) == 1
-
-
-def test_ingestion_reports_a_downstream_timeout_after_persistence(
-    client: TestClient,
-    valid_payload: dict[str, str],
-) -> None:
-    persisted: list[NormalizedEvent] = []
-
-    def persist_event(event: NormalizedEvent) -> EventPersistenceResult:
-        persisted.append(event)
-        return EventPersistenceResult(event_id=uuid4(), duplicate=False)
-
-    def time_out(event: NormalizedEvent, event_id: UUID) -> DeliveryResult:
-        request = httpx.Request("POST", "http://downstream.test/events")
-        raise httpx.ReadTimeout("simulated timeout", request=request)
-
-    configure_dependencies(configured_partner(), persist_event, time_out)
-
-    response = client.post(
-        "/api/v1/partners/courier-alpha/events",
-        json=valid_payload,
-    )
-
-    assert response.status_code == 504
-    assert response.json() == {
-        "detail": "Downstream delivery timed out; event remains persisted"
+        "detail": "Event persisted, but downstream delivery was not queued"
     }
     assert len(persisted) == 1
 

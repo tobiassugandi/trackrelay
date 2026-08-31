@@ -1,6 +1,6 @@
 """PostgreSQL-backed end-to-end Courier Alpha scenarios."""
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -19,9 +19,13 @@ from trackrelay.domain import (
 from trackrelay.downstream.main import app as downstream_app
 from trackrelay.downstream.main import event_store, simulator_control
 from trackrelay.main import app as trackrelay_app
-from trackrelay.main import get_event_deliverer
+from trackrelay.main import get_downstream_delivery_queue
 from trackrelay.models import DeliveryAttempt, Event, Partner, Shipment
-from trackrelay.services import DeliveryResult, deliver_and_record_normalized_event
+from trackrelay.services import (
+    DeliveryResult,
+    DownstreamDeliveryJob,
+    deliver_and_record_normalized_event,
+)
 
 PARTNER_ID = "alpha-indonesia"
 PARTNER_EVENT_ID = "E2E-ALPHA-PICKUP-001"
@@ -45,6 +49,32 @@ SCENARIO_TRACKING_NUMBERS = (
     TIMEOUT_TRACKING_NUMBER,
     *(tracking_number for _, tracking_number in OUTAGE_CASES),
 )
+
+
+class InlineDeliveryQueue:
+    """Load queued events and deliver inline for legacy integration coverage."""
+
+    def __init__(
+        self,
+        deliver: Callable[[NormalizedEvent, UUID], DeliveryResult],
+    ) -> None:
+        self._deliver = deliver
+
+    def enqueue(self, job: DownstreamDeliveryJob) -> None:
+        with session_factory() as session:
+            event = session.get(Event, job.event_id)
+            assert event is not None
+            normalized_event = NormalizedEvent(
+                partner_id=event.partner_id,
+                partner_event_id=event.partner_event_id,
+                tracking_number=event.tracking_number,
+                status=event.status,
+                occurred_at=event.occurred_at,
+                received_at=event.received_at,
+                raw_payload=event.raw_payload,
+                test_run_id=event.test_run_id,
+            )
+        self._deliver(normalized_event, job.event_id)
 
 
 def cleanup_event_and_shipment() -> None:
@@ -137,8 +167,8 @@ def test_alpha_pickup_travels_through_the_complete_vertical_slice(
                 client=downstream_client,
             )
 
-        trackrelay_app.dependency_overrides[get_event_deliverer] = (
-            lambda: deliver_to_simulator
+        trackrelay_app.dependency_overrides[get_downstream_delivery_queue] = (
+            lambda: InlineDeliveryQueue(deliver_to_simulator)
         )
 
         with TestClient(trackrelay_app) as trackrelay_client:
@@ -155,8 +185,8 @@ def test_alpha_pickup_travels_through_the_complete_vertical_slice(
     assert response.status_code == 201
     assert response.json()["processing_status"] == "processed"
     assert response.json()["duplicate"] is False
-    assert response.json()["delivery_status"] == "delivered"
-    assert response.json()["downstream_status_code"] == 202
+    assert response.json()["delivery_status"] == "queued"
+    assert response.json()["downstream_status_code"] is None
 
     with session_factory() as session:
         persisted_event = session.scalar(
@@ -220,8 +250,8 @@ def test_ten_retries_have_one_logical_event_and_one_downstream_effect(
                 client=downstream_client,
             )
 
-        trackrelay_app.dependency_overrides[get_event_deliverer] = (
-            lambda: deliver_to_simulator
+        trackrelay_app.dependency_overrides[get_downstream_delivery_queue] = (
+            lambda: InlineDeliveryQueue(deliver_to_simulator)
         )
 
         with TestClient(trackrelay_app) as trackrelay_client:
@@ -336,8 +366,8 @@ def test_delivery_failure_keeps_event_shipment_and_attempt_committed(
                 client=client,
             )
 
-        trackrelay_app.dependency_overrides[get_event_deliverer] = (
-            lambda: deliver_to_downstream
+        trackrelay_app.dependency_overrides[get_downstream_delivery_queue] = (
+            lambda: InlineDeliveryQueue(deliver_to_downstream)
         )
 
         with TestClient(trackrelay_app) as trackrelay_client:
@@ -416,8 +446,8 @@ def test_unavailable_outage_persists_events_and_duplicate_retries_stay_safe(
                 client=downstream_client,
             )
 
-        trackrelay_app.dependency_overrides[get_event_deliverer] = (
-            lambda: deliver_to_simulator
+        trackrelay_app.dependency_overrides[get_downstream_delivery_queue] = (
+            lambda: InlineDeliveryQueue(deliver_to_simulator)
         )
 
         with TestClient(trackrelay_app) as trackrelay_client:
@@ -530,8 +560,8 @@ def test_out_of_order_event_is_audited_without_reversing_delivery(
                 client=downstream_client,
             )
 
-        trackrelay_app.dependency_overrides[get_event_deliverer] = (
-            lambda: deliver_to_simulator
+        trackrelay_app.dependency_overrides[get_downstream_delivery_queue] = (
+            lambda: InlineDeliveryQueue(deliver_to_simulator)
         )
 
         with TestClient(trackrelay_app) as trackrelay_client:

@@ -49,7 +49,7 @@ The hero figure will align offered load, running worker tasks, queue depth, and 
 
 The causal comparison will run the same queue-based AWS architecture twice: first with a fixed worker count and then with worker autoscaling enabled. SQS, ECS task definitions, RDS, the API capacity, workload, SLO, and minimum worker count will remain constant. Queue decoupling makes delivery independently scalable and exposes pending demand; autoscaling is the mechanism; AWS supplies and releases the underlying compute. Public cloud is not the only way to build an elastic platform, but it makes that capacity available on demand without TrackRelay's owner procuring and operating spare hardware beforehand.
 
-Before that modernization, TrackRelay will run a smaller controlled cloud experiment: the same synchronous application, RDS configuration, healthy downstream, and workload on `t3.small`, `c7i-flex.large`, and `m7i-flex.large`. All three expose two vCPUs. The first transition tests rapid migration from economical burstable compute to a non-burstable compute-optimized profile; the second keeps processor generation and vCPU count fixed while moving to a memory-optimized profile. This demonstrates cloud hardware flexibility and workload matching without pretending to be the later autoscaling-elasticity result.
+Before that modernization, TrackRelay completed a smaller controlled cloud experiment with the same synchronous application, RDS configuration, healthy downstream, and workload. The `t3.small` control passed 10 events/s and failed 25 events/s; the `c7i-flex.large` treatment passed 25 events/s and failed 50 events/s, raising the highest passing short-run rate by 2.5×. At the shared 25 events/s rate, p95 request latency fell from 1,118 ms to 134 ms. Both instances expose two vCPUs, so this result demonstrates rapid cloud hardware flexibility and workload matching—not added CPU count or automatic elasticity.
 
 Phase 8 will still publish the local legacy latency-versus-load curve and capacity number. That is the project's first measurable end product and proves the benchmark and reconciliation machinery, but it is not the causal denominator for either cloud comparison. The vertical control must be rerun against RDS because the first cloud workload used host-local PostgreSQL.
 
@@ -515,7 +515,9 @@ Per-run manifests, k6 summaries, runtime samples, database summaries, simulator 
 
 A logical event is identified by `(partner_id, partner_event_id)`. Multiple HTTP requests carrying that identity are transport retries of the same logical event, not additional events. Likewise, a downstream HTTP delivery is a side effect of the logical event; retrying ingestion must not create another downstream delivery.
 
-The first successful request returns HTTP `201` with `duplicate: false`. An already-seen event returns HTTP `200` with the original `event_id`, `duplicate: true`, `delivery_status: "skipped_duplicate"`, and `downstream_status_code: null`. Sequential and concurrent uniqueness conflicts resolve to the original event without repeating the shipment update, and duplicate requests skip downstream delivery.
+In the current Stage 9.4 transition, the first successful request returns HTTP `201` with `duplicate: false`, `delivery_status: "queued"`, and `downstream_status_code: null`; it no longer claims that downstream delivery completed in the request path. An already-seen event returns HTTP `200` with the original `event_id`, `duplicate: true`, `delivery_status: "skipped_duplicate"`, and `downstream_status_code: null`. Sequential and concurrent uniqueness conflicts resolve to the original event without repeating the shipment update, and duplicate requests skip another queue publication.
+
+Local ingestion currently publishes the versioned event-ID-only job to a deterministic process-local recording queue. This keeps the boundary runnable and inspectable without a local AWS emulator, but it is intentionally not durable and has no worker yet. A process restart can discard recorded jobs, and a database commit followed by a publish failure remains an explicit `503` gap. Later Stage 9.4 steps replace the fake with SQS and define durable acceptance so a successful fast response cannot hide lost work.
 
 Start the downstream order-system simulator in a separate terminal:
 
@@ -529,9 +531,9 @@ The simulator starts in `HEALTHY` mode. Change behavior with `PUT /control/mode`
 
 TrackRelay stores every actual downstream call in `delivery_attempts`, separate from the logical `events` row. Each attempt records its per-event attempt number, result (`delivered`, `http_error`, or `transport_error`), optional HTTP response code, latency in milliseconds, optional error text, and start/completion timestamps. Duplicate ingestion requests do not make downstream calls and therefore do not create delivery attempts.
 
-### Downstream-failure transaction boundary
+### Legacy synchronous downstream-failure boundary
 
-Event persistence and downstream delivery do not share a transaction. Once normalization succeeds, TrackRelay commits the logical event and any shipment-state change before attempting delivery. The delivery-attempt record then commits independently, so both records remain inspectable even when the HTTP request reports a downstream failure. TrackRelay does not automatically retry delivery inside the ingestion request.
+The frozen synchronous implementation used the following boundary; downstream HTTP delivery is no longer part of the current Stage 9.4 ingestion path. Event persistence and downstream delivery did not share a transaction. Once normalization succeeded, TrackRelay committed the logical event and any shipment-state change before attempting delivery. The delivery-attempt record then committed independently, so both records remained inspectable even when the HTTP request reported a downstream failure. TrackRelay did not automatically retry delivery inside the ingestion request.
 
 A downstream HTTP error or non-timeout transport error returns HTTP `502` with `{"detail":"Downstream delivery failed; event remains persisted"}`. A downstream timeout returns HTTP `504` with `{"detail":"Downstream delivery timed out; event remains persisted"}`. These responses describe delivery failure, not persistence failure: the event, shipment state, and failed attempt remain stored.
 
@@ -565,4 +567,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The local synchronous implementation is complete and measured through Step 8.6. Its frozen reference sustains 250 events/s on the recorded machine and first fails at 500 events/s. Phase 9 cloud session 1 has validated the synchronous rehost and RDS correctness and has been fully torn down. Stage 9.3 now prepares the controlled RDS-backed hardware-flexibility experiment; the first queue boundary for Stage 9.4 is also complete.
+The local synchronous implementation is complete and measured through Step 8.6. Its frozen reference sustains 250 events/s on the recorded machine and first fails at 500 events/s. Phase 9 cloud sessions 1 and 2 validated the synchronous RDS-backed rehost and completed the controlled 2.5× hardware-flexibility result; both stacks were fully torn down. Stage 9.4 has now defined the queue boundary and changed ingestion to persist and enqueue an event-ID-only job through it. The local recording queue remains non-durable and workerless by design until the next Stage 9.4 steps.

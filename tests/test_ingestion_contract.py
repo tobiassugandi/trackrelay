@@ -5,7 +5,27 @@ from uuid import uuid4
 from pydantic import ValidationError
 from pytest import raises
 
-from trackrelay.main import DuplicateEventResponse
+from trackrelay.main import DuplicateEventResponse, QueuedEventResponse
+
+
+def test_created_response_reports_queued_work_without_claiming_delivery() -> None:
+    event_id = uuid4()
+
+    response = QueuedEventResponse(
+        event_id=event_id,
+        processing_status="processed",
+        duplicate=False,
+        delivery_status="queued",
+        downstream_status_code=None,
+    )
+
+    assert response.model_dump(mode="json") == {
+        "event_id": str(event_id),
+        "processing_status": "processed",
+        "duplicate": False,
+        "delivery_status": "queued",
+        "downstream_status_code": None,
+    }
 
 
 def test_duplicate_response_identifies_the_original_event_and_skipped_delivery() -> None:

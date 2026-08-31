@@ -1,7 +1,7 @@
 """PostgreSQL-backed coverage for repeatable correctness commands."""
 
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from uuid import UUID
 
@@ -21,10 +21,14 @@ from trackrelay.experiments.scenarios import (
     execute_correctness_scenario,
 )
 from trackrelay.main import app as trackrelay_app
-from trackrelay.main import get_event_deliverer
+from trackrelay.main import get_downstream_delivery_queue
 from trackrelay.models import DeliveryAttempt, Event, Partner, Shipment
 from trackrelay.models import TestRun as ExperimentRunModel
-from trackrelay.services import DeliveryResult, deliver_and_record_normalized_event
+from trackrelay.services import (
+    DeliveryResult,
+    DownstreamDeliveryJob,
+    deliver_and_record_normalized_event,
+)
 
 PARTNER_ID = "correctness-scenario-alpha"
 TEST_RUN_ID_BY_SCENARIO = {
@@ -41,6 +45,32 @@ TEST_RUN_ID_BY_SCENARIO = {
         "00000000-0000-0000-0000-000000000814"
     ),
 }
+
+
+class InlineDeliveryQueue:
+    """Load queued events and deliver inline for legacy scenario coverage."""
+
+    def __init__(
+        self,
+        deliver: Callable[[NormalizedEvent, UUID], DeliveryResult],
+    ) -> None:
+        self._deliver = deliver
+
+    def enqueue(self, job: DownstreamDeliveryJob) -> None:
+        with session_factory() as session:
+            event = session.get(Event, job.event_id)
+            assert event is not None
+            normalized_event = NormalizedEvent(
+                partner_id=event.partner_id,
+                partner_event_id=event.partner_event_id,
+                tracking_number=event.tracking_number,
+                status=event.status,
+                occurred_at=event.occurred_at,
+                received_at=event.received_at,
+                raw_payload=event.raw_payload,
+                test_run_id=event.test_run_id,
+            )
+        self._deliver(normalized_event, job.event_id)
 
 
 def cleanup_scenario_records() -> None:
@@ -99,8 +129,8 @@ def scenario_clients() -> Iterator[tuple[TestClient, TestClient]]:
                 client=downstream_client,
             )
 
-        trackrelay_app.dependency_overrides[get_event_deliverer] = (
-            lambda: deliver_to_simulator
+        trackrelay_app.dependency_overrides[get_downstream_delivery_queue] = (
+            lambda: InlineDeliveryQueue(deliver_to_simulator)
         )
         with TestClient(
             trackrelay_app,

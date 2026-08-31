@@ -5,21 +5,11 @@ from uuid import UUID
 from pydantic import ValidationError
 from pytest import raises
 
-from trackrelay.services import DownstreamDeliveryJob, DownstreamDeliveryQueue
-
-
-class RecordingDownstreamDeliveryQueue:
-    """Deterministic test fake that records enqueue calls in call order."""
-
-    def __init__(self) -> None:
-        self._enqueued_jobs: list[DownstreamDeliveryJob] = []
-
-    @property
-    def enqueued_jobs(self) -> tuple[DownstreamDeliveryJob, ...]:
-        return tuple(self._enqueued_jobs)
-
-    def enqueue(self, job: DownstreamDeliveryJob) -> None:
-        self._enqueued_jobs.append(job)
+from trackrelay.services import (
+    DownstreamDeliveryJob,
+    DownstreamDeliveryQueue,
+    RecordingDownstreamDeliveryQueue,
+)
 
 
 def test_delivery_job_has_a_small_versioned_transport_shape() -> None:
@@ -55,3 +45,7 @@ def test_recording_fake_implements_the_queue_contract_without_hiding_duplicates(
 
     assert isinstance(queue, DownstreamDeliveryQueue)
     assert queue.enqueued_jobs == (job, job)
+
+    queue.clear()
+
+    assert queue.enqueued_jobs == ()

@@ -552,7 +552,10 @@ This result demonstrates rapid cloud hardware flexibility, not automatic elastic
 ### Stage 9.4 — Decouple downstream delivery with SQS and a worker
 
 - [x] Define a small, versioned downstream-delivery job containing only its persisted event ID, a narrow queue publishing interface, and a deterministic recording fake.
-- [ ] Make ingestion persist and enqueue work through that interface.
+- [x] Make ingestion persist and enqueue work through that interface. Return the
+  persisted event as queued, skip duplicate queue publications, expose publish
+  failure after persistence, and label the temporary local recording queue as
+  non-durable until the durable-acceptance step closes the database-to-queue gap.
 - [ ] Develop worker delivery and acknowledgement behavior locally with deterministic fakes; do not require a local AWS emulator or substitute message broker.
 - [ ] Move downstream delivery into a separate worker and implement the real SQS adapter behind the same application boundary.
 - [ ] Add retries and a dead-letter queue.

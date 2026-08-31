@@ -38,7 +38,7 @@ ManagedBy=terraform
 SessionId=<session ID>
 ```
 
-Store the compact, non-secret session record under `results/aws-sessions/<session ID>/`. It must contain the approved proposal, configuration and Git revision, saved plans, command logs, pre-destroy inventory, post-destroy inventory, experiment or validation evidence, and final outcome. Do not record credentials, account IDs, private endpoints, secret values, or complete Terraform state.
+Store the compact, non-secret session record under `results/aws-sessions/<session ID>/`. It must contain the approved proposal, mutually exclusive `rehost` or `async` deployment mode, configuration and Git revision, saved plans, command logs, pre-destroy inventory, post-destroy inventory, experiment or validation evidence, and final outcome. Do not record credentials, account IDs, private endpoints, secret values, or complete Terraform state.
 
 ## Before provisioning
 
@@ -47,7 +47,7 @@ Store the compact, non-secret session record under `results/aws-sessions/<sessio
 - [ ] Run `make infra-init` and `make infra-check`.
 - [ ] Confirm that Terraform state will survive a terminal or process interruption; do not provision from disposable local state.
 - [ ] Identify the approved benchmark driver's public IPv4 and express it as one `/32`; do not authorize a broad ingress range.
-- [ ] Generate and save the exact Terraform plan with `make aws-plan SESSION_ID=<session ID> API_INGRESS_CIDR=<approved IPv4>/32`; this does not apply it.
+- [ ] Generate and save the exact Terraform plan with `make aws-plan SESSION_ID=<session ID> AWS_DEPLOYMENT_MODE=<rehost|async> API_INGRESS_CIDR=<approved IPv4>/32`; this does not apply it. Confirm the plan excludes the other runtime topology.
 - [ ] Review the plan's add/change/destroy counts and reconcile every planned object with the approved resource list.
 - [ ] Confirm that the session ID is new and appears in the provider's default tags.
 - [ ] Confirm budget headroom and obtain explicit human approval for this plan and cost ceiling.
@@ -55,7 +55,7 @@ Store the compact, non-secret session record under `results/aws-sessions/<sessio
 ## While AWS is on
 
 - [ ] Record the UTC start time and start the session-duration timer.
-- [ ] Apply only the saved, approved plan with `make aws-up SESSION_ID=<session ID> API_INGRESS_CIDR=<approved IPv4>/32 APPROVED_SESSION_ID=<same session ID> APPROVED_COST_CEILING_USD=<approved ceiling>`.
+- [ ] Apply only the saved, approved plan with `make aws-up SESSION_ID=<session ID> AWS_DEPLOYMENT_MODE=<same saved mode> API_INGRESS_CIDR=<approved IPv4>/32 APPROVED_SESSION_ID=<same session ID> APPROVED_COST_CEILING_USD=<approved ceiling>`.
 - [ ] For a historical Stage 9.1/9.2 session only, run the separately approved publication, rehost deployment, portability workload, RDS deployment, and RDS correctness commands. Do not carry that host-local workload into Stage 9.3.
 - [ ] For a dedicated sampler-canary proposal only, arm `make aws-scaling-canary` by repeating the approved session ID, recorded cost ceiling, and unconditional-teardown session ID. Let it own the single 10 events/s × 30-second point, destroy, and native verification; do not also start the full scaling runner.
 - [ ] For cloud session 2 only, invoke `make aws-scaling-session` immediately after the approved apply by repeating the approved session ID, recorded cost ceiling, exact `t3.small,c7i-flex.large` tier order, and unconditional-teardown session ID. Let it own image publication, direct RDS deployment, correctness, clean-state and CPU-credit gates, both short treatments, the transition, reporting, destroy, and native absence verification; do not run a competing controller.
@@ -63,17 +63,17 @@ Store the compact, non-secret session record under `results/aws-sessions/<sessio
 - [ ] Run only the validation or experiment named in the approved proposal.
 - [ ] Collect evidence continuously so an interrupted run can still be diagnosed.
 - [ ] If validation fails, costs approach the ceiling, or the session exceeds its approved duration, stop experimentation and begin teardown.
-- [ ] A normal experiment error, `SIGINT`, or `SIGTERM` should be allowed to reach the runner's cleanup path. If the local process or host disappears abruptly, recover `rehost_instance_type` from the session manifest and manually run `make aws-down` followed by `make aws-verify-down` with that exact tier.
+- [ ] A normal experiment error, `SIGINT`, or `SIGTERM` should be allowed to reach the runner's cleanup path. If the local process or host disappears abruptly, recover `deployment_mode` and `rehost_instance_type` from the session manifest and manually run `make aws-down` followed by `make aws-verify-down` with those exact values.
 
 ## Teardown
 
 - [ ] Confirm workload generation has stopped and the evidence required by the approved workflow is readable before teardown. Stage 9.3 requires its comparison report and internal correctness evidence, not a host-local `rehost-workload` result.
 - [ ] Save `terraform state list` and an AWS inventory filtered by both `Project=TrackRelay` and the session ID.
 - [ ] Generate and review a destroy plan covering every object in the pre-destroy Terraform state.
-- [ ] Run `make aws-down SESSION_ID=<session ID> API_INGRESS_CIDR=<approved IPv4>/32` to generate and apply the complete destroy plan. This command deliberately has no approval gate; do not rely on targeted destroy for normal teardown.
+- [ ] Run `make aws-down SESSION_ID=<session ID> AWS_DEPLOYMENT_MODE=<same saved mode> API_INGRESS_CIDR=<approved IPv4>/32` to generate and apply the complete destroy plan. This command deliberately has no approval gate; do not rely on targeted destroy for normal teardown.
 - [ ] Wait for asynchronous deletions to reach their terminal deleted state.
 - [ ] Save the empty post-destroy `terraform state list`.
-- [ ] Run `make aws-verify-down SESSION_ID=<session ID> API_INGRESS_CIDR=<approved IPv4>/32` to prove empty Terraform state and query both AWS's Resource Groups Tagging API and the native service inventories.
+- [ ] Run `make aws-verify-down SESSION_ID=<session ID> AWS_DEPLOYMENT_MODE=<same saved mode> API_INGRESS_CIDR=<approved IPv4>/32` to prove empty Terraform state and query both AWS's Resource Groups Tagging API and the native service inventories.
 - [ ] Use the pre-destroy inventory to run native, service-specific absence checks. The generic tagging API is supporting evidence, not absence proof: AWS documents that `GetResources` returns tagged **or previously tagged** resources, so deleted-resource tombstones can remain after every native inventory is empty.
 - [ ] Record the UTC finish time, observed duration, outcome, and any deviation from the approved plan.
 

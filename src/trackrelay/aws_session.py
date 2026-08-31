@@ -11,6 +11,7 @@ from json import JSONDecodeError, dumps, loads
 from pathlib import Path
 from re import compile as compile_pattern
 from subprocess import CompletedProcess, run
+from typing import Literal
 
 from trackrelay.aws_teardown import (
     AwsTeardownCheckError,
@@ -26,6 +27,7 @@ SESSION_ID_PATTERN = compile_pattern(
 )
 CommandRunner = Callable[[Sequence[str]], CompletedProcess[str]]
 NativeInventory = Callable[..., dict[str, int]]
+DeploymentMode = Literal["rehost", "async"]
 
 
 class AwsSessionError(RuntimeError):
@@ -43,6 +45,7 @@ class AwsSession:
     terraform_dir: Path
     evidence_root: Path
     rehost_instance_type: str = ECONOMICAL_BASELINE_INSTANCE_TYPE
+    deployment_mode: DeploymentMode = "rehost"
 
     def __post_init__(self) -> None:
         if SESSION_ID_PATTERN.fullmatch(self.session_id) is None:
@@ -58,6 +61,10 @@ class AwsSession:
             raise AwsSessionError(
                 "rehost instance type must be one of the frozen "
                 f"hardware tiers: {ALLOWED_INSTANCE_TYPES}"
+            )
+        if self.deployment_mode not in ("rehost", "async"):
+            raise AwsSessionError(
+                "deployment mode must be either rehost or async"
             )
         try:
             ingress_network = IPv4Network(self.api_ingress_cidr, strict=True)
@@ -94,6 +101,7 @@ class AwsSession:
             f"-var=aws_profile={self.profile}",
             f"-var=aws_region={self.region}",
             f"-var=api_ingress_cidr={self.api_ingress_cidr}",
+            f"-var=deployment_mode={self.deployment_mode}",
             f"-var=rehost_instance_type={self.rehost_instance_type}",
             f"-var=session_id={self.session_id}",
         )
@@ -183,6 +191,10 @@ def load_manifest(session: AwsSession) -> dict[str, object]:
             raise AwsSessionError(
                 f"session metadata {field} does not match this command"
             )
+    if manifest.get("deployment_mode", "rehost") != session.deployment_mode:
+        raise AwsSessionError(
+            "session metadata deployment_mode does not match this command"
+        )
     return manifest
 
 
@@ -219,6 +231,7 @@ def plan_session(
         session,
         {
             "created_at": datetime.now(UTC).isoformat(),
+            "deployment_mode": session.deployment_mode,
             "git_revision": resolved_revision,
             "api_ingress_cidr": session.api_ingress_cidr,
             "plan_sha256": file_sha256(session.plan_path),
@@ -307,6 +320,9 @@ def destroy_session(
     runner: CommandRunner = run_command,
 ) -> None:
     """Destroy without an approval gate and retain both command logs."""
+    manifest = (
+        load_manifest(session) if session.manifest_path.exists() else None
+    )
     session.evidence_dir.mkdir(parents=True, exist_ok=True)
     destroy_plan = session.evidence_dir / "terraform-destroy.tfplan"
     plan_result = runner(
@@ -336,8 +352,7 @@ def destroy_session(
         log_path=session.evidence_dir / "terraform-destroy.log",
     )
 
-    if session.manifest_path.exists():
-        manifest = load_manifest(session)
+    if manifest is not None:
         manifest.update(
             {
                 "destroyed_at": datetime.now(UTC).isoformat(),
@@ -354,6 +369,9 @@ def verify_destroyed(
     native_inventory: NativeInventory = inventory_rehost_resources,
 ) -> None:
     """Verify empty state plus generic and native AWS inventories."""
+    manifest = (
+        load_manifest(session) if session.manifest_path.exists() else None
+    )
     session.evidence_dir.mkdir(parents=True, exist_ok=True)
     state_result = runner(session.terraform_command("state", "list"))
     state_log_path = (
@@ -431,8 +449,7 @@ def verify_destroyed(
             f"{sorted(remaining_native_resources)}"
         )
 
-    if session.manifest_path.exists():
-        manifest = load_manifest(session)
+    if manifest is not None:
         manifest.update(
             {
                 "tag_index_record_count_after_destroy": len(resources),
@@ -449,6 +466,11 @@ def add_shared_arguments(parser: ArgumentParser) -> None:
     parser.add_argument("--profile", required=True)
     parser.add_argument("--region", required=True)
     parser.add_argument("--api-ingress-cidr", required=True)
+    parser.add_argument(
+        "--deployment-mode",
+        choices=("rehost", "async"),
+        default="rehost",
+    )
     parser.add_argument(
         "--rehost-instance-type",
         choices=ALLOWED_INSTANCE_TYPES,
@@ -482,6 +504,7 @@ def session_from_arguments(arguments: Namespace) -> AwsSession:
         terraform_dir=arguments.terraform_dir,
         evidence_root=arguments.evidence_root,
         rehost_instance_type=arguments.rehost_instance_type,
+        deployment_mode=arguments.deployment_mode,
     )
 
 

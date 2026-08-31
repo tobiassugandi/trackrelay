@@ -1,8 +1,8 @@
 # TrackRelay AWS infrastructure
 
-This directory is the Terraform root module for TrackRelay's disposable AWS experiment environments. It retains the synchronous host and private RDS data layer first validated in Stages 9.1 and 9.2, the frozen Stage 9.3 hardware tiers, and the growing Stage 9.5 asynchronous stack. The asynchronous stack now defines image registries, delivery queues, its Fargate network and IAM boundaries, the load balancer, ECS cluster, task log groups, private service discovery, digest-pinned task definitions, a one-off migration task, and separately gated fixed services. Guarded multi-phase deployment automation follows in the next increment.
+This directory is the Terraform root module for TrackRelay's disposable AWS experiment environments. It retains the synchronous host and private RDS data layer first validated in Stages 9.1 and 9.2, the frozen Stage 9.3 hardware tiers, and the growing Stage 9.5 asynchronous stack. `deployment_mode` selects exactly one runtime topology: `rehost` includes the EC2 host and excludes the asynchronous runtime, while `async` includes the SQS/ECS/ALB runtime and excludes the EC2 host. The VPC, private RDS data layer, and API ECR repository are shared foundations. Guarded multi-phase deployment automation follows in the next increment.
 
-The current module contains:
+Across those mutually exclusive modes, the module contains:
 
 - one EC2 instance using the current x86_64 Amazon Linux 2023 AMI, defaulting to `t3.small`, restricted to the three Stage 9.3 tiers, and using detailed monitoring for one-minute experiment evidence;
 - one encrypted 16 GiB gp3 root volume deleted with the instance;
@@ -50,28 +50,32 @@ make infra-check
 
 These commands do not provision infrastructure. Do not run `terraform apply` directly; use the guarded lifecycle commands below and follow the cloud-session checklist.
 
-The lifecycle commands are now available but must not be used to provision without the checklist's explicit approval:
+The lifecycle commands are now available but must not be used to provision without the checklist's explicit approval. `AWS_DEPLOYMENT_MODE` defaults to `rehost`; use one value consistently for every lifecycle command in a session:
 
 ```bash
 make aws-plan \
   SESSION_ID=cloud-session-1-20260822T090000Z \
+  AWS_DEPLOYMENT_MODE=rehost \
   API_INGRESS_CIDR=203.0.113.10/32
 make aws-up \
   SESSION_ID=cloud-session-1-20260822T090000Z \
+  AWS_DEPLOYMENT_MODE=rehost \
   API_INGRESS_CIDR=203.0.113.10/32 \
   APPROVED_SESSION_ID=cloud-session-1-20260822T090000Z \
   APPROVED_COST_CEILING_USD=5
 make aws-down \
   SESSION_ID=cloud-session-1-20260822T090000Z \
+  AWS_DEPLOYMENT_MODE=rehost \
   API_INGRESS_CIDR=203.0.113.10/32
 make aws-verify-down \
   SESSION_ID=cloud-session-1-20260822T090000Z \
+  AWS_DEPLOYMENT_MODE=rehost \
   API_INGRESS_CIDR=203.0.113.10/32
 ```
 
 Replace the documentation-only address with the public IPv4 `/32` of the approved benchmark location. The Makefile's `127.0.0.1/32` default is deliberately safe: a forgotten override produces an unreachable cloud API rather than public ingress.
 
-`aws-plan` saves an immutable plan hash and non-secret session record, including the approved ingress CIDR. It also resolves PostgreSQL 17 to the exact available minor version and validates that the selected class/storage combination is orderable in the target region. `aws-up` refuses a mismatched session, a changed plan or Git revision, and a cost ceiling above the monthly budget. `aws-down` intentionally has no approval gate so recovery cannot block teardown. `aws-verify-down` supplies the generic state and tag checks plus native checks for every resource type currently introduced by this module, including the load balancer and target group, ECS cluster, services and active task definitions, Cloud Map namespace, task log groups and roles, all three ECR repositories, both SQS queues, RDS instances, subnet and parameter groups, snapshots, retained automated backups, and the RDS-managed secret.
+`aws-plan` saves an immutable plan hash and non-secret session record, including the approved ingress CIDR and deployment mode. `aws-up`, `aws-down`, and `aws-verify-down` reject a mode that differs from that record; older manifests without the field are treated as `rehost`. Planning also resolves PostgreSQL 17 to the exact available minor version and validates that the selected class/storage combination is orderable in the target region. `aws-up` refuses a mismatched session, a changed plan or Git revision, and a cost ceiling above the monthly budget. `aws-down` intentionally has no approval gate so recovery cannot block teardown. `aws-verify-down` supplies the generic state and tag checks plus native checks for every resource type currently introduced by this module, including the load balancer and target group, ECS cluster, services and active task definitions, Cloud Map namespace, task log groups and roles, all three ECR repositories, both SQS queues, RDS instances, subnet and parameter groups, snapshots, retained automated backups, and the RDS-managed secret.
 
 The three image-digest variables default to empty and
 `async_services_enabled` defaults to false. Supplying one or two digests fails

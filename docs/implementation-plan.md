@@ -620,6 +620,10 @@ This result demonstrates rapid cloud hardware flexibility, not automatic elastic
     services disabled until the migration has succeeded, inject only the RDS
     password as a secret, require TLS, preserve the non-root read-only runtime,
     and natively verify service discovery plus active ECS runtime artifacts.
+  - [x] Make `rehost` and `async` mutually exclusive Terraform deployment
+    modes so the asynchronous plan cannot create the historical EC2 host.
+    Freeze the selected mode in lifecycle evidence, preserve legacy rehost
+    manifests, and reject mismatched apply, destroy, or verification commands.
 - [ ] Define CloudWatch metrics for offered load, API p95 latency, request errors, running worker tasks, queue depth, and message age or processing lag.
 - [ ] Configure the API at a fixed, documented capacity with enough headroom that worker delivery capacity is the variable under test.
 

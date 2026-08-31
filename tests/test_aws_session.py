@@ -1,7 +1,7 @@
 """Tests for guarded AWS cloud-session lifecycle commands."""
 
 from collections.abc import Sequence
-from json import loads
+from json import dumps, loads
 from pathlib import Path
 from subprocess import CompletedProcess
 
@@ -119,10 +119,32 @@ def test_plan_saves_exact_inputs_and_plan_identity(tmp_path: Path) -> None:
     assert manifest["profile"] == PROFILE
     assert manifest["region"] == REGION
     assert manifest["api_ingress_cidr"] == API_INGRESS_CIDR
+    assert manifest["deployment_mode"] == "rehost"
     assert manifest["rehost_instance_type"] == "t3.small"
     assert manifest["git_revision"] == GIT_REVISION
     assert manifest["status"] == "planned"
     assert len(manifest["plan_sha256"]) == 64
+
+
+def test_async_plan_freezes_the_exclusive_deployment_mode(
+    tmp_path: Path,
+) -> None:
+    terraform_dir = tmp_path / "terraform"
+    terraform_dir.mkdir()
+    session = AwsSession(
+        session_id=SESSION_ID,
+        profile=PROFILE,
+        region=REGION,
+        api_ingress_cidr=API_INGRESS_CIDR,
+        terraform_dir=terraform_dir,
+        evidence_root=tmp_path / "evidence",
+        deployment_mode="async",
+    )
+
+    calls = create_saved_plan(session)
+
+    assert "-var=deployment_mode=async" in calls[0]
+    assert load_manifest(session)["deployment_mode"] == "async"
 
 
 @mark.parametrize(
@@ -172,6 +194,40 @@ def test_session_evidence_rejects_a_different_hardware_tier(
 
     with raises(AwsSessionError, match="rehost_instance_type"):
         load_manifest(treatment_session)
+
+
+def test_session_evidence_rejects_a_different_deployment_mode(
+    tmp_path: Path,
+) -> None:
+    control_session = make_session(tmp_path)
+    create_saved_plan(control_session)
+    async_session = AwsSession(
+        session_id=control_session.session_id,
+        profile=control_session.profile,
+        region=control_session.region,
+        api_ingress_cidr=control_session.api_ingress_cidr,
+        terraform_dir=control_session.terraform_dir,
+        evidence_root=control_session.evidence_root,
+        deployment_mode="async",
+    )
+
+    with raises(AwsSessionError, match="deployment_mode"):
+        load_manifest(async_session)
+
+
+def test_legacy_session_evidence_defaults_to_rehost_mode(
+    tmp_path: Path,
+) -> None:
+    session = make_session(tmp_path)
+    create_saved_plan(session)
+    manifest = loads(session.manifest_path.read_text(encoding="utf-8"))
+    del manifest["deployment_mode"]
+    session.manifest_path.write_text(
+        dumps(manifest),
+        encoding="utf-8",
+    )
+
+    assert load_manifest(session)["session_id"] == SESSION_ID
 
 
 def test_plan_refuses_to_replace_existing_session_evidence(
@@ -274,6 +330,62 @@ def test_destroy_has_no_approval_gate(tmp_path: Path) -> None:
     assert len(calls) == 2
     assert calls[0][2:5] == ("plan", "-destroy", "-input=false")
     assert calls[1][2:4] == ("apply", "-input=false")
+
+
+def test_destroy_rejects_a_mode_mismatch_before_terraform(
+    tmp_path: Path,
+) -> None:
+    control_session = make_session(tmp_path)
+    create_saved_plan(control_session)
+    async_session = AwsSession(
+        session_id=control_session.session_id,
+        profile=control_session.profile,
+        region=control_session.region,
+        api_ingress_cidr=control_session.api_ingress_cidr,
+        terraform_dir=control_session.terraform_dir,
+        evidence_root=control_session.evidence_root,
+        deployment_mode="async",
+    )
+    calls: list[tuple[str, ...]] = []
+
+    def runner(arguments: Sequence[str]) -> CompletedProcess[str]:
+        calls.append(tuple(arguments))
+        return completed(arguments)
+
+    with raises(AwsSessionError, match="deployment_mode"):
+        destroy_session(async_session, runner=runner)
+
+    assert calls == []
+
+
+def test_verification_rejects_a_mode_mismatch_before_inventory(
+    tmp_path: Path,
+) -> None:
+    control_session = make_session(tmp_path)
+    create_saved_plan(control_session)
+    async_session = AwsSession(
+        session_id=control_session.session_id,
+        profile=control_session.profile,
+        region=control_session.region,
+        api_ingress_cidr=control_session.api_ingress_cidr,
+        terraform_dir=control_session.terraform_dir,
+        evidence_root=control_session.evidence_root,
+        deployment_mode="async",
+    )
+    calls: list[tuple[str, ...]] = []
+
+    def runner(arguments: Sequence[str]) -> CompletedProcess[str]:
+        calls.append(tuple(arguments))
+        return completed(arguments)
+
+    with raises(AwsSessionError, match="deployment_mode"):
+        verify_destroyed(
+            async_session,
+            runner=runner,
+            native_inventory=empty_native_inventory,
+        )
+
+    assert calls == []
 
 
 def test_generic_verification_accepts_empty_state_and_inventory(

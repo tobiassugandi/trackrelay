@@ -35,6 +35,17 @@ variable "session_id" {
   }
 }
 
+variable "deployment_mode" {
+  description = "Exclusive runtime topology for this cloud session."
+  type        = string
+  default     = "rehost"
+
+  validation {
+    condition     = contains(["rehost", "async"], var.deployment_mode)
+    error_message = "deployment_mode must be rehost or async."
+  }
+}
+
 variable "api_ingress_cidr" {
   description = "Single trusted IPv4 CIDR allowed to reach the rehost API."
   type        = string

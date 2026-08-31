@@ -37,24 +37,24 @@ locals {
     },
   ]
 
-  async_queue_environment = [
+  async_queue_environment = local.async_enabled ? [
     {
       name  = "TRACKRELAY_DELIVERY_QUEUE_BACKEND"
       value = "sqs"
     },
     {
       name  = "TRACKRELAY_SQS_QUEUE_URL"
-      value = aws_sqs_queue.delivery.url
+      value = aws_sqs_queue.delivery[0].url
     },
     {
       name  = "TRACKRELAY_SQS_DEAD_LETTER_QUEUE_ARN"
-      value = aws_sqs_queue.delivery_dead_letter.arn
+      value = aws_sqs_queue.delivery_dead_letter[0].arn
     },
     {
       name  = "TRACKRELAY_AWS_REGION"
       value = var.aws_region
     },
-  ]
+  ] : []
 
   async_container_base = {
     essential              = true
@@ -146,13 +146,13 @@ resource "aws_ecs_task_definition" "async_api" {
     }),
   ])
   cpu                      = "512"
-  execution_role_arn       = aws_iam_role.ecs_execution.arn
+  execution_role_arn       = aws_iam_role.ecs_execution[0].arn
   family                   = "${local.name_prefix}-api"
   memory                   = "1024"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   skip_destroy             = false
-  task_role_arn            = aws_iam_role.api_task.arn
+  task_role_arn            = aws_iam_role.api_task[0].arn
   track_latest             = false
 
   runtime_platform {
@@ -171,7 +171,7 @@ resource "aws_ecs_task_definition" "async_worker" {
   container_definitions = jsonencode([
     merge(local.async_container_base, {
       name  = "worker"
-      image = "${aws_ecr_repository.worker.repository_url}@${var.worker_image_digest}"
+      image = "${aws_ecr_repository.worker[0].repository_url}@${var.worker_image_digest}"
       environment = concat(
         local.async_database_environment,
         local.async_queue_environment,
@@ -191,13 +191,13 @@ resource "aws_ecs_task_definition" "async_worker" {
     }),
   ])
   cpu                      = "256"
-  execution_role_arn       = aws_iam_role.ecs_execution.arn
+  execution_role_arn       = aws_iam_role.ecs_execution[0].arn
   family                   = "${local.name_prefix}-worker"
   memory                   = "512"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   skip_destroy             = false
-  task_role_arn            = aws_iam_role.worker_task.arn
+  task_role_arn            = aws_iam_role.worker_task[0].arn
   track_latest             = false
 
   runtime_platform {
@@ -216,7 +216,7 @@ resource "aws_ecs_task_definition" "async_simulator" {
   container_definitions = jsonencode([
     merge(local.async_container_base, {
       name  = "simulator"
-      image = "${aws_ecr_repository.simulator.repository_url}@${var.simulator_image_digest}"
+      image = "${aws_ecr_repository.simulator[0].repository_url}@${var.simulator_image_digest}"
       portMappings = [{
         name          = "http"
         appProtocol   = "http"
@@ -240,13 +240,13 @@ resource "aws_ecs_task_definition" "async_simulator" {
     }),
   ])
   cpu                      = "256"
-  execution_role_arn       = aws_iam_role.ecs_execution.arn
+  execution_role_arn       = aws_iam_role.ecs_execution[0].arn
   family                   = "${local.name_prefix}-simulator"
   memory                   = "512"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   skip_destroy             = false
-  task_role_arn            = aws_iam_role.simulator_task.arn
+  task_role_arn            = aws_iam_role.simulator_task[0].arn
   track_latest             = false
 
   runtime_platform {
@@ -273,13 +273,13 @@ resource "aws_ecs_task_definition" "async_migration" {
     }),
   ])
   cpu                      = "256"
-  execution_role_arn       = aws_iam_role.ecs_execution.arn
+  execution_role_arn       = aws_iam_role.ecs_execution[0].arn
   family                   = "${local.name_prefix}-migration"
   memory                   = "512"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   skip_destroy             = false
-  task_role_arn            = aws_iam_role.migration_task.arn
+  task_role_arn            = aws_iam_role.migration_task[0].arn
   track_latest             = false
 
   runtime_platform {
@@ -295,7 +295,7 @@ resource "aws_ecs_task_definition" "async_migration" {
 resource "aws_ecs_service" "async_simulator" {
   count = var.async_services_enabled && local.async_runtime_enabled ? 1 : 0
 
-  cluster                            = aws_ecs_cluster.async.id
+  cluster                            = aws_ecs_cluster.async[0].id
   deployment_maximum_percent         = 100
   deployment_minimum_healthy_percent = 0
   desired_count                      = 1
@@ -317,7 +317,7 @@ resource "aws_ecs_service" "async_simulator" {
 
   network_configuration {
     assign_public_ip = true
-    security_groups  = [aws_security_group.async_simulator.id]
+    security_groups  = [aws_security_group.async_simulator[0].id]
     subnets          = aws_subnet.async_public[*].id
   }
 
@@ -333,7 +333,7 @@ resource "aws_ecs_service" "async_simulator" {
 resource "aws_ecs_service" "async_worker" {
   count = var.async_services_enabled && local.async_runtime_enabled ? 1 : 0
 
-  cluster                            = aws_ecs_cluster.async.id
+  cluster                            = aws_ecs_cluster.async[0].id
   deployment_maximum_percent         = 100
   deployment_minimum_healthy_percent = 0
   desired_count                      = 1
@@ -355,7 +355,7 @@ resource "aws_ecs_service" "async_worker" {
 
   network_configuration {
     assign_public_ip = true
-    security_groups  = [aws_security_group.async_worker.id]
+    security_groups  = [aws_security_group.async_worker[0].id]
     subnets          = aws_subnet.async_public[*].id
   }
 
@@ -369,7 +369,7 @@ resource "aws_ecs_service" "async_worker" {
 resource "aws_ecs_service" "async_api" {
   count = var.async_services_enabled && local.async_runtime_enabled ? 1 : 0
 
-  cluster                            = aws_ecs_cluster.async.id
+  cluster                            = aws_ecs_cluster.async[0].id
   deployment_maximum_percent         = 100
   deployment_minimum_healthy_percent = 0
   desired_count                      = 1
@@ -393,12 +393,12 @@ resource "aws_ecs_service" "async_api" {
   load_balancer {
     container_name   = "api"
     container_port   = 8000
-    target_group_arn = aws_lb_target_group.async_api.arn
+    target_group_arn = aws_lb_target_group.async_api[0].arn
   }
 
   network_configuration {
     assign_public_ip = true
-    security_groups  = [aws_security_group.async_api.id]
+    security_groups  = [aws_security_group.async_api[0].id]
     subnets          = aws_subnet.async_public[*].id
   }
 
@@ -406,5 +406,5 @@ resource "aws_ecs_service" "async_api" {
     Name = "${local.name_prefix}-api"
   }
 
-  depends_on = [aws_lb_listener.async_http]
+  depends_on = [aws_lb_listener.async_http[0]]
 }

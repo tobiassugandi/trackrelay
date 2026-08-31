@@ -3,6 +3,8 @@ data "aws_availability_zones" "available" {
 }
 
 data "aws_ssm_parameter" "rehost_ami" {
+  count = local.rehost_enabled ? 1 : 0
+
   name = var.rehost_ami_parameter
 }
 
@@ -25,6 +27,8 @@ resource "aws_internet_gateway" "rehost" {
 }
 
 resource "aws_subnet" "rehost_public" {
+  count = local.rehost_enabled ? 1 : 0
+
   availability_zone       = data.aws_availability_zones.available.names[0]
   cidr_block              = "10.42.1.0/24"
   map_public_ip_on_launch = true
@@ -49,11 +53,15 @@ resource "aws_route_table" "rehost_public" {
 }
 
 resource "aws_route_table_association" "rehost_public" {
+  count = local.rehost_enabled ? 1 : 0
+
   route_table_id = aws_route_table.rehost_public.id
-  subnet_id      = aws_subnet.rehost_public.id
+  subnet_id      = aws_subnet.rehost_public[0].id
 }
 
 resource "aws_security_group" "rehost" {
+  count = local.rehost_enabled ? 1 : 0
+
   name        = "${local.name_prefix}-host"
   description = "TrackRelay synchronous rehost; API only, no SSH"
   vpc_id      = aws_vpc.rehost.id
@@ -93,6 +101,8 @@ resource "aws_ecr_repository" "api" {
 }
 
 resource "aws_iam_role" "rehost" {
+  count = local.rehost_enabled ? 1 : 0
+
   name = "${local.name_prefix}-instance"
 
   assume_role_policy = jsonencode({
@@ -110,34 +120,38 @@ resource "aws_iam_role" "rehost" {
 }
 
 resource "aws_iam_role_policy_attachment" "rehost" {
-  for_each = toset([
+  for_each = local.rehost_enabled ? toset([
     "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
     "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
-  ])
+  ]) : toset([])
 
   policy_arn = each.value
-  role       = aws_iam_role.rehost.name
+  role       = aws_iam_role.rehost[0].name
 }
 
 resource "aws_iam_instance_profile" "rehost" {
+  count = local.rehost_enabled ? 1 : 0
+
   name = "${local.name_prefix}-instance"
-  role = aws_iam_role.rehost.name
+  role = aws_iam_role.rehost[0].name
 }
 
 resource "aws_instance" "rehost" {
-  ami                                  = data.aws_ssm_parameter.rehost_ami.value
+  count = local.rehost_enabled ? 1 : 0
+
+  ami                                  = data.aws_ssm_parameter.rehost_ami[0].value
   associate_public_ip_address          = true
   availability_zone                    = data.aws_availability_zones.available.names[0]
   disable_api_stop                     = false
   disable_api_termination              = false
-  iam_instance_profile                 = aws_iam_instance_profile.rehost.name
+  iam_instance_profile                 = aws_iam_instance_profile.rehost[0].name
   instance_initiated_shutdown_behavior = "terminate"
   instance_type                        = var.rehost_instance_type
   monitoring                           = true
-  subnet_id                            = aws_subnet.rehost_public.id
+  subnet_id                            = aws_subnet.rehost_public[0].id
   user_data                            = file("${path.module}/bootstrap/rehost.sh")
   user_data_replace_on_change          = true
-  vpc_security_group_ids               = [aws_security_group.rehost.id]
+  vpc_security_group_ids               = [aws_security_group.rehost[0].id]
 
   dynamic "credit_specification" {
     for_each = var.rehost_instance_type == "t3.small" ? [true] : []

@@ -60,36 +60,37 @@ resource "aws_security_group" "database" {
   description = "PostgreSQL from explicitly authorized TrackRelay compute"
   vpc_id      = aws_vpc.rehost.id
 
-  ingress {
-    description     = "PostgreSQL from the synchronous rehost"
-    from_port       = 5432
-    protocol        = "tcp"
-    security_groups = [aws_security_group.rehost.id]
-    to_port         = 5432
+  dynamic "ingress" {
+    for_each = local.rehost_enabled ? [aws_security_group.rehost[0].id] : []
+
+    content {
+      description     = "PostgreSQL from the synchronous rehost"
+      from_port       = 5432
+      protocol        = "tcp"
+      security_groups = [ingress.value]
+      to_port         = 5432
+    }
   }
 
-  ingress {
-    description     = "PostgreSQL from asynchronous API tasks"
-    from_port       = 5432
-    protocol        = "tcp"
-    security_groups = [aws_security_group.async_api.id]
-    to_port         = 5432
-  }
+  dynamic "ingress" {
+    for_each = local.async_enabled ? [{
+      description       = "PostgreSQL from asynchronous API tasks"
+      security_group_id = aws_security_group.async_api[0].id
+      }, {
+      description       = "PostgreSQL from one-off migration tasks"
+      security_group_id = aws_security_group.async_migration[0].id
+      }, {
+      description       = "PostgreSQL from asynchronous worker tasks"
+      security_group_id = aws_security_group.async_worker[0].id
+    }] : []
 
-  ingress {
-    description     = "PostgreSQL from one-off migration tasks"
-    from_port       = 5432
-    protocol        = "tcp"
-    security_groups = [aws_security_group.async_migration.id]
-    to_port         = 5432
-  }
-
-  ingress {
-    description     = "PostgreSQL from asynchronous worker tasks"
-    from_port       = 5432
-    protocol        = "tcp"
-    security_groups = [aws_security_group.async_worker.id]
-    to_port         = 5432
+    content {
+      description     = ingress.value.description
+      from_port       = 5432
+      protocol        = "tcp"
+      security_groups = [ingress.value.security_group_id]
+      to_port         = 5432
+    }
   }
 
   tags = {
@@ -147,8 +148,10 @@ resource "aws_db_instance" "postgres" {
 }
 
 resource "aws_iam_role_policy" "rehost_database_secret" {
+  count = local.rehost_enabled ? 1 : 0
+
   name = "${local.name_prefix}-database-secret"
-  role = aws_iam_role.rehost.id
+  role = aws_iam_role.rehost[0].id
 
   policy = jsonencode({
     Version = "2012-10-17"

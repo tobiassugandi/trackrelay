@@ -35,6 +35,7 @@ TRACKRELAY_AWS_PROFILE ?= trackrelay-admin
 TRACKRELAY_AWS_REGION ?= ap-southeast-3
 AWS_MONTHLY_BUDGET_USD ?= 25
 AWS_SESSION_RESULTS ?= results/aws-sessions
+AWS_DEPLOYMENT_MODE ?= rehost
 SESSION_ID ?=
 APPROVED_SESSION_ID ?=
 APPROVED_COST_CEILING_USD ?=
@@ -193,6 +194,7 @@ aws-plan:
 		--profile "$(TRACKRELAY_AWS_PROFILE)" \
 		--region "$(TRACKRELAY_AWS_REGION)" \
 		--api-ingress-cidr "$(API_INGRESS_CIDR)" \
+		--deployment-mode "$(AWS_DEPLOYMENT_MODE)" \
 		--rehost-instance-type "$(REHOST_INSTANCE_TYPE)" \
 		--terraform-dir "$(TERRAFORM_DIR)" \
 		--evidence-root "$(AWS_SESSION_RESULTS)"
@@ -203,6 +205,7 @@ aws-up:
 		--profile "$(TRACKRELAY_AWS_PROFILE)" \
 		--region "$(TRACKRELAY_AWS_REGION)" \
 		--api-ingress-cidr "$(API_INGRESS_CIDR)" \
+		--deployment-mode "$(AWS_DEPLOYMENT_MODE)" \
 		--rehost-instance-type "$(REHOST_INSTANCE_TYPE)" \
 		--terraform-dir "$(TERRAFORM_DIR)" \
 		--evidence-root "$(AWS_SESSION_RESULTS)" \
@@ -352,6 +355,7 @@ aws-down:
 		--profile "$(TRACKRELAY_AWS_PROFILE)" \
 		--region "$(TRACKRELAY_AWS_REGION)" \
 		--api-ingress-cidr "$(API_INGRESS_CIDR)" \
+		--deployment-mode "$(AWS_DEPLOYMENT_MODE)" \
 		--rehost-instance-type "$(REHOST_INSTANCE_TYPE)" \
 		--terraform-dir "$(TERRAFORM_DIR)" \
 		--evidence-root "$(AWS_SESSION_RESULTS)"
@@ -362,6 +366,7 @@ aws-verify-down:
 		--profile "$(TRACKRELAY_AWS_PROFILE)" \
 		--region "$(TRACKRELAY_AWS_REGION)" \
 		--api-ingress-cidr "$(API_INGRESS_CIDR)" \
+		--deployment-mode "$(AWS_DEPLOYMENT_MODE)" \
 		--rehost-instance-type "$(REHOST_INSTANCE_TYPE)" \
 		--terraform-dir "$(TERRAFORM_DIR)" \
 		--evidence-root "$(AWS_SESSION_RESULTS)"

@@ -38,9 +38,10 @@ system.
 Public addressing does not imply public task ingress. The API security group
 accepts port `8000` only from the load balancer security group. Worker tasks
 have no ingress rules. Simulator tasks accept port `8001` only from the worker
-security group. RDS remains in isolated subnets and accepts PostgreSQL only
-from the synchronous rehost, asynchronous API, migration, and worker security
-groups. Migration tasks have their own no-ingress security group. The public
+security group. RDS remains in isolated subnets and, in `async` deployment
+mode, accepts PostgreSQL only from the asynchronous API, migration, and worker
+security groups. The mutually exclusive `rehost` mode instead permits only its
+EC2 host. Migration tasks have their own no-ingress security group. The public
 load balancer accepts HTTP only from the approved benchmark IPv4 `/32` and may
 send only TCP `8000` inside the experiment VPC.
 
@@ -86,7 +87,8 @@ downtime. Deployment circuit breakers roll back failed task replacements.
 
 The required deployment order is deliberate:
 
-1. create the repositories and infrastructure with no image digests and
+1. select `deployment_mode=async`, which excludes the historical EC2 host, then
+   create the shared and asynchronous foundations with no image digests and
    services disabled;
 2. publish all three images, then register all four immutable task definitions
    with all three digests and services still disabled;
@@ -94,10 +96,12 @@ The required deployment order is deliberate:
    a successful exit; and
 4. enable the three fixed services only after that success.
 
-The existing single-plan cloud-session command does not yet automate this
-sequence. Until guarded multi-phase automation records each immutable plan,
-digest, migration result, and service convergence, the runtime must not be
-applied to AWS.
+The lifecycle manifest freezes the selected deployment mode, and plan tests
+prove that the two runtime topologies cannot be created together. The existing
+single-plan cloud-session command does not yet automate the remaining sequence.
+Until guarded multi-phase automation records each immutable plan, digest,
+migration result, and service convergence, the runtime must not be applied to
+AWS.
 
 ## Load balancing, discovery, and observability
 

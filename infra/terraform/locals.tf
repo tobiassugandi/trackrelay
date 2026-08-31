@@ -1,6 +1,8 @@
 locals {
   resource_suffix = substr(sha256(var.session_id), 0, 8)
   name_prefix     = "trackrelay-${local.resource_suffix}"
+  rehost_enabled  = var.deployment_mode == "rehost"
+  async_enabled   = var.deployment_mode == "async"
 
   common_tags = {
     Environment = "experiment"

@@ -35,7 +35,7 @@ override_resource {
 }
 
 override_resource {
-  target          = aws_ecr_repository.worker
+  target          = aws_ecr_repository.worker[0]
   override_during = plan
   values = {
     repository_url = "123456789012.dkr.ecr.ap-southeast-3.amazonaws.com/trackrelay-test-worker"
@@ -43,7 +43,7 @@ override_resource {
 }
 
 override_resource {
-  target          = aws_ecr_repository.simulator
+  target          = aws_ecr_repository.simulator[0]
   override_during = plan
   values = {
     repository_url = "123456789012.dkr.ecr.ap-southeast-3.amazonaws.com/trackrelay-test-simulator"
@@ -51,7 +51,7 @@ override_resource {
 }
 
 override_resource {
-  target          = aws_sqs_queue.delivery
+  target          = aws_sqs_queue.delivery[0]
   override_during = plan
   values = {
     arn = "arn:aws:sqs:ap-southeast-3:123456789012:trackrelay-test-delivery"
@@ -77,7 +77,7 @@ override_resource {
 }
 
 override_resource {
-  target          = aws_security_group.async_load_balancer
+  target          = aws_security_group.async_load_balancer[0]
   override_during = plan
   values = {
     id = "sg-mocked-async-alb"
@@ -85,7 +85,7 @@ override_resource {
 }
 
 override_resource {
-  target          = aws_security_group.async_api
+  target          = aws_security_group.async_api[0]
   override_during = plan
   values = {
     id = "sg-mocked-async-api"
@@ -93,7 +93,7 @@ override_resource {
 }
 
 override_resource {
-  target          = aws_security_group.async_worker
+  target          = aws_security_group.async_worker[0]
   override_during = plan
   values = {
     id = "sg-mocked-async-worker"
@@ -101,7 +101,7 @@ override_resource {
 }
 
 override_resource {
-  target          = aws_security_group.async_migration
+  target          = aws_security_group.async_migration[0]
   override_during = plan
   values = {
     id = "sg-mocked-async-migration"
@@ -109,7 +109,7 @@ override_resource {
 }
 
 override_resource {
-  target          = aws_security_group.async_simulator
+  target          = aws_security_group.async_simulator[0]
   override_during = plan
   values = {
     id = "sg-mocked-async-simulator"
@@ -133,7 +133,7 @@ override_resource {
 }
 
 override_resource {
-  target          = aws_sqs_queue.delivery_dead_letter
+  target          = aws_sqs_queue.delivery_dead_letter[0]
   override_during = plan
   values = {
     arn = "arn:aws:sqs:ap-southeast-3:123456789012:trackrelay-test-delivery-dlq"
@@ -148,6 +148,7 @@ variables {
   async_services_enabled = true
   aws_profile            = "trackrelay-admin"
   aws_region             = "ap-southeast-3"
+  deployment_mode        = "async"
   session_id             = "cloud-session-3-20260831T120000Z"
   simulator_image_digest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
   worker_image_digest    = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -158,9 +159,21 @@ run "service_images_have_disposable_encrypted_registries" {
 
   assert {
     condition = (
+      length(aws_instance.rehost) == 0
+      && length(aws_iam_role.rehost) == 0
+      && length(aws_subnet.rehost_public) == 0
+      && length(aws_ecs_cluster.async) == 1
+      && length(aws_lb.async) == 1
+      && length(aws_sqs_queue.delivery) == 1
+    )
+    error_message = "Async mode must exclude the synchronous host and include one async foundation."
+  }
+
+  assert {
+    condition = (
       endswith(aws_ecr_repository.api.name, "-api")
-      && endswith(aws_ecr_repository.worker.name, "-worker")
-      && endswith(aws_ecr_repository.simulator.name, "-simulator")
+      && endswith(aws_ecr_repository.worker[0].name, "-worker")
+      && endswith(aws_ecr_repository.simulator[0].name, "-simulator")
     )
     error_message = "Repository names must match native teardown discovery."
   }
@@ -168,8 +181,8 @@ run "service_images_have_disposable_encrypted_registries" {
   assert {
     condition = alltrue([
       aws_ecr_repository.api.force_delete,
-      aws_ecr_repository.worker.force_delete,
-      aws_ecr_repository.simulator.force_delete,
+      aws_ecr_repository.worker[0].force_delete,
+      aws_ecr_repository.simulator[0].force_delete,
     ])
     error_message = "Every service repository must be removable with its images."
   }
@@ -177,8 +190,8 @@ run "service_images_have_disposable_encrypted_registries" {
   assert {
     condition = alltrue([
       aws_ecr_repository.api.image_scanning_configuration[0].scan_on_push,
-      aws_ecr_repository.worker.image_scanning_configuration[0].scan_on_push,
-      aws_ecr_repository.simulator.image_scanning_configuration[0].scan_on_push,
+      aws_ecr_repository.worker[0].image_scanning_configuration[0].scan_on_push,
+      aws_ecr_repository.simulator[0].image_scanning_configuration[0].scan_on_push,
     ])
     error_message = "Every service repository must scan images on push."
   }
@@ -186,8 +199,8 @@ run "service_images_have_disposable_encrypted_registries" {
   assert {
     condition = alltrue([
       aws_ecr_repository.api.encryption_configuration[0].encryption_type == "AES256",
-      aws_ecr_repository.worker.encryption_configuration[0].encryption_type == "AES256",
-      aws_ecr_repository.simulator.encryption_configuration[0].encryption_type == "AES256",
+      aws_ecr_repository.worker[0].encryption_configuration[0].encryption_type == "AES256",
+      aws_ecr_repository.simulator[0].encryption_configuration[0].encryption_type == "AES256",
     ])
     error_message = "Every service repository must encrypt images at rest."
   }
@@ -198,52 +211,52 @@ run "delivery_queue_retries_to_one_restricted_dlq" {
 
   assert {
     condition = (
-      endswith(aws_sqs_queue.delivery.name, "-delivery")
-      && endswith(aws_sqs_queue.delivery_dead_letter.name, "-delivery-dlq")
+      endswith(aws_sqs_queue.delivery[0].name, "-delivery")
+      && endswith(aws_sqs_queue.delivery_dead_letter[0].name, "-delivery-dlq")
     )
     error_message = "Queue names must match native teardown discovery."
   }
 
   assert {
     condition = (
-      aws_sqs_queue.delivery.sqs_managed_sse_enabled
-      && aws_sqs_queue.delivery_dead_letter.sqs_managed_sse_enabled
+      aws_sqs_queue.delivery[0].sqs_managed_sse_enabled
+      && aws_sqs_queue.delivery_dead_letter[0].sqs_managed_sse_enabled
     )
     error_message = "The source queue and DLQ must use SQS-managed encryption."
   }
 
   assert {
     condition = (
-      aws_sqs_queue.delivery.delay_seconds == 0
-      && aws_sqs_queue.delivery.receive_wait_time_seconds == 20
-      && aws_sqs_queue.delivery.visibility_timeout_seconds == 120
+      aws_sqs_queue.delivery[0].delay_seconds == 0
+      && aws_sqs_queue.delivery[0].receive_wait_time_seconds == 20
+      && aws_sqs_queue.delivery[0].visibility_timeout_seconds == 120
     )
     error_message = "The source queue must match the worker polling and visibility contract."
   }
 
   assert {
     condition = (
-      aws_sqs_queue.delivery.message_retention_seconds == 86400
-      && aws_sqs_queue.delivery_dead_letter.message_retention_seconds == 345600
+      aws_sqs_queue.delivery[0].message_retention_seconds == 86400
+      && aws_sqs_queue.delivery_dead_letter[0].message_retention_seconds == 345600
     )
     error_message = "The DLQ must retain failure evidence longer than the source queue."
   }
 
   assert {
     condition = (
-      jsondecode(aws_sqs_queue.delivery.redrive_policy).deadLetterTargetArn
-      == aws_sqs_queue.delivery_dead_letter.arn
-      && jsondecode(aws_sqs_queue.delivery.redrive_policy).maxReceiveCount == 5
+      jsondecode(aws_sqs_queue.delivery[0].redrive_policy).deadLetterTargetArn
+      == aws_sqs_queue.delivery_dead_letter[0].arn
+      && jsondecode(aws_sqs_queue.delivery[0].redrive_policy).maxReceiveCount == 5
     )
     error_message = "The source queue must retry five receives before using its exact DLQ."
   }
 
   assert {
     condition = (
-      jsondecode(aws_sqs_queue_redrive_allow_policy.delivery.redrive_allow_policy).redrivePermission
+      jsondecode(aws_sqs_queue_redrive_allow_policy.delivery[0].redrive_allow_policy).redrivePermission
       == "byQueue"
-      && jsondecode(aws_sqs_queue_redrive_allow_policy.delivery.redrive_allow_policy).sourceQueueArns
-      == [aws_sqs_queue.delivery.arn]
+      && jsondecode(aws_sqs_queue_redrive_allow_policy.delivery[0].redrive_allow_policy).sourceQueueArns
+      == [aws_sqs_queue.delivery[0].arn]
     )
     error_message = "Only the TrackRelay source queue may use the delivery DLQ."
   }
@@ -263,57 +276,57 @@ run "async_network_exposes_only_the_load_balancer" {
 
   assert {
     condition = (
-      !aws_lb.async.internal
-      && aws_lb.async.load_balancer_type == "application"
-      && !aws_lb.async.enable_deletion_protection
-      && aws_lb.async.drop_invalid_header_fields
-      && length(aws_lb.async.subnets) == 2
+      !aws_lb.async[0].internal
+      && aws_lb.async[0].load_balancer_type == "application"
+      && !aws_lb.async[0].enable_deletion_protection
+      && aws_lb.async[0].drop_invalid_header_fields
+      && length(aws_lb.async[0].subnets) == 2
     )
     error_message = "The disposable public ALB must span both asynchronous subnets."
   }
 
   assert {
     condition = (
-      one(aws_security_group.async_load_balancer.ingress).from_port == 80
-      && one(aws_security_group.async_load_balancer.ingress).cidr_blocks == tolist(["203.0.113.10/32"])
+      one(aws_security_group.async_load_balancer[0].ingress).from_port == 80
+      && one(aws_security_group.async_load_balancer[0].ingress).cidr_blocks == tolist(["203.0.113.10/32"])
     )
     error_message = "Only HTTP from the approved benchmark address may reach the ALB."
   }
 
   assert {
     condition = (
-      one(aws_security_group.async_load_balancer.egress).from_port == 8000
-      && one(aws_security_group.async_load_balancer.egress).to_port == 8000
-      && one(aws_security_group.async_load_balancer.egress).cidr_blocks == tolist([aws_vpc.rehost.cidr_block])
+      one(aws_security_group.async_load_balancer[0].egress).from_port == 8000
+      && one(aws_security_group.async_load_balancer[0].egress).to_port == 8000
+      && one(aws_security_group.async_load_balancer[0].egress).cidr_blocks == tolist([aws_vpc.rehost.cidr_block])
     )
     error_message = "The ALB may send only API-port traffic inside the experiment VPC."
   }
 
   assert {
     condition = (
-      one(aws_security_group.async_api.ingress).from_port == 8000
-      && one(aws_security_group.async_api.ingress).cidr_blocks == null
-      && one(aws_security_group.async_api.ingress).security_groups == toset(["sg-mocked-async-alb"])
+      one(aws_security_group.async_api[0].ingress).from_port == 8000
+      && one(aws_security_group.async_api[0].ingress).cidr_blocks == null
+      && one(aws_security_group.async_api[0].ingress).security_groups == toset(["sg-mocked-async-alb"])
     )
     error_message = "Only the ALB security group may reach API tasks."
   }
 
   assert {
     condition = (
-      length(aws_security_group.async_worker.ingress) == 0
-      && length(aws_security_group.async_migration.ingress) == 0
-      && one(aws_security_group.async_simulator.ingress).from_port == 8001
-      && one(aws_security_group.async_simulator.ingress).security_groups == toset(["sg-mocked-async-worker"])
+      length(aws_security_group.async_worker[0].ingress) == 0
+      && length(aws_security_group.async_migration[0].ingress) == 0
+      && one(aws_security_group.async_simulator[0].ingress).from_port == 8001
+      && one(aws_security_group.async_simulator[0].ingress).security_groups == toset(["sg-mocked-async-worker"])
     )
     error_message = "Workers and migrations need no ingress, and workers are the simulator's only caller."
   }
 
   assert {
     condition = (
-      aws_lb_listener.async_http.port == 80
-      && aws_lb_listener.async_http.protocol == "HTTP"
-      && aws_lb_target_group.async_api.target_type == "ip"
-      && one(aws_lb_target_group.async_api.health_check).path == "/health/ready"
+      aws_lb_listener.async_http[0].port == 80
+      && aws_lb_listener.async_http[0].protocol == "HTTP"
+      && aws_lb_target_group.async_api[0].target_type == "ip"
+      && one(aws_lb_target_group.async_api[0].health_check).path == "/health/ready"
     )
     error_message = "The ALB must route HTTP to ready Fargate task IPs."
   }
@@ -324,8 +337,8 @@ run "async_platform_has_bounded_logs_and_least_privilege_roles" {
 
   assert {
     condition = (
-      one(aws_ecs_cluster.async.setting).name == "containerInsights"
-      && one(aws_ecs_cluster.async.setting).value == "enabled"
+      one(aws_ecs_cluster.async[0].setting).name == "containerInsights"
+      && one(aws_ecs_cluster.async[0].setting).value == "enabled"
     )
     error_message = "The asynchronous cluster must emit Container Insights metrics."
   }
@@ -342,7 +355,7 @@ run "async_platform_has_bounded_logs_and_least_privilege_roles" {
     condition = (
       jsondecode(local.ecs_task_assume_role_policy).Statement[0].Principal.Service
       == "ecs-tasks.amazonaws.com"
-      && aws_iam_role_policy_attachment.ecs_execution.policy_arn
+      && aws_iam_role_policy_attachment.ecs_execution[0].policy_arn
       == "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
     )
     error_message = "Fargate roles must trust only ECS tasks and use the standard execution policy."
@@ -350,9 +363,9 @@ run "async_platform_has_bounded_logs_and_least_privilege_roles" {
 
   assert {
     condition = (
-      jsondecode(aws_iam_role_policy.ecs_execution_database_secret.policy).Statement[0].Action
+      jsondecode(aws_iam_role_policy.ecs_execution_database_secret[0].policy).Statement[0].Action
       == ["secretsmanager:GetSecretValue"]
-      && jsondecode(aws_iam_role_policy.ecs_execution_database_secret.policy).Statement[0].Resource
+      && jsondecode(aws_iam_role_policy.ecs_execution_database_secret[0].policy).Statement[0].Resource
       == aws_db_instance.postgres.master_user_secret[0].secret_arn
     )
     error_message = "The execution role may read only the RDS-managed database secret."
@@ -360,9 +373,9 @@ run "async_platform_has_bounded_logs_and_least_privilege_roles" {
 
   assert {
     condition = (
-      jsondecode(aws_iam_role_policy.api_queue.policy).Statement[0].Action
+      jsondecode(aws_iam_role_policy.api_queue[0].policy).Statement[0].Action
       == ["sqs:SendMessage"]
-      && toset(jsondecode(aws_iam_role_policy.worker_queue.policy).Statement[0].Action)
+      && toset(jsondecode(aws_iam_role_policy.worker_queue[0].policy).Statement[0].Action)
       == toset(["sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:ReceiveMessage", "sqs:SendMessage"])
     )
     error_message = "API and worker queue permissions must stay role-specific."

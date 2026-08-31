@@ -27,34 +27,10 @@ mock_provider "aws" {
 }
 
 override_resource {
-  target          = aws_security_group.rehost
+  target          = aws_security_group.rehost[0]
   override_during = plan
   values = {
     id = "sg-mocked-rehost"
-  }
-}
-
-override_resource {
-  target          = aws_security_group.async_api
-  override_during = plan
-  values = {
-    id = "sg-mocked-api"
-  }
-}
-
-override_resource {
-  target          = aws_security_group.async_worker
-  override_during = plan
-  values = {
-    id = "sg-mocked-worker"
-  }
-}
-
-override_resource {
-  target          = aws_security_group.async_migration
-  override_during = plan
-  values = {
-    id = "sg-mocked-migration"
   }
 }
 
@@ -87,15 +63,15 @@ run "rds_is_private_small_and_disposable" {
   }
 
   assert {
-    condition     = length(aws_security_group.database.ingress) == 4
-    error_message = "Only the rehost, asynchronous API, migration, and worker may reach PostgreSQL."
+    condition     = length(aws_security_group.database.ingress) == 1
+    error_message = "Rehost mode must allow PostgreSQL only from the synchronous host."
   }
 
   assert {
     condition = toset(flatten([
       for rule in aws_security_group.database.ingress : tolist(rule.security_groups)
-    ])) == toset(["sg-mocked-rehost", "sg-mocked-api", "sg-mocked-migration", "sg-mocked-worker"])
-    error_message = "Database ingress must name only the four authorized compute security groups."
+    ])) == toset(["sg-mocked-rehost"])
+    error_message = "Rehost mode database ingress must name only the host security group."
   }
 
   assert {
@@ -153,6 +129,7 @@ variables {
   api_ingress_cidr = "203.0.113.10/32"
   aws_profile      = "trackrelay-admin"
   aws_region       = "ap-southeast-3"
+  deployment_mode  = "rehost"
   session_id       = "cloud-session-4-20260824T090000Z"
 }
 
@@ -160,42 +137,42 @@ run "economical_baseline_is_burstable_and_disposable" {
   command = plan
 
   assert {
-    condition     = aws_instance.rehost.instance_type == "t3.small"
+    condition     = aws_instance.rehost[0].instance_type == "t3.small"
     error_message = "The economical baseline must use t3.small."
   }
 
   assert {
-    condition     = aws_instance.rehost.credit_specification[0].cpu_credits == "standard"
+    condition     = aws_instance.rehost[0].credit_specification[0].cpu_credits == "standard"
     error_message = "The burstable baseline must not incur unlimited-credit charges."
   }
 
   assert {
-    condition     = aws_instance.rehost.monitoring
+    condition     = aws_instance.rehost[0].monitoring
     error_message = "Stage 9.3 requires one-minute EC2 resource evidence."
   }
 
   assert {
-    condition     = aws_instance.rehost.root_block_device[0].volume_size == 16
+    condition     = aws_instance.rehost[0].root_block_device[0].volume_size == 16
     error_message = "The ephemeral root volume must stay at 16 GiB."
   }
 
   assert {
-    condition     = aws_instance.rehost.root_block_device[0].delete_on_termination
+    condition     = aws_instance.rehost[0].root_block_device[0].delete_on_termination
     error_message = "The root volume must be deleted with the instance."
   }
 
   assert {
-    condition     = aws_instance.rehost.metadata_options[0].http_tokens == "required"
+    condition     = aws_instance.rehost[0].metadata_options[0].http_tokens == "required"
     error_message = "The instance must require IMDSv2 tokens."
   }
 
   assert {
-    condition     = one(aws_security_group.rehost.ingress).from_port == 8000
+    condition     = one(aws_security_group.rehost[0].ingress).from_port == 8000
     error_message = "Only the TrackRelay API port should be exposed."
   }
 
   assert {
-    condition     = one(aws_security_group.rehost.ingress).cidr_blocks == tolist(["203.0.113.10/32"])
+    condition     = one(aws_security_group.rehost[0].ingress).cidr_blocks == tolist(["203.0.113.10/32"])
     error_message = "API ingress must be restricted to the approved CIDR."
   }
 
@@ -205,13 +182,25 @@ run "economical_baseline_is_burstable_and_disposable" {
   }
 
   assert {
-    condition     = strcontains(aws_instance.rehost.user_data, "docker-compose-linux-x86_64")
+    condition     = strcontains(aws_instance.rehost[0].user_data, "docker-compose-linux-x86_64")
     error_message = "The x86_64 rehost must install the Docker Compose plugin."
   }
 
   assert {
-    condition     = strcontains(aws_instance.rehost.user_data, "sha256sum --check")
+    condition     = strcontains(aws_instance.rehost[0].user_data, "sha256sum --check")
     error_message = "The downloaded Compose binary must be checksum verified."
+  }
+
+  assert {
+    condition = (
+      length(aws_instance.rehost) == 1
+      && length(aws_ecs_cluster.async) == 0
+      && length(aws_lb.async) == 0
+      && length(aws_sqs_queue.delivery) == 0
+      && length(aws_ecr_repository.worker) == 0
+      && length(aws_ecr_repository.simulator) == 0
+    )
+    error_message = "Rehost mode must exclude every asynchronous runtime resource."
   }
 }
 
@@ -223,12 +212,12 @@ run "compute_optimized_tier_uses_c7i_flex_without_cpu_credits" {
   }
 
   assert {
-    condition     = aws_instance.rehost.instance_type == "c7i-flex.large"
+    condition     = aws_instance.rehost[0].instance_type == "c7i-flex.large"
     error_message = "The compute-optimized tier must use c7i-flex.large."
   }
 
   assert {
-    condition     = length(aws_instance.rehost.credit_specification) == 0
+    condition     = length(aws_instance.rehost[0].credit_specification) == 0
     error_message = "The non-burstable compute tier must have no credit configuration."
   }
 }
@@ -241,12 +230,12 @@ run "memory_optimized_tier_uses_m7i_flex_without_cpu_credits" {
   }
 
   assert {
-    condition     = aws_instance.rehost.instance_type == "m7i-flex.large"
+    condition     = aws_instance.rehost[0].instance_type == "m7i-flex.large"
     error_message = "The memory-optimized tier must use m7i-flex.large."
   }
 
   assert {
-    condition     = length(aws_instance.rehost.credit_specification) == 0
+    condition     = length(aws_instance.rehost[0].credit_specification) == 0
     error_message = "The non-burstable memory tier must have no credit configuration."
   }
 }
@@ -259,4 +248,16 @@ run "unapproved_instance_type_is_rejected" {
   }
 
   expect_failures = [var.rehost_instance_type]
+}
+
+run "async_inputs_in_rehost_mode_are_rejected" {
+  command = plan
+
+  variables {
+    api_image_digest       = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    simulator_image_digest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    worker_image_digest    = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+
+  expect_failures = [check.async_inputs_require_async_mode]
 }

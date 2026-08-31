@@ -4,6 +4,8 @@ DOCKER := docker
 TERRAFORM := terraform
 TERRAFORM_DIR := infra/terraform
 API_IMAGE ?= trackrelay-api:local
+WORKER_IMAGE ?= trackrelay-worker:local
+SIMULATOR_IMAGE ?= trackrelay-simulator:local
 API_INGRESS_CIDR ?= 127.0.0.1/32
 SEED ?= 20260806
 SHIPMENTS ?= 3
@@ -45,7 +47,7 @@ APPROVED_TARGET_INSTANCE_TYPE ?=
 APPROVED_TIER_ORDER ?=
 APPROVED_UNCONDITIONAL_TEARDOWN_SESSION_ID ?=
 
-.PHONY: sync test test-integration lint run run-worker run-downstream image-api image-api-smoke rehost-config rehost-smoke generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp load-slow load-outage load-baseline aws-check aws-plan aws-up aws-rehost-publish aws-rehost-deploy aws-rehost-workload aws-rds-deploy aws-rds-deploy-canary aws-rds-correctness aws-scaling-prepare aws-scaling-run-tier aws-scaling-transition aws-scaling-report aws-scaling-canary aws-scaling-session aws-down aws-verify-down infra-init infra-check db-up db-status db-check db-down migrate migration-status
+.PHONY: sync test test-integration lint run run-worker run-downstream image-api image-api-smoke image-worker image-worker-smoke image-simulator image-simulator-smoke images images-smoke rehost-config rehost-smoke generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp load-slow load-outage load-baseline aws-check aws-plan aws-up aws-rehost-publish aws-rehost-deploy aws-rehost-workload aws-rds-deploy aws-rds-deploy-canary aws-rds-correctness aws-scaling-prepare aws-scaling-run-tier aws-scaling-transition aws-scaling-report aws-scaling-canary aws-scaling-session aws-down aws-verify-down infra-init infra-check db-up db-status db-check db-down migrate migration-status
 
 sync:
 	$(UV) sync --locked --python 3.12
@@ -69,10 +71,28 @@ run-downstream:
 	$(UV) run --locked uvicorn trackrelay.downstream.main:app --reload --host 127.0.0.1 --port 8001
 
 image-api:
-	$(DOCKER) build --file Dockerfile --tag "$(API_IMAGE)" .
+	$(DOCKER) build --file Dockerfile --target api --tag "$(API_IMAGE)" .
 
 image-api-smoke: image-api
-	DOCKER="$(DOCKER)" ./scripts/smoke-api-image.sh "$(API_IMAGE)"
+	DOCKER="$(DOCKER)" ./scripts/smoke-http-image.sh \
+		"$(API_IMAGE)" 8000 api
+
+image-worker:
+	$(DOCKER) build --file Dockerfile --target worker --tag "$(WORKER_IMAGE)" .
+
+image-worker-smoke: image-worker
+	DOCKER="$(DOCKER)" ./scripts/smoke-worker-image.sh "$(WORKER_IMAGE)"
+
+image-simulator:
+	$(DOCKER) build --file Dockerfile --target simulator --tag "$(SIMULATOR_IMAGE)" .
+
+image-simulator-smoke: image-simulator
+	DOCKER="$(DOCKER)" ./scripts/smoke-http-image.sh \
+		"$(SIMULATOR_IMAGE)" 8001 simulator
+
+images: image-api image-worker image-simulator
+
+images-smoke: image-api-smoke image-worker-smoke image-simulator-smoke
 
 rehost-config:
 	$(COMPOSE) \

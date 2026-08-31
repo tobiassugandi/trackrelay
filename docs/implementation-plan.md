@@ -594,7 +594,12 @@ This result demonstrates rapid cloud hardware flexibility, not automatic elastic
 
 ### Stage 9.5 — Containerize on ECS/Fargate
 
-- [ ] Build and test separate API, worker, and simulator images locally.
+- [x] Build separate `api`, `worker`, and `simulator` targets from one locked,
+  non-editable, non-root production runtime. Give each image its own default
+  command, keep the API as the default final target for the earlier rehost
+  workflow, and locally smoke all three without AWS: verify API and simulator
+  liveness plus UID `10001`, and verify the installed worker entry point, UID,
+  and fail-closed response to missing SQS configuration with networking disabled.
 - [ ] Define ECS/Fargate, ECR, SQS, dead-letter queue, RDS, networking, load balancing, secrets, and observability as code.
 - [ ] Define CloudWatch metrics for offered load, API p95 latency, request errors, running worker tasks, queue depth, and message age or processing lag.
 - [ ] Configure the API at a fixed, documented capacity with enough headroom that worker delivery capacity is the variable under test.

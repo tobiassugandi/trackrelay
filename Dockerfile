@@ -17,7 +17,7 @@ COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable
 
-FROM python:3.12.12-slim-bookworm AS runtime
+FROM python:3.12.12-slim-bookworm AS runtime-base
 
 ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -42,11 +42,26 @@ COPY migrations ./migrations
 
 USER 10001:10001
 
+STOPSIGNAL SIGTERM
+
+FROM runtime-base AS worker
+
+CMD ["trackrelay-worker"]
+
+FROM runtime-base AS simulator
+
+EXPOSE 8001
+
+HEALTHCHECK --interval=10s --timeout=2s --start-period=5s --retries=3 \
+    CMD ["python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8001/health/live', timeout=1).read()"]
+
+CMD ["uvicorn", "trackrelay.downstream.main:app", "--host", "0.0.0.0", "--port", "8001", "--no-access-log"]
+
+FROM runtime-base AS api
+
 EXPOSE 8000
 
 HEALTHCHECK --interval=10s --timeout=2s --start-period=5s --retries=3 \
     CMD ["python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health/live', timeout=1).read()"]
-
-STOPSIGNAL SIGTERM
 
 CMD ["uvicorn", "trackrelay.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]

@@ -2,9 +2,11 @@
 
 set -euo pipefail
 
-image_name="${1:-trackrelay-api:local}"
+image_name="${1:?image name is required}"
+container_port="${2:?container port is required}"
+service_name="${3:?service name is required}"
 docker_command="${DOCKER:-docker}"
-container_name="trackrelay-api-smoke-$$"
+container_name="trackrelay-${service_name}-smoke-$$"
 
 cleanup() {
     "${docker_command}" container rm --force "${container_name}" \
@@ -15,7 +17,7 @@ trap cleanup EXIT
 "${docker_command}" run \
     --detach \
     --name "${container_name}" \
-    --publish 127.0.0.1::8000 \
+    --publish "127.0.0.1::${container_port}" \
     --rm \
     "${image_name}" \
     >/dev/null
@@ -43,7 +45,9 @@ if [[ "${health_status}" != "healthy" ]]; then
 fi
 
 published_address="$(
-    "${docker_command}" port "${container_name}" 8000/tcp | head -n 1
+    "${docker_command}" port \
+        "${container_name}" "${container_port}/tcp" \
+        | head -n 1
 )"
 published_port="${published_address##*:}"
 liveness_response="$(
@@ -64,6 +68,6 @@ if [[ "${container_user_id}" != "10001" ]]; then
     exit 1
 fi
 
-printf 'API image smoke test passed\n'
+printf '%s image smoke test passed\n' "${service_name}"
 printf 'liveness: %s\n' "${liveness_response}"
 printf 'runtime UID: %s\n' "${container_user_id}"

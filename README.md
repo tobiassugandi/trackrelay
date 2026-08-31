@@ -119,21 +119,38 @@ make aws-check \
 
 AWS credentials remain in the developer's standard private AWS CLI configuration and must never be added to this repository.
 
-### Synchronous API container
+### Application container images
 
-Stage 9.1 packages the unchanged synchronous API as a production-style OCI image. Build it locally from the locked Python dependencies:
+The multi-stage Dockerfile builds three production-style OCI images from the
+same locked, non-editable Python runtime. Build and test all three locally:
 
 ```bash
-make image-api
+make images-smoke
 ```
 
-Run the reproducible smoke test:
+The command builds `trackrelay-api:local`, `trackrelay-worker:local`, and
+`trackrelay-simulator:local`. The API and simulator smoke checks start their
+actual default commands on ephemeral host ports, wait for container health,
+verify `/health/live`, and confirm UID `10001`. The worker has no HTTP endpoint;
+its offline check confirms the installed `trackrelay-worker` entry point and
+UID, then proves that its default command fails closed when required SQS
+configuration is absent. That check uses a disabled container network and makes
+no AWS call.
+
+Each role can also be built and tested independently:
 
 ```bash
 make image-api-smoke
+make image-worker-smoke
+make image-simulator-smoke
 ```
 
-The multi-stage image installs TrackRelay non-editably, excludes development dependencies and build tooling from the runtime stage, runs as UID/GID `10001`, exposes port `8000`, and uses `/health/live` for its container health check. The smoke test starts the image on an ephemeral host port, waits for Docker health, verifies the liveness response and non-root UID, and removes the test container.
+The common runtime excludes development dependencies and build tooling, carries
+only the installed application and migration files, and runs as UID/GID
+`10001`. The API remains the Dockerfile's default final target so the completed
+synchronous rehost commands continue to build the same role when no explicit
+target is supplied. Runtime configuration and credentials are never baked into
+any image.
 
 Database migrations remain an explicit one-off command using the same image rather than part of API startup:
 
@@ -593,4 +610,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The local synchronous implementation is complete and measured through Step 8.6. Its frozen reference sustains 250 events/s on the recorded machine and first fails at 500 events/s. Phase 9 cloud sessions 1 and 2 validated the synchronous RDS-backed rehost and completed the controlled 2.5× hardware-flexibility result; both stacks were fully torn down. Stage 9.4 is locally complete: it defines the queue boundary, adds the separately runnable SQS worker, makes retry and replay safe, closes durable acceptance with a transactional PostgreSQL outbox, and freezes machine-checkable end-to-end completion and queue-drain guardrails. The next increment begins Stage 9.5 with separate API, worker, and simulator container images before any approved cloud integration.
+The local synchronous implementation is complete and measured through Step 8.6. Its frozen reference sustains 250 events/s on the recorded machine and first fails at 500 events/s. Phase 9 cloud sessions 1 and 2 validated the synchronous RDS-backed rehost and completed the controlled 2.5× hardware-flexibility result; both stacks were fully torn down. Stage 9.4 is locally complete: it defines the queue boundary, adds the separately runnable SQS worker, makes retry and replay safe, closes durable acceptance with a transactional PostgreSQL outbox, and freezes machine-checkable end-to-end completion and queue-drain guardrails. Stage 9.5 now has separately built and locally tested API, worker, and simulator images. The next increment defines their ECS/Fargate, SQS, RDS, networking, secret, and observability infrastructure as code before any approved cloud integration.

@@ -1,10 +1,14 @@
 """Application services coordinating domain and persistence work."""
 
 from trackrelay.services.delivery_queue import (
+    DownstreamDeliveryAcknowledgementError,
     DownstreamDeliveryJob,
     DownstreamDeliveryMessage,
+    DownstreamDeliveryMessageDecodeError,
     DownstreamDeliveryQueue,
     DownstreamDeliveryQueueError,
+    DownstreamDeliveryReceiveError,
+    DownstreamDeliveryReceiver,
     RecordingDownstreamDeliveryMessage,
     RecordingDownstreamDeliveryQueue,
 )
@@ -27,10 +31,14 @@ from trackrelay.services.shipment_history import list_shipment_events
 
 __all__ = [
     "DeliveryResult",
+    "DownstreamDeliveryAcknowledgementError",
     "DownstreamDeliveryJob",
     "DownstreamDeliveryMessage",
+    "DownstreamDeliveryMessageDecodeError",
     "DownstreamDeliveryQueue",
     "DownstreamDeliveryQueueError",
+    "DownstreamDeliveryReceiveError",
+    "DownstreamDeliveryReceiver",
     "EventPersistenceResult",
     "PersistedEventNotFoundError",
     "RecordingDownstreamDeliveryMessage",

@@ -40,8 +40,29 @@ class DownstreamDeliveryMessage(Protocol):
         ...
 
 
+@runtime_checkable
+class DownstreamDeliveryReceiver(Protocol):
+    """Receive a bounded batch of downstream-delivery messages."""
+
+    def receive(self) -> tuple[DownstreamDeliveryMessage, ...]:
+        """Return immediately available messages after a bounded wait."""
+        ...
+
+
 class DownstreamDeliveryQueueError(RuntimeError):
     """Report that a downstream job could not be scheduled."""
+
+
+class DownstreamDeliveryReceiveError(RuntimeError):
+    """Report that messages could not be received from the queue."""
+
+
+class DownstreamDeliveryMessageDecodeError(ValueError):
+    """Report a received message outside the versioned job contract."""
+
+
+class DownstreamDeliveryAcknowledgementError(RuntimeError):
+    """Report that a processed message could not be acknowledged."""
 
 
 class RecordingDownstreamDeliveryQueue:

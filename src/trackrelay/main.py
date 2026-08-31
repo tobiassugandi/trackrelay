@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from datetime import UTC, datetime
+from functools import lru_cache
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -34,6 +35,7 @@ from trackrelay.services import (
     list_shipment_events,
     persist_normalized_event,
 )
+from trackrelay.sqs_delivery import SqsDownstreamDeliveryQueue, create_sqs_client
 
 settings = Settings()
 app = FastAPI(title=settings.app_name, debug=settings.debug)
@@ -158,8 +160,21 @@ def get_event_persister() -> EventPersister:
 
 
 def get_downstream_delivery_queue() -> DownstreamDeliveryQueue:
-    """Provide the temporary process-local queue used during local development."""
+    """Provide the configured queue without exposing its transport to ingestion."""
+    if settings.delivery_queue_backend == "sqs":
+        return get_sqs_downstream_delivery_queue()
     return local_downstream_delivery_queue
+
+
+@lru_cache(maxsize=1)
+def get_sqs_downstream_delivery_queue() -> SqsDownstreamDeliveryQueue:
+    """Create one process-wide SQS publisher and reuse its connection pool."""
+    if not settings.sqs_queue_url:
+        raise RuntimeError("SQS queue URL is required for the SQS queue backend")
+    return SqsDownstreamDeliveryQueue(
+        client=create_sqs_client(region_name=settings.aws_region),
+        queue_url=settings.sqs_queue_url,
+    )
 
 
 @app.get("/health/live", tags=["health"])

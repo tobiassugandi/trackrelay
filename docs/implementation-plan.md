@@ -561,7 +561,10 @@ This result demonstrates rapid cloud hardware flexibility, not automatic elastic
   and record the attempt, acknowledge only after success, and leave loading,
   delivery, recording, and acknowledgement failures visible for retry. Do not
   require a local AWS emulator or substitute message broker.
-- [ ] Move downstream delivery into a separate worker and implement the real SQS adapter behind the same application boundary.
+- [x] Move downstream delivery into a separately runnable worker and implement
+  real boto3-backed SQS publish, long-poll receive, and delete-on-acknowledgement
+  adapters behind the existing application boundaries. Keep the recording
+  transport as the local default and verify every AWS operation through fakes.
 - [ ] Add retries and a dead-letter queue.
 - [ ] Define durable acceptance precisely and confirm that a fast API response cannot hide lost work.
 - [ ] Add processing guardrails: every accepted event is accounted for, duplicate business effects remain zero, final shipment states are correct, and the queue drains by a documented deadline after offered load falls.

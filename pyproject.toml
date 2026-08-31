@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.16,<2",
+    "boto3>=1.35,<2",
     "fastapi>=0.116,<1",
     "httpx>=0.28,<1",
     "pydantic-settings>=2.10,<3",
@@ -28,6 +29,7 @@ trackrelay-load-experiment = "trackrelay.experiments.performance:experiment_main
 trackrelay-prepare-load = "trackrelay.experiments.performance:main"
 trackrelay-reconcile = "trackrelay.experiments.reconciliation:main"
 trackrelay-scenario = "trackrelay.experiments.scenarios:main"
+trackrelay-worker = "trackrelay.worker:main"
 
 [dependency-groups]
 dev = [

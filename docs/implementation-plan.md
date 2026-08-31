@@ -553,9 +553,9 @@ This result demonstrates rapid cloud hardware flexibility, not automatic elastic
 
 - [x] Define a small, versioned downstream-delivery job containing only its persisted event ID, a narrow queue publishing interface, and a deterministic recording fake.
 - [x] Make ingestion persist and enqueue work through that interface. Return the
-  persisted event as queued, skip duplicate queue publications, expose publish
-  failure after persistence, and label the temporary local recording queue as
-  non-durable until the durable-acceptance step closes the database-to-queue gap.
+  persisted event as queued, skip duplicate queue publications, and initially
+  expose the database-to-queue publication gap for the later durable-acceptance
+  increment to close.
 - [x] Develop worker delivery and acknowledgement behavior locally with
   deterministic fakes; load the authoritative persisted event by ID, deliver
   and record the attempt, acknowledge only after success, and leave loading,
@@ -572,7 +572,14 @@ This result demonstrates rapid cloud hardware flexibility, not automatic elastic
   delivery, and send the persisted event ID as the downstream idempotency key
   to cover a crash after downstream acceptance but before success recording.
   Keep creation of both queues in the Stage 9.5 infrastructure increment.
-- [ ] Define durable acceptance precisely and confirm that a fast API response cannot hide lost work.
+- [x] Define durable acceptance precisely and confirm that a fast API response
+  cannot hide lost work. Return success only after the event, shipment decision,
+  and event-ID-only delivery outbox row commit in one PostgreSQL transaction.
+  Treat immediate SQS publication as a latency optimization rather than the
+  acceptance boundary; leave a failed publication pending, relay pending rows
+  from the worker, and mark a row published only after queue acceptance. Allow
+  an ambiguous send to create a duplicate job because worker and downstream
+  idempotency already make replay safe.
 - [ ] Add processing guardrails: every accepted event is accounted for, duplicate business effects remain zero, final shipment states are correct, and the queue drains by a documented deadline after offered load falls.
 
 ### Stage 9.5 — Containerize on ECS/Fargate

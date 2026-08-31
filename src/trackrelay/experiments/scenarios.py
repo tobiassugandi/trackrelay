@@ -217,12 +217,8 @@ def _write_json_response(response: httpx.Response, output_path: Path) -> None:
 
 
 def _expected_http_status_codes(
-    scenario: CorrectnessScenario,
     manifest: InputManifest,
 ) -> tuple[int, ...]:
-    if scenario is CorrectnessScenario.DOWNSTREAM_OUTAGE:
-        return (502,) * manifest.events_generated
-
     seen_identities: set[tuple[str, str]] = set()
     http_status_codes = []
     for manifest_event in manifest.expected_events:
@@ -329,7 +325,6 @@ def execute_correctness_scenario(
         observation.http_status_code for observation in observations.requests
     )
     expected_http_status_codes = _expected_http_status_codes(
-        scenario,
         manifest,
     )
     if observed_http_status_codes != expected_http_status_codes:

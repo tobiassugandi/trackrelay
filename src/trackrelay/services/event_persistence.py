@@ -14,7 +14,7 @@ from trackrelay.domain import (
     NormalizedEvent,
     evaluate_shipment_transition,
 )
-from trackrelay.models import Event, Shipment
+from trackrelay.models import DeliveryOutboxEntry, Event, Shipment
 
 
 @dataclass(frozen=True)
@@ -87,6 +87,7 @@ def persist_normalized_event(
             session.add(persisted_event)
             session.flush()
             event_id = persisted_event.id
+            session.add(DeliveryOutboxEntry(event_id=event_id))
     except IntegrityError:
         with sessions() as session:
             original_event_id = session.scalar(

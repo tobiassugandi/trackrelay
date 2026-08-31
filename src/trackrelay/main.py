@@ -1,12 +1,12 @@
 """TrackRelay API application."""
 
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Annotated, Literal
 from uuid import UUID
 
-import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
@@ -27,20 +27,25 @@ from trackrelay.models import TestRun as ExperimentRunModel
 from trackrelay.partners import PARTNER_ADAPTERS
 from trackrelay.runtime_metrics import RuntimeMetricsSnapshot, capture_runtime_metrics
 from trackrelay.services import (
-    DownstreamDeliveryJob,
     DownstreamDeliveryQueue,
     DownstreamDeliveryQueueError,
     EventPersistenceResult,
     RecordingDownstreamDeliveryQueue,
     list_shipment_events,
     persist_normalized_event,
+    publish_delivery_outbox_entry,
 )
 from trackrelay.sqs_delivery import SqsDownstreamDeliveryQueue, create_sqs_client
 
 settings = Settings()
 app = FastAPI(title=settings.app_name, debug=settings.debug)
+logger = logging.getLogger(__name__)
 
 EventPersister = Callable[[NormalizedEvent], EventPersistenceResult]
+DeliveryOutboxPublisher = Callable[
+    [UUID, DownstreamDeliveryQueue],
+    bool,
+]
 NonNegativeCount = Annotated[int, Field(ge=0)]
 local_downstream_delivery_queue = RecordingDownstreamDeliveryQueue()
 
@@ -157,6 +162,11 @@ class TestRunSummaryResponse(BaseModel):
 def get_event_persister() -> EventPersister:
     """Provide the application service used to persist normalized events."""
     return persist_normalized_event
+
+
+def get_delivery_outbox_publisher() -> DeliveryOutboxPublisher:
+    """Provide the post-commit fast-path outbox publisher."""
+    return publish_delivery_outbox_entry
 
 
 def get_downstream_delivery_queue() -> DownstreamDeliveryQueue:
@@ -374,17 +384,6 @@ def get_event(
     "/api/v1/partners/{partner_id}/events",
     status_code=status.HTTP_201_CREATED,
     response_model=IngestionResponse,
-    responses={
-        status.HTTP_502_BAD_GATEWAY: {
-            "description": "A transitional inline queue failed downstream."
-        },
-        status.HTTP_504_GATEWAY_TIMEOUT: {
-            "description": "A transitional inline queue timed out downstream."
-        },
-        status.HTTP_503_SERVICE_UNAVAILABLE: {
-            "description": "Event persisted, but delivery work was not queued."
-        },
-    },
     tags=["events"],
 )
 def ingest_partner_event(
@@ -393,6 +392,10 @@ def ingest_partner_event(
     response: Response,
     session: Annotated[Session, Depends(get_session)],
     persist_event: Annotated[EventPersister, Depends(get_event_persister)],
+    publish_outbox_entry: Annotated[
+        DeliveryOutboxPublisher,
+        Depends(get_delivery_outbox_publisher),
+    ],
     delivery_queue: Annotated[
         DownstreamDeliveryQueue,
         Depends(get_downstream_delivery_queue),
@@ -418,8 +421,7 @@ def ingest_partner_event(
             detail="Partner adapter is not supported",
         )
     configured_partner_id = partner.id
-    # Persistence and queue publishing currently remain separate operations.
-    # Release the lookup connection before persistence acquires its connection.
+    # Release the lookup connection before durable acceptance acquires its own.
     session.close()
 
     try:
@@ -451,24 +453,14 @@ def ingest_partner_event(
             downstream_status_code=None,
         )
 
-    job = DownstreamDeliveryJob(event_id=persistence.event_id)
     try:
-        delivery_queue.enqueue(job)
-    except httpx.TimeoutException as error:
-        raise HTTPException(
-            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail="Downstream delivery timed out; event remains persisted",
-        ) from error
-    except (httpx.HTTPStatusError, httpx.TransportError) as error:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Downstream delivery failed; event remains persisted",
-        ) from error
-    except DownstreamDeliveryQueueError as error:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Event persisted, but downstream delivery was not queued",
-        ) from error
+        publish_outbox_entry(persistence.event_id, delivery_queue)
+    except (DownstreamDeliveryQueueError, SQLAlchemyError):
+        logger.warning(
+            "immediate delivery publication failed; durable outbox remains pending",
+            extra={"event_id": str(persistence.event_id)},
+            exc_info=True,
+        )
 
     return QueuedEventResponse(
         event_id=persistence.event_id,

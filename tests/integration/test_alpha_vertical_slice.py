@@ -20,10 +20,17 @@ from trackrelay.downstream.main import app as downstream_app
 from trackrelay.downstream.main import event_store, simulator_control
 from trackrelay.main import app as trackrelay_app
 from trackrelay.main import get_downstream_delivery_queue
-from trackrelay.models import DeliveryAttempt, Event, Partner, Shipment
+from trackrelay.models import (
+    DeliveryAttempt,
+    DeliveryOutboxEntry,
+    Event,
+    Partner,
+    Shipment,
+)
 from trackrelay.services import (
     DeliveryResult,
     DownstreamDeliveryJob,
+    DownstreamDeliveryQueueError,
     RecordingDownstreamDeliveryMessage,
     deliver_and_record_normalized_event,
     process_downstream_delivery_message,
@@ -54,7 +61,7 @@ SCENARIO_TRACKING_NUMBERS = (
 
 
 class InlineDeliveryQueue:
-    """Load queued events and deliver inline for legacy integration coverage."""
+    """Exercise API acceptance and worker delivery in one test process."""
 
     def __init__(
         self,
@@ -64,10 +71,15 @@ class InlineDeliveryQueue:
 
     def enqueue(self, job: DownstreamDeliveryJob) -> None:
         message = RecordingDownstreamDeliveryMessage(job)
-        process_downstream_delivery_message(
-            message,
-            deliver_and_record_event=self._deliver,
-        )
+        try:
+            process_downstream_delivery_message(
+                message,
+                deliver_and_record_event=self._deliver,
+            )
+        except httpx.HTTPError as error:
+            raise DownstreamDeliveryQueueError(
+                "inline test delivery did not complete"
+            ) from error
         assert message.acknowledged is True
 
 
@@ -310,8 +322,6 @@ def test_ten_retries_have_one_logical_event_and_one_downstream_effect(
         "partner_event_id",
         "tracking_number",
         "downstream_response_code",
-        "expected_api_status",
-        "expected_detail",
         "expected_result",
     ),
     [
@@ -319,16 +329,12 @@ def test_ten_retries_have_one_logical_event_and_one_downstream_effect(
             SERVER_ERROR_EVENT_ID,
             SERVER_ERROR_TRACKING_NUMBER,
             500,
-            502,
-            "Downstream delivery failed; event remains persisted",
             DeliveryAttemptResult.HTTP_ERROR,
         ),
         (
             TIMEOUT_EVENT_ID,
             TIMEOUT_TRACKING_NUMBER,
             None,
-            504,
-            "Downstream delivery timed out; event remains persisted",
             DeliveryAttemptResult.TRANSPORT_ERROR,
         ),
     ],
@@ -338,8 +344,6 @@ def test_delivery_failure_keeps_event_shipment_and_attempt_committed(
     partner_event_id: str,
     tracking_number: str,
     downstream_response_code: int | None,
-    expected_api_status: int,
-    expected_detail: str,
     expected_result: DeliveryAttemptResult,
 ) -> None:
     def downstream_response(request: httpx.Request) -> httpx.Response:
@@ -375,8 +379,8 @@ def test_delivery_failure_keeps_event_shipment_and_attempt_committed(
                 },
             )
 
-    assert response.status_code == expected_api_status
-    assert response.json() == {"detail": expected_detail}
+    assert response.status_code == 201
+    assert response.json()["delivery_status"] == "queued"
 
     with session_factory() as session:
         persisted_event = session.scalar(
@@ -403,6 +407,9 @@ def test_delivery_failure_keeps_event_shipment_and_attempt_committed(
         assert attempt.result is expected_result
         assert attempt.response_code == downstream_response_code
         assert attempt.error is not None
+        outbox_entry = session.get(DeliveryOutboxEntry, persisted_event.id)
+        assert outbox_entry is not None
+        assert outbox_entry.published_at is None
 
 
 @mark.integration
@@ -460,10 +467,9 @@ def test_unavailable_outage_persists_events_and_duplicate_retries_stay_safe(
                 for payload in payloads
             ]
 
-    assert [response.status_code for response in failed_responses] == [502] * 3
+    assert [response.status_code for response in failed_responses] == [201] * 3
     assert all(
-        response.json()
-        == {"detail": "Downstream delivery failed; event remains persisted"}
+        response.json()["delivery_status"] == "queued"
         for response in failed_responses
     )
     assert [response.status_code for response in retry_responses] == [200] * 3
@@ -529,6 +535,10 @@ def test_unavailable_outage_persists_events_and_duplicate_retries_stay_safe(
             and attempt.response_code == 503
             and attempt.error is not None
             for attempt in attempts
+        )
+        assert all(
+            session.get(DeliveryOutboxEntry, event.id).published_at is None
+            for event in events
         )
 
     assert event_store.all() == ()

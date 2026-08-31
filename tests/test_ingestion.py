@@ -3,7 +3,7 @@
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 from pytest import fixture
@@ -12,6 +12,7 @@ from trackrelay.database import get_session
 from trackrelay.domain import NormalizedEvent, ShipmentStatus
 from trackrelay.main import (
     app,
+    get_delivery_outbox_publisher,
     get_downstream_delivery_queue,
     get_event_persister,
 )
@@ -74,6 +75,17 @@ def configure_dependencies(
     app.dependency_overrides[get_event_persister] = lambda: persist_event
     app.dependency_overrides[get_downstream_delivery_queue] = lambda: (
         delivery_queue or RecordingDownstreamDeliveryQueue()
+    )
+
+    def publish_outbox_entry(
+        event_id: UUID,
+        queue: DownstreamDeliveryQueue,
+    ) -> bool:
+        queue.enqueue(DownstreamDeliveryJob(event_id=event_id))
+        return True
+
+    app.dependency_overrides[get_delivery_outbox_publisher] = lambda: (
+        publish_outbox_entry
     )
     return session
 
@@ -294,7 +306,7 @@ def test_ingestion_selects_gamma_for_a_nested_utc_payload(
     assert persisted[0].raw_payload == gamma_payload
 
 
-def test_ingestion_reports_queue_failure_after_persistence(
+def test_ingestion_accepts_durably_when_immediate_queue_publication_fails(
     client: TestClient,
     valid_payload: dict[str, str],
 ) -> None:
@@ -315,10 +327,8 @@ def test_ingestion_reports_queue_failure_after_persistence(
         json=valid_payload,
     )
 
-    assert response.status_code == 503
-    assert response.json() == {
-        "detail": "Event persisted, but downstream delivery was not queued"
-    }
+    assert response.status_code == 201
+    assert response.json()["delivery_status"] == "queued"
     assert len(persisted) == 1
 
 

@@ -8,6 +8,7 @@ from trackrelay.services import (
     DeliveryResult,
     DownstreamDeliveryJob,
     DownstreamDeliveryMessage,
+    DownstreamDeliveryQueueError,
     RecordingDownstreamDeliveryMessage,
 )
 from trackrelay.worker import WorkerBatchResult, process_worker_batch, run_worker
@@ -99,6 +100,7 @@ def test_worker_loop_polls_until_stop_is_requested() -> None:
     )
     receiver = RecordingReceiver(((messages[0],), (messages[1],)))
     delivered: list[UUID] = []
+    outbox_publish_calls = 0
 
     def deliver_and_record(
         event: NormalizedEvent,
@@ -107,15 +109,50 @@ def test_worker_loop_polls_until_stop_is_requested() -> None:
         delivered.append(event_id)
         return DeliveryResult(downstream_status_code=202)
 
+    def publish_pending_deliveries() -> int:
+        nonlocal outbox_publish_calls
+        outbox_publish_calls += 1
+        return 0
+
     run_worker(
         receiver,
         deliver_and_record_event=deliver_and_record,
         stop_requested=lambda: receiver.receive_calls == 2,
+        publish_pending_deliveries=publish_pending_deliveries,
         load_event=event_for,
         load_recorded_delivery=lambda event_id: None,
         on_processing_error=lambda message, error: None,
     )
 
     assert receiver.receive_calls == 2
+    assert outbox_publish_calls == 2
     assert delivered == list(EVENT_IDS[:2])
     assert all(message.acknowledged for message in messages)
+
+
+def test_worker_continues_processing_when_outbox_publication_fails() -> None:
+    message = RecordingDownstreamDeliveryMessage(
+        DownstreamDeliveryJob(event_id=EVENT_IDS[0])
+    )
+    receiver = RecordingReceiver(((message,),))
+    errors: list[Exception] = []
+
+    def fail_outbox_publication() -> int:
+        raise DownstreamDeliveryQueueError("simulated SQS failure")
+
+    run_worker(
+        receiver,
+        deliver_and_record_event=lambda event, event_id: DeliveryResult(
+            downstream_status_code=202
+        ),
+        stop_requested=lambda: receiver.receive_calls == 1,
+        publish_pending_deliveries=fail_outbox_publication,
+        load_event=event_for,
+        load_recorded_delivery=lambda event_id: None,
+        on_outbox_publishing_error=errors.append,
+        on_processing_error=lambda message, error: None,
+    )
+
+    assert len(errors) == 1
+    assert str(errors[0]) == "simulated SQS failure"
+    assert message.acknowledged is True

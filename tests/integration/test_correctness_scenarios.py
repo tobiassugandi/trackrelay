@@ -5,6 +5,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from uuid import UUID
 
+import httpx
 from fastapi.testclient import TestClient
 from pytest import fixture, mark
 from sqlalchemy import delete, select
@@ -27,6 +28,7 @@ from trackrelay.models import TestRun as ExperimentRunModel
 from trackrelay.services import (
     DeliveryResult,
     DownstreamDeliveryJob,
+    DownstreamDeliveryQueueError,
     RecordingDownstreamDeliveryMessage,
     deliver_and_record_normalized_event,
     process_downstream_delivery_message,
@@ -50,7 +52,7 @@ TEST_RUN_ID_BY_SCENARIO = {
 
 
 class InlineDeliveryQueue:
-    """Load queued events and deliver inline for legacy scenario coverage."""
+    """Exercise API acceptance and worker delivery in one test process."""
 
     def __init__(
         self,
@@ -60,10 +62,15 @@ class InlineDeliveryQueue:
 
     def enqueue(self, job: DownstreamDeliveryJob) -> None:
         message = RecordingDownstreamDeliveryMessage(job)
-        process_downstream_delivery_message(
-            message,
-            deliver_and_record_event=self._deliver,
-        )
+        try:
+            process_downstream_delivery_message(
+                message,
+                deliver_and_record_event=self._deliver,
+            )
+        except httpx.HTTPError as error:
+            raise DownstreamDeliveryQueueError(
+                "inline test delivery did not complete"
+            ) from error
         assert message.acknowledged is True
 
 
@@ -194,8 +201,6 @@ def test_correctness_scenario_command_saves_and_reconciles_its_run(
     ]
     if scenario is CorrectnessScenario.DUPLICATE:
         assert observed_status_codes == [201] * 5 + [200] * 5
-    elif scenario is CorrectnessScenario.DOWNSTREAM_OUTAGE:
-        assert observed_status_codes == [502] * 5
     else:
         assert observed_status_codes == [201] * 5
 

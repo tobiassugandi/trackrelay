@@ -7,14 +7,18 @@ from dataclasses import dataclass
 from threading import Event
 from uuid import UUID
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from trackrelay.config import Settings
 from trackrelay.domain import NormalizedEvent
 from trackrelay.services import (
     DeliveryResult,
     DownstreamDeliveryMessage,
+    DownstreamDeliveryQueueError,
     DownstreamDeliveryReceiver,
     deliver_and_record_normalized_event,
     process_downstream_delivery_message,
+    publish_pending_delivery_jobs,
 )
 from trackrelay.services.downstream_worker import (
     PersistedEventLoader,
@@ -24,6 +28,7 @@ from trackrelay.services.downstream_worker import (
     load_recorded_delivery_result,
 )
 from trackrelay.sqs_delivery import (
+    SqsDownstreamDeliveryQueue,
     SqsDownstreamDeliveryReceiver,
     create_sqs_client,
     verify_sqs_redrive_policy,
@@ -31,6 +36,8 @@ from trackrelay.sqs_delivery import (
 
 logger = logging.getLogger(__name__)
 ProcessingErrorHandler = Callable[[DownstreamDeliveryMessage, Exception], None]
+OutboxPublishingErrorHandler = Callable[[Exception], None]
+PendingDeliveryPublisher = Callable[[], int]
 StopRequested = Callable[[], bool]
 
 
@@ -51,6 +58,14 @@ def log_processing_error(
     logger.error(
         "downstream delivery message failed and remains unacknowledged",
         extra={"receive_count": message.receive_count},
+        exc_info=(type(error), error, error.__traceback__),
+    )
+
+
+def log_outbox_publishing_error(error: Exception) -> None:
+    """Record a recoverable relay failure before the next polling cycle."""
+    logger.error(
+        "delivery outbox publication failed; entries remain pending",
         exc_info=(type(error), error, error.__traceback__),
     )
 
@@ -92,12 +107,21 @@ def run_worker(
     *,
     deliver_and_record_event: RecordedEventDeliverer,
     stop_requested: StopRequested,
+    publish_pending_deliveries: PendingDeliveryPublisher | None = None,
     load_event: PersistedEventLoader = load_persisted_normalized_event,
     load_recorded_delivery: RecordedDeliveryLoader = load_recorded_delivery_result,
+    on_outbox_publishing_error: OutboxPublishingErrorHandler = (
+        log_outbox_publishing_error
+    ),
     on_processing_error: ProcessingErrorHandler = log_processing_error,
 ) -> None:
     """Long-poll and process batches until the process is asked to stop."""
     while not stop_requested():
+        if publish_pending_deliveries is not None:
+            try:
+                publish_pending_deliveries()
+            except (DownstreamDeliveryQueueError, SQLAlchemyError) as error:
+                on_outbox_publishing_error(error)
         messages = receiver.receive()
         process_worker_batch(
             messages,
@@ -126,6 +150,10 @@ def main() -> int:
         expected_dead_letter_target_arn=settings.sqs_dead_letter_queue_arn,
         expected_max_receive_count=settings.sqs_max_receive_count,
     )
+    delivery_queue = SqsDownstreamDeliveryQueue(
+        client=sqs_client,
+        queue_url=settings.sqs_queue_url,
+    )
     receiver = SqsDownstreamDeliveryReceiver(
         client=sqs_client,
         queue_url=settings.sqs_queue_url,
@@ -147,6 +175,12 @@ def main() -> int:
 
     stop_event = Event()
 
+    def publish_pending_deliveries() -> int:
+        return publish_pending_delivery_jobs(
+            delivery_queue,
+            batch_size=settings.sqs_max_messages,
+        )
+
     def request_stop(signum: int, frame: object) -> None:
         logger.info("worker stop requested", extra={"signal": signum})
         stop_event.set()
@@ -157,6 +191,7 @@ def main() -> int:
         receiver,
         deliver_and_record_event=deliver_and_record,
         stop_requested=stop_event.is_set,
+        publish_pending_deliveries=publish_pending_deliveries,
     )
     return 0
 

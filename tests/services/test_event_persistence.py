@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 
 from trackrelay.database import Base, create_database_engine, create_session_factory
 from trackrelay.domain import EventProcessingStatus, NormalizedEvent, ShipmentStatus
-from trackrelay.models import Event, Partner, Shipment
+from trackrelay.models import DeliveryOutboxEntry, Event, Partner, Shipment
 from trackrelay.models import TestRun as ExperimentRunModel
 from trackrelay.services import persist_normalized_event
 
@@ -68,6 +68,12 @@ def test_persistence_creates_then_updates_a_shipment_atomically() -> None:
         assert first_event.processing_status is EventProcessingStatus.PROCESSED
         assert first_event.state_applied is True
         assert session.scalar(select(func.count()).select_from(Event)) == 2
+        assert (
+            session.scalar(select(func.count()).select_from(DeliveryOutboxEntry))
+            == 2
+        )
+        assert session.get(DeliveryOutboxEntry, first_result.event_id) is not None
+        assert session.get(DeliveryOutboxEntry, second_result.event_id) is not None
         assert first_result.duplicate is False
         assert second_result.duplicate is False
         assert first_result.event_id != second_result.event_id

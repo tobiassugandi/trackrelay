@@ -36,6 +36,9 @@ def test_api_selects_and_reuses_the_configured_sqs_publisher(
         _env_file=None,
         delivery_queue_backend="sqs",
         sqs_queue_url=QUEUE_URL,
+        sqs_dead_letter_queue_arn=(
+            "arn:aws:sqs:ap-southeast-3:123456789012:jobs-dlq"
+        ),
         aws_region="ap-southeast-3",
     )
     monkeypatch.setattr(api_module, "settings", configured_settings)

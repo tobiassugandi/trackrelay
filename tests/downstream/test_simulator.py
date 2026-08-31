@@ -59,11 +59,47 @@ def test_simulator_accepts_and_exposes_a_normalized_event(
     response = client.post("/events", json=normalized_event_data())
 
     assert response.status_code == 202
-    assert response.json() == {"status": "accepted", "received_count": 1}
+    assert response.json() == {
+        "status": "accepted",
+        "received_count": 1,
+        "duplicate": False,
+    }
 
     stored_events = client.get("/events")
     assert stored_events.status_code == 200
     assert stored_events.json() == [normalized_event_data()]
+
+
+def test_simulator_accepts_an_idempotent_replay_without_recording_it_twice(
+    client: TestClient,
+) -> None:
+    event_id = UUID("00000000-0000-0000-0000-000000000801")
+    headers = {"Idempotency-Key": str(event_id)}
+
+    first_response = client.post(
+        "/events",
+        json=normalized_event_data(),
+        headers=headers,
+    )
+    replay_response = client.post(
+        "/events",
+        json=normalized_event_data(),
+        headers=headers,
+    )
+
+    assert first_response.status_code == 202
+    assert first_response.json() == {
+        "status": "accepted",
+        "received_count": 1,
+        "duplicate": False,
+    }
+    assert replay_response.status_code == 202
+    assert replay_response.json() == {
+        "status": "accepted",
+        "received_count": 1,
+        "duplicate": True,
+    }
+    assert client.get("/events").json() == [normalized_event_data()]
 
 
 def test_simulator_preserves_a_synthetic_events_test_run_id(

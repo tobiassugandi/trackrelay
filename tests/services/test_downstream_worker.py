@@ -6,14 +6,20 @@ from uuid import UUID
 from pytest import raises
 
 from trackrelay.database import Base, create_database_engine, create_session_factory
-from trackrelay.domain import EventProcessingStatus, NormalizedEvent, ShipmentStatus
-from trackrelay.models import Event, Partner, Shipment
+from trackrelay.domain import (
+    DeliveryAttemptResult,
+    EventProcessingStatus,
+    NormalizedEvent,
+    ShipmentStatus,
+)
+from trackrelay.models import DeliveryAttempt, Event, Partner, Shipment
 from trackrelay.services import (
     DeliveryResult,
     DownstreamDeliveryJob,
     PersistedEventNotFoundError,
     RecordingDownstreamDeliveryMessage,
     load_persisted_normalized_event,
+    load_recorded_delivery_result,
     process_downstream_delivery_message,
 )
 
@@ -59,6 +65,7 @@ def test_worker_loads_delivers_records_then_acknowledges() -> None:
     result = process_downstream_delivery_message(
         message,
         load_event=load_event,
+        load_recorded_delivery=lambda event_id: None,
         deliver_and_record_event=deliver_and_record,
     )
 
@@ -89,6 +96,7 @@ def test_worker_leaves_message_unacknowledged_when_loading_fails() -> None:
         process_downstream_delivery_message(
             message,
             load_event=missing_event,
+            load_recorded_delivery=lambda event_id: None,
             deliver_and_record_event=deliver_and_record,
         )
 
@@ -112,6 +120,7 @@ def test_worker_leaves_message_unacknowledged_when_delivery_fails() -> None:
         process_downstream_delivery_message(
             message,
             load_event=lambda event_id: normalized_event(),
+            load_recorded_delivery=lambda event_id: None,
             deliver_and_record_event=fail_delivery,
         )
 
@@ -139,12 +148,49 @@ def test_worker_exposes_acknowledgement_failure_after_delivery() -> None:
         process_downstream_delivery_message(
             message,
             load_event=lambda event_id: normalized_event(),
+            load_recorded_delivery=lambda event_id: None,
             deliver_and_record_event=deliver_and_record,
         )
 
     assert deliveries == 1
     assert message.acknowledgement_calls == 1
     assert message.acknowledged is False
+
+
+def test_worker_acknowledges_a_recorded_success_without_repeating_delivery() -> None:
+    message = RecordingDownstreamDeliveryMessage(
+        DownstreamDeliveryJob(event_id=EVENT_ID),
+        receive_count=2,
+    )
+    loads = 0
+    deliveries = 0
+
+    def load_event(event_id: UUID) -> NormalizedEvent:
+        nonlocal loads
+        loads += 1
+        return normalized_event()
+
+    def deliver_and_record(
+        event: NormalizedEvent,
+        event_id: UUID,
+    ) -> DeliveryResult:
+        nonlocal deliveries
+        deliveries += 1
+        return DeliveryResult(downstream_status_code=202)
+
+    result = process_downstream_delivery_message(
+        message,
+        load_event=load_event,
+        load_recorded_delivery=lambda event_id: DeliveryResult(
+            downstream_status_code=202
+        ),
+        deliver_and_record_event=deliver_and_record,
+    )
+
+    assert result == DeliveryResult(downstream_status_code=202)
+    assert loads == 0
+    assert deliveries == 0
+    assert message.acknowledged is True
 
 
 def test_worker_loader_reconstructs_the_authoritative_persisted_event() -> None:
@@ -187,6 +233,24 @@ def test_worker_loader_reconstructs_the_authoritative_persisted_event() -> None:
     loaded_event = load_persisted_normalized_event(event_id, sessions=sessions)
 
     assert loaded_event == expected_event
+    assert load_recorded_delivery_result(event_id, sessions=sessions) is None
+    with sessions.begin() as session:
+        session.add(
+            DeliveryAttempt(
+                event_id=event_id,
+                attempt_number=1,
+                result=DeliveryAttemptResult.DELIVERED,
+                response_code=202,
+                latency_ms=10,
+                error=None,
+                started_at=OCCURRED_AT,
+                completed_at=OCCURRED_AT + timedelta(milliseconds=10),
+            )
+        )
+    assert load_recorded_delivery_result(
+        event_id,
+        sessions=sessions,
+    ) == DeliveryResult(downstream_status_code=202)
     with raises(PersistedEventNotFoundError, match="does not exist"):
         load_persisted_normalized_event(EVENT_ID, sessions=sessions)
     engine.dispose()

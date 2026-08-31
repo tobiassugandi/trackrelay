@@ -18,16 +18,19 @@ from trackrelay.services import (
 )
 from trackrelay.services.downstream_worker import (
     PersistedEventLoader,
+    RecordedDeliveryLoader,
     RecordedEventDeliverer,
     load_persisted_normalized_event,
+    load_recorded_delivery_result,
 )
 from trackrelay.sqs_delivery import (
     SqsDownstreamDeliveryReceiver,
     create_sqs_client,
+    verify_sqs_redrive_policy,
 )
 
 logger = logging.getLogger(__name__)
-ProcessingErrorHandler = Callable[[Exception], None]
+ProcessingErrorHandler = Callable[[DownstreamDeliveryMessage, Exception], None]
 StopRequested = Callable[[], bool]
 
 
@@ -40,10 +43,14 @@ class WorkerBatchResult:
     failed_and_unacknowledged: int
 
 
-def log_processing_error(error: Exception) -> None:
+def log_processing_error(
+    message: DownstreamDeliveryMessage,
+    error: Exception,
+) -> None:
     """Record one failed message while allowing the batch to continue."""
     logger.error(
         "downstream delivery message failed and remains unacknowledged",
+        extra={"receive_count": message.receive_count},
         exc_info=(type(error), error, error.__traceback__),
     )
 
@@ -53,6 +60,7 @@ def process_worker_batch(
     *,
     deliver_and_record_event: RecordedEventDeliverer,
     load_event: PersistedEventLoader = load_persisted_normalized_event,
+    load_recorded_delivery: RecordedDeliveryLoader = load_recorded_delivery_result,
     on_processing_error: ProcessingErrorHandler = log_processing_error,
 ) -> WorkerBatchResult:
     """Process every message once and isolate failures within the batch."""
@@ -64,11 +72,12 @@ def process_worker_batch(
                 message,
                 deliver_and_record_event=deliver_and_record_event,
                 load_event=load_event,
+                load_recorded_delivery=load_recorded_delivery,
             )
         # One poison or failed message must not prevent the rest of the batch.
         except Exception as error:  # noqa: BLE001
             failed += 1
-            on_processing_error(error)
+            on_processing_error(message, error)
         else:
             delivered += 1
     return WorkerBatchResult(
@@ -84,6 +93,7 @@ def run_worker(
     deliver_and_record_event: RecordedEventDeliverer,
     stop_requested: StopRequested,
     load_event: PersistedEventLoader = load_persisted_normalized_event,
+    load_recorded_delivery: RecordedDeliveryLoader = load_recorded_delivery_result,
     on_processing_error: ProcessingErrorHandler = log_processing_error,
 ) -> None:
     """Long-poll and process batches until the process is asked to stop."""
@@ -93,6 +103,7 @@ def run_worker(
             messages,
             deliver_and_record_event=deliver_and_record_event,
             load_event=load_event,
+            load_recorded_delivery=load_recorded_delivery,
             on_processing_error=on_processing_error,
         )
 
@@ -108,6 +119,13 @@ def main() -> int:
         )
 
     sqs_client = create_sqs_client(region_name=settings.aws_region)
+    assert settings.sqs_dead_letter_queue_arn is not None
+    verify_sqs_redrive_policy(
+        client=sqs_client,
+        queue_url=settings.sqs_queue_url,
+        expected_dead_letter_target_arn=settings.sqs_dead_letter_queue_arn,
+        expected_max_receive_count=settings.sqs_max_receive_count,
+    )
     receiver = SqsDownstreamDeliveryReceiver(
         client=sqs_client,
         queue_url=settings.sqs_queue_url,

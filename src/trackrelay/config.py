@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     downstream_timeout_seconds: PositiveFloat = 5.0
     delivery_queue_backend: Literal["recording", "sqs"] = "recording"
     sqs_queue_url: str | None = None
+    sqs_dead_letter_queue_arn: str | None = None
+    sqs_max_receive_count: PositiveInteger = 5
     sqs_wait_time_seconds: SqsWaitTimeSeconds = 20
     sqs_visibility_timeout_seconds: SqsVisibilityTimeoutSeconds = 120
     sqs_max_messages: SqsMaxMessages = 10
@@ -47,6 +49,10 @@ class Settings(BaseSettings):
             if not self.sqs_queue_url:
                 raise ValueError(
                     "sqs_queue_url is required for the SQS queue backend"
+                )
+            if not self.sqs_dead_letter_queue_arn:
+                raise ValueError(
+                    "sqs_dead_letter_queue_arn is required for the SQS queue backend"
                 )
             minimum_visibility = (
                 self.downstream_timeout_seconds * self.sqs_max_messages

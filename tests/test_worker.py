@@ -36,12 +36,13 @@ def event_for(event_id: UUID) -> NormalizedEvent:
 def test_worker_batch_isolates_a_failed_message_and_continues() -> None:
     messages = tuple(
         RecordingDownstreamDeliveryMessage(
-            DownstreamDeliveryJob(event_id=event_id)
+            DownstreamDeliveryJob(event_id=event_id),
+            receive_count=index,
         )
-        for event_id in EVENT_IDS
+        for index, event_id in enumerate(EVENT_IDS, start=1)
     )
     delivered: list[UUID] = []
-    errors: list[Exception] = []
+    errors: list[tuple[int, Exception]] = []
 
     def deliver_and_record(
         event: NormalizedEvent,
@@ -55,8 +56,11 @@ def test_worker_batch_isolates_a_failed_message_and_continues() -> None:
     result = process_worker_batch(
         messages,
         load_event=event_for,
+        load_recorded_delivery=lambda event_id: None,
         deliver_and_record_event=deliver_and_record,
-        on_processing_error=errors.append,
+        on_processing_error=lambda message, error: errors.append(
+            (message.receive_count, error)
+        ),
     )
 
     assert result == WorkerBatchResult(
@@ -67,7 +71,8 @@ def test_worker_batch_isolates_a_failed_message_and_continues() -> None:
     assert delivered == [EVENT_IDS[0], EVENT_IDS[2]]
     assert [message.acknowledged for message in messages] == [True, False, True]
     assert len(errors) == 1
-    assert str(errors[0]) == "simulated delivery failure"
+    assert errors[0][0] == 2
+    assert str(errors[0][1]) == "simulated delivery failure"
 
 
 class RecordingReceiver:
@@ -107,7 +112,8 @@ def test_worker_loop_polls_until_stop_is_requested() -> None:
         deliver_and_record_event=deliver_and_record,
         stop_requested=lambda: receiver.receive_calls == 2,
         load_event=event_for,
-        on_processing_error=lambda error: None,
+        load_recorded_delivery=lambda event_id: None,
+        on_processing_error=lambda message, error: None,
     )
 
     assert receiver.receive_calls == 2

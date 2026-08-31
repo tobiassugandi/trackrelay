@@ -19,6 +19,11 @@ def test_settings_load_prefixed_environment_variables(monkeypatch: MonkeyPatch) 
         "TRACKRELAY_SQS_QUEUE_URL",
         "https://sqs.ap-southeast-3.amazonaws.com/123456789012/jobs",
     )
+    monkeypatch.setenv(
+        "TRACKRELAY_SQS_DEAD_LETTER_QUEUE_ARN",
+        "arn:aws:sqs:ap-southeast-3:123456789012:jobs-dlq",
+    )
+    monkeypatch.setenv("TRACKRELAY_SQS_MAX_RECEIVE_COUNT", "4")
     monkeypatch.setenv("TRACKRELAY_SQS_WAIT_TIME_SECONDS", "10")
     monkeypatch.setenv("TRACKRELAY_SQS_VISIBILITY_TIMEOUT_SECONDS", "45")
     monkeypatch.setenv("TRACKRELAY_SQS_MAX_MESSAGES", "7")
@@ -38,6 +43,10 @@ def test_settings_load_prefixed_environment_variables(monkeypatch: MonkeyPatch) 
     assert settings.sqs_queue_url == (
         "https://sqs.ap-southeast-3.amazonaws.com/123456789012/jobs"
     )
+    assert settings.sqs_dead_letter_queue_arn == (
+        "arn:aws:sqs:ap-southeast-3:123456789012:jobs-dlq"
+    )
+    assert settings.sqs_max_receive_count == 4
     assert settings.sqs_wait_time_seconds == 10
     assert settings.sqs_visibility_timeout_seconds == 45
     assert settings.sqs_max_messages == 7
@@ -50,6 +59,21 @@ def test_sqs_backend_requires_a_queue_url() -> None:
             _env_file=None,
             delivery_queue_backend="sqs",
             sqs_queue_url=None,
+            sqs_dead_letter_queue_arn=(
+                "arn:aws:sqs:ap-southeast-3:123456789012:jobs-dlq"
+            ),
+        )
+
+
+def test_sqs_backend_requires_a_dead_letter_queue() -> None:
+    with raises(ValueError, match="sqs_dead_letter_queue_arn is required"):
+        Settings(
+            _env_file=None,
+            delivery_queue_backend="sqs",
+            sqs_queue_url=(
+                "https://sqs.ap-southeast-3.amazonaws.com/123456789012/jobs"
+            ),
+            sqs_dead_letter_queue_arn=None,
         )
 
 
@@ -60,6 +84,9 @@ def test_sqs_visibility_covers_the_configured_sequential_batch() -> None:
             delivery_queue_backend="sqs",
             sqs_queue_url=(
                 "https://sqs.ap-southeast-3.amazonaws.com/123456789012/jobs"
+            ),
+            sqs_dead_letter_queue_arn=(
+                "arn:aws:sqs:ap-southeast-3:123456789012:jobs-dlq"
             ),
             downstream_timeout_seconds=5,
             sqs_visibility_timeout_seconds=50,

@@ -62,18 +62,24 @@ def deliver_normalized_event(
     normalized_event: NormalizedEvent,
     *,
     downstream_url: str,
+    idempotency_key: UUID | None = None,
     timeout_seconds: float = 5.0,
     client: httpx.Client | None = None,
 ) -> DeliveryResult:
     """POST one normalized event and return its successful delivery result."""
     endpoint = f"{downstream_url.rstrip('/')}/events"
     body = normalized_event.model_dump(mode="json", exclude_none=True)
+    headers = (
+        {"Idempotency-Key": str(idempotency_key)}
+        if idempotency_key is not None
+        else None
+    )
 
     if client is not None:
-        response = client.post(endpoint, json=body)
+        response = client.post(endpoint, json=body, headers=headers)
     else:
         with httpx.Client(timeout=timeout_seconds) as http_client:
-            response = http_client.post(endpoint, json=body)
+            response = http_client.post(endpoint, json=body, headers=headers)
 
     response.raise_for_status()
     return DeliveryResult(downstream_status_code=response.status_code)
@@ -101,6 +107,7 @@ def deliver_and_record_normalized_event(
         delivery = deliver_normalized_event(
             normalized_event,
             downstream_url=downstream_url,
+            idempotency_key=event_id,
             timeout_seconds=timeout_seconds,
             client=client,
         )

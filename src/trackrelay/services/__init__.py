@@ -20,7 +20,9 @@ from trackrelay.services.downstream_delivery import (
 )
 from trackrelay.services.downstream_worker import (
     PersistedEventNotFoundError,
+    RecordedDeliveryInconsistentError,
     load_persisted_normalized_event,
+    load_recorded_delivery_result,
     process_downstream_delivery_message,
 )
 from trackrelay.services.event_persistence import (
@@ -41,12 +43,14 @@ __all__ = [
     "DownstreamDeliveryReceiver",
     "EventPersistenceResult",
     "PersistedEventNotFoundError",
+    "RecordedDeliveryInconsistentError",
     "RecordingDownstreamDeliveryMessage",
     "RecordingDownstreamDeliveryQueue",
     "deliver_and_record_normalized_event",
     "deliver_normalized_event",
     "list_shipment_events",
     "load_persisted_normalized_event",
+    "load_recorded_delivery_result",
     "persist_normalized_event",
     "process_downstream_delivery_message",
     "record_delivery_attempt",

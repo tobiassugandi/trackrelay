@@ -565,7 +565,13 @@ This result demonstrates rapid cloud hardware flexibility, not automatic elastic
   real boto3-backed SQS publish, long-poll receive, and delete-on-acknowledgement
   adapters behind the existing application boundaries. Keep the recording
   transport as the local default and verify every AWS operation through fakes.
-- [ ] Add retries and a dead-letter queue.
+- [x] Add SQS-owned retries and a dead-letter queue contract. Leave failed
+  messages unacknowledged, expose their approximate receive count, and fail
+  worker startup unless the source queue's redrive policy names the configured
+  DLQ and maximum receive count. Suppress a replay after a recorded successful
+  delivery, and send the persisted event ID as the downstream idempotency key
+  to cover a crash after downstream acceptance but before success recording.
+  Keep creation of both queues in the Stage 9.5 infrastructure increment.
 - [ ] Define durable acceptance precisely and confirm that a fast API response cannot hide lost work.
 - [ ] Add processing guardrails: every accepted event is accounted for, duplicate business effects remain zero, final shipment states are correct, and the queue drains by a documented deadline after offered load falls.
 

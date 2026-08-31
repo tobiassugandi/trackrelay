@@ -62,6 +62,7 @@ def test_recording_message_implements_the_acknowledgement_contract() -> None:
 
     assert isinstance(message, DownstreamDeliveryMessage)
     assert message.acknowledged is False
+    assert message.receive_count == 1
 
     message.acknowledge()
 

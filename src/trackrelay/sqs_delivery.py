@@ -1,6 +1,8 @@
 """Amazon SQS adapters for downstream-delivery jobs and messages."""
 
+import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Protocol
 
 import boto3
@@ -24,6 +26,8 @@ class SqsClient(Protocol):
     def receive_message(self, **kwargs: object) -> Mapping[str, object]: ...
 
     def delete_message(self, **kwargs: object) -> object: ...
+
+    def get_queue_attributes(self, **kwargs: object) -> Mapping[str, object]: ...
 
 
 def create_sqs_client(*, region_name: str) -> SqsClient:
@@ -61,11 +65,15 @@ class SqsDownstreamDeliveryMessage:
         queue_url: str,
         body: str,
         receipt_handle: str,
+        receive_count: int,
     ) -> None:
+        if receive_count < 1:
+            raise ValueError("SQS receive count must be positive")
         self._client = client
         self._queue_url = queue_url
         self._body = body
         self._receipt_handle = receipt_handle
+        self._receive_count = receive_count
 
     @property
     def job(self) -> DownstreamDeliveryJob:
@@ -76,6 +84,11 @@ class SqsDownstreamDeliveryMessage:
             raise DownstreamDeliveryMessageDecodeError(
                 "SQS message does not contain a supported downstream job"
             ) from error
+
+    @property
+    def receive_count(self) -> int:
+        """Return SQS's approximate number of deliveries for this message."""
+        return self._receive_count
 
     def acknowledge(self) -> None:
         """Delete this exact received message after successful processing."""
@@ -121,6 +134,7 @@ class SqsDownstreamDeliveryReceiver:
         try:
             response = self._client.receive_message(
                 QueueUrl=self._queue_url,
+                AttributeNames=["ApproximateReceiveCount"],
                 MaxNumberOfMessages=self._max_messages,
                 WaitTimeSeconds=self._wait_time_seconds,
                 VisibilityTimeout=self._visibility_timeout_seconds,
@@ -144,9 +158,25 @@ class SqsDownstreamDeliveryReceiver:
                 )
             body = raw_message.get("Body")
             receipt_handle = raw_message.get("ReceiptHandle")
+            attributes = raw_message.get("Attributes")
             if not isinstance(body, str) or not isinstance(receipt_handle, str):
                 raise DownstreamDeliveryReceiveError(
                     "SQS message omitted its body or receipt handle"
+                )
+            if not isinstance(attributes, Mapping):
+                raise DownstreamDeliveryReceiveError(
+                    "SQS message omitted its receive-count attributes"
+                )
+            raw_receive_count = attributes.get("ApproximateReceiveCount")
+            try:
+                receive_count = int(raw_receive_count)
+            except (TypeError, ValueError) as error:
+                raise DownstreamDeliveryReceiveError(
+                    "SQS message contained an invalid receive count"
+                ) from error
+            if receive_count < 1:
+                raise DownstreamDeliveryReceiveError(
+                    "SQS message contained a non-positive receive count"
                 )
             messages.append(
                 SqsDownstreamDeliveryMessage(
@@ -154,6 +184,74 @@ class SqsDownstreamDeliveryReceiver:
                     queue_url=self._queue_url,
                     body=body,
                     receipt_handle=receipt_handle,
+                    receive_count=receive_count,
                 )
             )
         return tuple(messages)
+
+
+class SqsRedrivePolicyError(RuntimeError):
+    """Report a source queue without the required retry and DLQ policy."""
+
+
+@dataclass(frozen=True)
+class SqsRedrivePolicy:
+    """The redrive controls relevant to TrackRelay's worker."""
+
+    dead_letter_target_arn: str
+    max_receive_count: int
+
+
+def verify_sqs_redrive_policy(
+    *,
+    client: SqsClient,
+    queue_url: str,
+    expected_dead_letter_target_arn: str,
+    expected_max_receive_count: int,
+) -> SqsRedrivePolicy:
+    """Fail worker startup unless SQS owns the expected retry-to-DLQ policy."""
+    if expected_max_receive_count < 1:
+        raise ValueError("expected SQS max receive count must be positive")
+    try:
+        response = client.get_queue_attributes(
+            QueueUrl=queue_url,
+            AttributeNames=["RedrivePolicy"],
+        )
+    except (BotoCoreError, ClientError) as error:
+        raise SqsRedrivePolicyError(
+            "SQS redrive policy could not be inspected"
+        ) from error
+
+    attributes = response.get("Attributes")
+    if not isinstance(attributes, Mapping):
+        raise SqsRedrivePolicyError(
+            "SQS queue attributes omitted the redrive policy"
+        )
+    raw_policy = attributes.get("RedrivePolicy")
+    if not isinstance(raw_policy, str):
+        raise SqsRedrivePolicyError("SQS queue has no redrive policy")
+    try:
+        decoded_policy = json.loads(raw_policy)
+        dead_letter_target_arn = decoded_policy["deadLetterTargetArn"]
+        max_receive_count = int(decoded_policy["maxReceiveCount"])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise SqsRedrivePolicyError(
+            "SQS queue has an invalid redrive policy"
+        ) from error
+    if not isinstance(dead_letter_target_arn, str) or not dead_letter_target_arn:
+        raise SqsRedrivePolicyError(
+            "SQS queue has an invalid dead-letter target ARN"
+        )
+    policy = SqsRedrivePolicy(
+        dead_letter_target_arn=dead_letter_target_arn,
+        max_receive_count=max_receive_count,
+    )
+    if policy.dead_letter_target_arn != expected_dead_letter_target_arn:
+        raise SqsRedrivePolicyError(
+            "SQS redrive policy targets an unexpected dead-letter queue"
+        )
+    if policy.max_receive_count != expected_max_receive_count:
+        raise SqsRedrivePolicyError(
+            "SQS redrive policy has an unexpected max receive count"
+        )
+    return policy

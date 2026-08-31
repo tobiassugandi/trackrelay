@@ -1,9 +1,10 @@
 """Downstream order-system simulator API."""
 
 from time import sleep
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, Header, HTTPException, status
 from pydantic import BaseModel, ConfigDict
 
 from trackrelay.domain import NormalizedEvent
@@ -87,7 +88,13 @@ def clear_simulator_events() -> SimulatorResetResponse:
 
 
 @app.post("/events", status_code=status.HTTP_202_ACCEPTED)
-def receive_event(event: NormalizedEvent) -> dict[str, object]:
+def receive_event(
+    event: NormalizedEvent,
+    idempotency_key: Annotated[
+        UUID | None,
+        Header(alias="Idempotency-Key"),
+    ] = None,
+) -> dict[str, object]:
     """Accept and record one normalized event."""
     mode = simulator_control.get_mode()
     if mode is SimulatorMode.RETURN_500:
@@ -105,8 +112,12 @@ def receive_event(event: NormalizedEvent) -> dict[str, object]:
     if delay_seconds:
         sleep(delay_seconds)
 
-    received_count = event_store.record(event)
-    return {"status": "accepted", "received_count": received_count}
+    result = event_store.record(event, idempotency_key=idempotency_key)
+    return {
+        "status": "accepted",
+        "received_count": result.received_count,
+        "duplicate": result.duplicate,
+    }
 
 
 @app.get("/events", response_model_exclude_none=True)

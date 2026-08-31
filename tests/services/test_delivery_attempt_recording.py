@@ -88,7 +88,12 @@ def deterministic_clocks(
 def test_successful_delivery_records_all_attempt_fields() -> None:
     engine, sessions, normalized, event_id = create_event_fixture()
     monotonic, utcnow = deterministic_clocks(latency_ms=123)
-    transport = httpx.MockTransport(lambda request: httpx.Response(202))
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Idempotency-Key"] == str(event_id)
+        return httpx.Response(202)
+
+    transport = httpx.MockTransport(accept)
 
     with httpx.Client(transport=transport) as client:
         result = deliver_and_record_normalized_event(

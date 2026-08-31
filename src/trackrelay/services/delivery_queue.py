@@ -35,6 +35,11 @@ class DownstreamDeliveryMessage(Protocol):
         """Return the validated job carried by this message."""
         ...
 
+    @property
+    def receive_count(self) -> int:
+        """Return how many times the queue has delivered this message."""
+        ...
+
     def acknowledge(self) -> None:
         """Remove a successfully processed message from future delivery."""
         ...
@@ -103,12 +108,16 @@ class RecordingDownstreamDeliveryMessage:
         *,
         acknowledgement_failure: Exception | None = None,
         on_acknowledge: Callable[[], None] | None = None,
+        receive_count: int = 1,
     ) -> None:
+        if receive_count < 1:
+            raise ValueError("message receive count must be positive")
         self._job = job
         self._acknowledgement_failure = acknowledgement_failure
         self._on_acknowledge = on_acknowledge
         self._acknowledgement_calls = 0
         self._acknowledged = False
+        self._receive_count = receive_count
 
     @property
     def job(self) -> DownstreamDeliveryJob:
@@ -119,6 +128,11 @@ class RecordingDownstreamDeliveryMessage:
     def acknowledgement_calls(self) -> int:
         """Return how many times acknowledgement was attempted."""
         return self._acknowledgement_calls
+
+    @property
+    def receive_count(self) -> int:
+        """Return the deterministic delivery count configured by the test."""
+        return self._receive_count
 
     @property
     def acknowledged(self) -> bool:

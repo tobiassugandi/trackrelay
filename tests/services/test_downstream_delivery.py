@@ -61,6 +61,24 @@ def test_delivery_includes_a_synthetic_events_test_run_id() -> None:
     assert result.downstream_status_code == 202
 
 
+def test_delivery_sends_the_persisted_event_id_as_an_idempotency_key() -> None:
+    event_id = UUID("00000000-0000-0000-0000-000000000801")
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Idempotency-Key"] == str(event_id)
+        return httpx.Response(202, json={"status": "accepted"})
+
+    with httpx.Client(transport=httpx.MockTransport(accept)) as client:
+        result = deliver_normalized_event(
+            normalized_event(),
+            downstream_url="http://downstream.test",
+            idempotency_key=event_id,
+            client=client,
+        )
+
+    assert result.downstream_status_code == 202
+
+
 def test_delivery_raises_for_a_downstream_error() -> None:
     transport = httpx.MockTransport(lambda request: httpx.Response(500))
 

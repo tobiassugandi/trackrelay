@@ -7,7 +7,9 @@ from pytest import raises
 
 from trackrelay.services import (
     DownstreamDeliveryJob,
+    DownstreamDeliveryMessage,
     DownstreamDeliveryQueue,
+    RecordingDownstreamDeliveryMessage,
     RecordingDownstreamDeliveryQueue,
 )
 
@@ -49,3 +51,19 @@ def test_recording_fake_implements_the_queue_contract_without_hiding_duplicates(
     queue.clear()
 
     assert queue.enqueued_jobs == ()
+
+
+def test_recording_message_implements_the_acknowledgement_contract() -> None:
+    message = RecordingDownstreamDeliveryMessage(
+        DownstreamDeliveryJob(
+            event_id=UUID("00000000-0000-0000-0000-000000000901")
+        )
+    )
+
+    assert isinstance(message, DownstreamDeliveryMessage)
+    assert message.acknowledged is False
+
+    message.acknowledge()
+
+    assert message.acknowledgement_calls == 1
+    assert message.acknowledged is True

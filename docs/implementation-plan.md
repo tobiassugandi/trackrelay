@@ -556,7 +556,11 @@ This result demonstrates rapid cloud hardware flexibility, not automatic elastic
   persisted event as queued, skip duplicate queue publications, expose publish
   failure after persistence, and label the temporary local recording queue as
   non-durable until the durable-acceptance step closes the database-to-queue gap.
-- [ ] Develop worker delivery and acknowledgement behavior locally with deterministic fakes; do not require a local AWS emulator or substitute message broker.
+- [x] Develop worker delivery and acknowledgement behavior locally with
+  deterministic fakes; load the authoritative persisted event by ID, deliver
+  and record the attempt, acknowledge only after success, and leave loading,
+  delivery, recording, and acknowledgement failures visible for retry. Do not
+  require a local AWS emulator or substitute message broker.
 - [ ] Move downstream delivery into a separate worker and implement the real SQS adapter behind the same application boundary.
 - [ ] Add retries and a dead-letter queue.
 - [ ] Define durable acceptance precisely and confirm that a fast API response cannot hide lost work.

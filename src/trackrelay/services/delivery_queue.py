@@ -1,5 +1,6 @@
 """Application boundary and deterministic fake for downstream delivery work."""
 
+from collections.abc import Callable
 from threading import Lock
 from typing import Literal, Protocol, runtime_checkable
 from uuid import UUID
@@ -22,6 +23,20 @@ class DownstreamDeliveryQueue(Protocol):
 
     def enqueue(self, job: DownstreamDeliveryJob) -> None:
         """Schedule one persisted event for downstream delivery."""
+        ...
+
+
+@runtime_checkable
+class DownstreamDeliveryMessage(Protocol):
+    """Expose one received job and its transport acknowledgement."""
+
+    @property
+    def job(self) -> DownstreamDeliveryJob:
+        """Return the validated job carried by this message."""
+        ...
+
+    def acknowledge(self) -> None:
+        """Remove a successfully processed message from future delivery."""
         ...
 
 
@@ -56,3 +71,44 @@ class RecordingDownstreamDeliveryQueue:
         """Reset process-local state between deterministic scenarios."""
         with self._lock:
             self._enqueued_jobs.clear()
+
+
+class RecordingDownstreamDeliveryMessage:
+    """Record acknowledgement calls for deterministic worker tests."""
+
+    def __init__(
+        self,
+        job: DownstreamDeliveryJob,
+        *,
+        acknowledgement_failure: Exception | None = None,
+        on_acknowledge: Callable[[], None] | None = None,
+    ) -> None:
+        self._job = job
+        self._acknowledgement_failure = acknowledgement_failure
+        self._on_acknowledge = on_acknowledge
+        self._acknowledgement_calls = 0
+        self._acknowledged = False
+
+    @property
+    def job(self) -> DownstreamDeliveryJob:
+        """Return the received job unchanged."""
+        return self._job
+
+    @property
+    def acknowledgement_calls(self) -> int:
+        """Return how many times acknowledgement was attempted."""
+        return self._acknowledgement_calls
+
+    @property
+    def acknowledged(self) -> bool:
+        """Report whether acknowledgement completed successfully."""
+        return self._acknowledged
+
+    def acknowledge(self) -> None:
+        """Record the call and optionally reproduce a transport failure."""
+        self._acknowledgement_calls += 1
+        if self._on_acknowledge is not None:
+            self._on_acknowledge()
+        if self._acknowledgement_failure is not None:
+            raise self._acknowledgement_failure
+        self._acknowledged = True

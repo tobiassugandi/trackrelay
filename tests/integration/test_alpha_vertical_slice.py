@@ -24,7 +24,9 @@ from trackrelay.models import DeliveryAttempt, Event, Partner, Shipment
 from trackrelay.services import (
     DeliveryResult,
     DownstreamDeliveryJob,
+    RecordingDownstreamDeliveryMessage,
     deliver_and_record_normalized_event,
+    process_downstream_delivery_message,
 )
 
 PARTNER_ID = "alpha-indonesia"
@@ -61,20 +63,12 @@ class InlineDeliveryQueue:
         self._deliver = deliver
 
     def enqueue(self, job: DownstreamDeliveryJob) -> None:
-        with session_factory() as session:
-            event = session.get(Event, job.event_id)
-            assert event is not None
-            normalized_event = NormalizedEvent(
-                partner_id=event.partner_id,
-                partner_event_id=event.partner_event_id,
-                tracking_number=event.tracking_number,
-                status=event.status,
-                occurred_at=event.occurred_at,
-                received_at=event.received_at,
-                raw_payload=event.raw_payload,
-                test_run_id=event.test_run_id,
-            )
-        self._deliver(normalized_event, job.event_id)
+        message = RecordingDownstreamDeliveryMessage(job)
+        process_downstream_delivery_message(
+            message,
+            deliver_and_record_event=self._deliver,
+        )
+        assert message.acknowledged is True
 
 
 def cleanup_event_and_shipment() -> None:

@@ -57,7 +57,7 @@ resource "aws_db_subnet_group" "postgres" {
 
 resource "aws_security_group" "database" {
   name        = "${local.name_prefix}-database"
-  description = "PostgreSQL from the TrackRelay rehost only"
+  description = "PostgreSQL from explicitly authorized TrackRelay compute"
   vpc_id      = aws_vpc.rehost.id
 
   ingress {
@@ -65,6 +65,22 @@ resource "aws_security_group" "database" {
     from_port       = 5432
     protocol        = "tcp"
     security_groups = [aws_security_group.rehost.id]
+    to_port         = 5432
+  }
+
+  ingress {
+    description     = "PostgreSQL from asynchronous API and migration tasks"
+    from_port       = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.async_api.id]
+    to_port         = 5432
+  }
+
+  ingress {
+    description     = "PostgreSQL from asynchronous worker tasks"
+    from_port       = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.async_worker.id]
     to_port         = 5432
   }
 

@@ -166,6 +166,68 @@ def inventory_rehost_resources(
     resource_suffix = sha256(session_id.encode()).hexdigest()[:8]
     name_prefix = f"trackrelay-{resource_suffix}"
     database_identifier = f"{name_prefix}-postgres"
+    counts["application_load_balancers"] = named_resource_exists(
+        name="application_load_balancers",
+        command=(
+            *prefix,
+            "elbv2",
+            "describe-load-balancers",
+            "--names",
+            f"{name_prefix}-async",
+            "--output",
+            "json",
+        ),
+        not_found_marker="LoadBalancerNotFound",
+        runner=runner,
+    )
+    counts["load_balancer_target_groups"] = named_resource_exists(
+        name="load_balancer_target_groups",
+        command=(
+            *prefix,
+            "elbv2",
+            "describe-target-groups",
+            "--names",
+            f"{name_prefix}-api",
+            "--output",
+            "json",
+        ),
+        not_found_marker="TargetGroupNotFound",
+        runner=runner,
+    )
+    counts["ecs_clusters"] = count_query(
+        name="ecs_clusters",
+        command=(
+            *prefix,
+            "ecs",
+            "describe-clusters",
+            "--clusters",
+            f"{name_prefix}-async",
+            "--query",
+            "length(clusters[?status!='INACTIVE'])",
+            "--output",
+            "text",
+        ),
+        runner=runner,
+    )
+    log_group_prefix = f"/trackrelay/{resource_suffix}/"
+    log_group_query = (
+        f"length(logGroups[?starts_with(logGroupName, '{log_group_prefix}')])"
+    )
+    counts["cloudwatch_log_groups"] = count_query(
+        name="cloudwatch_log_groups",
+        command=(
+            *prefix,
+            "logs",
+            "describe-log-groups",
+            "--log-group-name-prefix",
+            log_group_prefix,
+            "--query",
+            log_group_query,
+            "--output",
+            "text",
+        ),
+        runner=runner,
+    )
     counts["ecr_repositories"] = sum(
         named_resource_exists(
             name=f"ecr_repositories_{role}",
@@ -214,19 +276,29 @@ def inventory_rehost_resources(
         not_found_marker="NoSuchEntity",
         runner=runner,
     )
-    counts["iam_roles"] = named_resource_exists(
-        name="iam_roles",
-        command=(
-            *prefix,
-            "iam",
-            "get-role",
-            "--role-name",
-            f"{name_prefix}-instance",
-            "--output",
-            "json",
-        ),
-        not_found_marker="NoSuchEntity",
-        runner=runner,
+    counts["iam_roles"] = sum(
+        named_resource_exists(
+            name=f"iam_roles_{role_suffix}",
+            command=(
+                *prefix,
+                "iam",
+                "get-role",
+                "--role-name",
+                f"{name_prefix}-{role_suffix}",
+                "--output",
+                "json",
+            ),
+            not_found_marker="NoSuchEntity",
+            runner=runner,
+        )
+        for role_suffix in (
+            "api-task",
+            "ecs-execution",
+            "instance",
+            "migration-task",
+            "simulator-task",
+            "worker-task",
+        )
     )
     counts["rds_instances"] = named_resource_exists(
         name="rds_instances",

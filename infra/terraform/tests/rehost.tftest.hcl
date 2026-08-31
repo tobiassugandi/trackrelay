@@ -26,6 +26,30 @@ mock_provider "aws" {
   }
 }
 
+override_resource {
+  target          = aws_security_group.rehost
+  override_during = plan
+  values = {
+    id = "sg-mocked-rehost"
+  }
+}
+
+override_resource {
+  target          = aws_security_group.async_api
+  override_during = plan
+  values = {
+    id = "sg-mocked-api"
+  }
+}
+
+override_resource {
+  target          = aws_security_group.async_worker
+  override_during = plan
+  values = {
+    id = "sg-mocked-worker"
+  }
+}
+
 run "rds_is_private_small_and_disposable" {
   command = plan
 
@@ -45,13 +69,25 @@ run "rds_is_private_small_and_disposable" {
   }
 
   assert {
-    condition     = one(aws_security_group.database.ingress).from_port == 5432
-    error_message = "The database security group must expose only PostgreSQL."
+    condition     = alltrue([for rule in aws_security_group.database.ingress : rule.from_port == 5432 && rule.to_port == 5432 && rule.protocol == "tcp"])
+    error_message = "Every database ingress rule must expose only PostgreSQL."
   }
 
   assert {
-    condition     = one(aws_security_group.database.ingress).cidr_blocks == null
+    condition     = alltrue([for rule in aws_security_group.database.ingress : rule.cidr_blocks == null])
     error_message = "The database must not accept PostgreSQL from an IP CIDR."
+  }
+
+  assert {
+    condition     = length(aws_security_group.database.ingress) == 3
+    error_message = "Only the rehost, asynchronous API, and worker may reach PostgreSQL."
+  }
+
+  assert {
+    condition = toset(flatten([
+      for rule in aws_security_group.database.ingress : tolist(rule.security_groups)
+    ])) == toset(["sg-mocked-rehost", "sg-mocked-api", "sg-mocked-worker"])
+    error_message = "Database ingress must name only the three authorized compute security groups."
   }
 
   assert {

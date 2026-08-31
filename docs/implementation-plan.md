@@ -608,8 +608,14 @@ This result demonstrates rapid cloud hardware flexibility, not automatic elastic
     source queue. Expose only non-secret deployment outputs, cover the contract
     with mocked plans, and extend native teardown verification to all three
     repositories and both queues.
-  - [ ] Add the ECS/Fargate, network, load-balancer, task-role, secret-access,
-    logging, and service definitions around this foundation.
+  - [x] Add two-AZ cost-bounded public Fargate subnets without a NAT gateway,
+    an approved-source-only disposable Application Load Balancer, task-isolated
+    security groups, readiness-based IP targets, an observable ECS cluster,
+    one-day task log groups, role-specific queue permissions, RDS secret access,
+    and native teardown checks for every new resource type. Document why public
+    task ENIs are acceptable only for this synthetic bounded experiment.
+  - [ ] Add digest-pinned Fargate task definitions, the one-off migration task,
+    and fixed API, worker, and simulator services around these foundations.
 - [ ] Define CloudWatch metrics for offered load, API p95 latency, request errors, running worker tasks, queue depth, and message age or processing lag.
 - [ ] Configure the API at a fixed, documented capacity with enough headroom that worker delivery capacity is the variable under test.
 

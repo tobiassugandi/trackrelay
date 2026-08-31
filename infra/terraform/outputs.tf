@@ -33,6 +33,16 @@ output "delivery_dead_letter_queue_arn" {
   value       = aws_sqs_queue.delivery_dead_letter.arn
 }
 
+output "async_ecs_cluster_name" {
+  description = "ECS cluster used by the asynchronous services and migration task."
+  value       = aws_ecs_cluster.async.name
+}
+
+output "async_api_url" {
+  description = "Temporary HTTP endpoint restricted to the approved benchmark CIDR."
+  value       = "http://${aws_lb.async.dns_name}"
+}
+
 output "rehost_instance_id" {
   description = "EC2 instance managed through AWS Systems Manager."
   value       = aws_instance.rehost.id

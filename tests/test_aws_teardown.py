@@ -41,6 +41,10 @@ def absent_resource_runner(
             stderr="AWS.SimpleQueueService.NonExistentQueue",
             returncode=254,
         )
+    if "describe-load-balancers" in call:
+        return completed(call, stderr="LoadBalancerNotFound", returncode=254)
+    if "describe-target-groups" in call:
+        return completed(call, stderr="TargetGroupNotFound", returncode=254)
     if "get-instance-profile" in call or "get-role" in call:
         return completed(call, stderr="NoSuchEntity", returncode=254)
     not_found_by_command = {
@@ -66,12 +70,16 @@ def test_inventory_proves_every_resource_type_absent() -> None:
     )
 
     assert counts == {
+        "application_load_balancers": 0,
+        "cloudwatch_log_groups": 0,
         "ebs_volumes": 0,
         "ec2_instances": 0,
         "ecr_repositories": 0,
+        "ecs_clusters": 0,
         "iam_instance_profiles": 0,
         "iam_roles": 0,
         "internet_gateways": 0,
+        "load_balancer_target_groups": 0,
         "rds_automated_backups": 0,
         "rds_instances": 0,
         "rds_managed_secrets": 0,
@@ -148,6 +156,36 @@ def test_inventory_counts_each_service_repository_and_delivery_queue() -> None:
     assert sum(counts.values()) == 2
 
 
+def test_inventory_counts_remaining_async_platform_resources() -> None:
+    def runner(arguments: Sequence[str]) -> CompletedProcess[str]:
+        call = tuple(arguments)
+        if "describe-load-balancers" in call:
+            return completed(call, stdout="{}\n")
+        if "describe-target-groups" in call:
+            return completed(call, stdout="{}\n")
+        if "describe-clusters" in call or "describe-log-groups" in call:
+            return completed(call, stdout="1\n")
+        if "get-role" in call and call[
+            call.index("--role-name") + 1
+        ].endswith("-worker-task"):
+            return completed(call, stdout="{}\n")
+        return absent_resource_runner(call)
+
+    counts = inventory_rehost_resources(
+        profile=PROFILE,
+        region=REGION,
+        session_id=SESSION_ID,
+        runner=runner,
+    )
+
+    assert counts["application_load_balancers"] == 1
+    assert counts["load_balancer_target_groups"] == 1
+    assert counts["ecs_clusters"] == 1
+    assert counts["cloudwatch_log_groups"] == 1
+    assert counts["iam_roles"] == 1
+    assert sum(counts.values()) == 5
+
+
 def test_inventory_uses_explicit_profile_region_and_session_tags() -> None:
     calls: list[tuple[str, ...]] = []
 
@@ -189,6 +227,11 @@ def test_inventory_uses_explicit_profile_region_and_session_tags() -> None:
         for call in calls
         if "get-queue-url" in call
     }
+    role_names = {
+        call[call.index("--role-name") + 1]
+        for call in calls
+        if "get-role" in call
+    }
     assert {name.rsplit("-", 1)[-1] for name in repository_names} == {
         "api",
         "simulator",
@@ -198,6 +241,35 @@ def test_inventory_uses_explicit_profile_region_and_session_tags() -> None:
         "",
         "-dlq",
     }
+    assert {name.split("trackrelay-", 1)[-1].split("-", 1)[-1] for name in role_names} == {
+        "api-task",
+        "ecs-execution",
+        "instance",
+        "migration-task",
+        "simulator-task",
+        "worker-task",
+    }
+
+    load_balancer_call = next(
+        call for call in calls if "describe-load-balancers" in call
+    )
+    target_group_call = next(
+        call for call in calls if "describe-target-groups" in call
+    )
+    cluster_call = next(call for call in calls if "describe-clusters" in call)
+    log_group_call = next(
+        call for call in calls if "describe-log-groups" in call
+    )
+    assert load_balancer_call[load_balancer_call.index("--names") + 1].endswith(
+        "-async"
+    )
+    assert target_group_call[target_group_call.index("--names") + 1].endswith(
+        "-api"
+    )
+    assert cluster_call[cluster_call.index("--clusters") + 1].endswith("-async")
+    assert log_group_call[
+        log_group_call.index("--log-group-name-prefix") + 1
+    ].startswith("/trackrelay/")
 
     secret_call = next(call for call in calls if "list-secrets" in call)
     assert "--include-planned-deletion" in secret_call

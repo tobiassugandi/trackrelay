@@ -20,15 +20,19 @@ from trackrelay.services import (
     DownstreamDeliveryReceiver,
 )
 from trackrelay.sqs_delivery import (
+    SqsBacklogInspectionError,
+    SqsDeliveryBacklog,
     SqsDownstreamDeliveryQueue,
     SqsDownstreamDeliveryReceiver,
     SqsRedrivePolicy,
     SqsRedrivePolicyError,
+    inspect_sqs_delivery_backlog,
     verify_sqs_redrive_policy,
 )
 from trackrelay.worker import WorkerBatchResult, process_worker_batch
 
 QUEUE_URL = "https://sqs.ap-southeast-3.amazonaws.com/123456789012/jobs"
+DLQ_URL = f"{QUEUE_URL}-dlq"
 EVENT_ID = UUID("00000000-0000-0000-0000-000000000942")
 
 
@@ -41,6 +45,9 @@ class FakeSqsClient:
         self.deletes: list[dict[str, object]] = []
         self.receive_response: Mapping[str, object] = {}
         self.queue_attributes_response: Mapping[str, object] = {}
+        self.queue_attributes_response_by_url: dict[
+            str, Mapping[str, object]
+        ] = {}
         self.send_error: Exception | None = None
         self.receive_error: Exception | None = None
         self.delete_error: Exception | None = None
@@ -69,6 +76,11 @@ class FakeSqsClient:
         self.queue_attribute_requests.append(kwargs)
         if self.queue_attributes_error is not None:
             raise self.queue_attributes_error
+        queue_url = kwargs.get("QueueUrl")
+        if isinstance(queue_url, str):
+            response = self.queue_attributes_response_by_url.get(queue_url)
+            if response is not None:
+                return response
         return self.queue_attributes_response
 
 
@@ -296,6 +308,82 @@ def test_malformed_sqs_message_does_not_block_a_valid_neighbor() -> None:
     assert client.deletes == [
         {"QueueUrl": QUEUE_URL, "ReceiptHandle": "receipt-valid"}
     ]
+
+
+def test_sqs_backlog_inspection_reads_every_source_queue_state_and_dlq() -> None:
+    client = FakeSqsClient()
+    client.queue_attributes_response_by_url = {
+        QUEUE_URL: {
+            "Attributes": {
+                "ApproximateNumberOfMessages": "12",
+                "ApproximateNumberOfMessagesNotVisible": "3",
+                "ApproximateNumberOfMessagesDelayed": "2",
+            }
+        },
+        DLQ_URL: {
+            "Attributes": {"ApproximateNumberOfMessages": "1"}
+        },
+    }
+
+    backlog = inspect_sqs_delivery_backlog(
+        client=client,
+        source_queue_url=QUEUE_URL,
+        dead_letter_queue_url=DLQ_URL,
+    )
+
+    assert backlog == SqsDeliveryBacklog(
+        source_visible_messages=12,
+        source_in_flight_messages=3,
+        source_delayed_messages=2,
+        dead_letter_queue_messages=1,
+    )
+    assert client.queue_attribute_requests == [
+        {
+            "QueueUrl": QUEUE_URL,
+            "AttributeNames": [
+                "ApproximateNumberOfMessages",
+                "ApproximateNumberOfMessagesNotVisible",
+                "ApproximateNumberOfMessagesDelayed",
+            ],
+        },
+        {
+            "QueueUrl": DLQ_URL,
+            "AttributeNames": ["ApproximateNumberOfMessages"],
+        },
+    ]
+
+
+def test_sqs_backlog_inspection_rejects_missing_or_unreadable_counts() -> None:
+    client = FakeSqsClient()
+    client.queue_attributes_response_by_url = {
+        QUEUE_URL: {
+            "Attributes": {
+                "ApproximateNumberOfMessages": "0",
+                "ApproximateNumberOfMessagesDelayed": "0",
+            }
+        },
+        DLQ_URL: {
+            "Attributes": {"ApproximateNumberOfMessages": "0"}
+        },
+    }
+
+    with raises(
+        SqsBacklogInspectionError,
+        match="ApproximateNumberOfMessagesNotVisible",
+    ):
+        inspect_sqs_delivery_backlog(
+            client=client,
+            source_queue_url=QUEUE_URL,
+            dead_letter_queue_url=DLQ_URL,
+        )
+
+    client.queue_attributes_error = endpoint_error()
+    with raises(SqsBacklogInspectionError, match="could not be inspected"):
+        inspect_sqs_delivery_backlog(
+            client=client,
+            source_queue_url=QUEUE_URL,
+            dead_letter_queue_url=DLQ_URL,
+        )
 
 
 def test_worker_startup_verifies_the_expected_sqs_redrive_policy() -> None:

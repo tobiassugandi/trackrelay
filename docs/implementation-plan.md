@@ -580,7 +580,17 @@ This result demonstrates rapid cloud hardware flexibility, not automatic elastic
   from the worker, and mark a row published only after queue acceptance. Allow
   an ambiguous send to create a duplicate job because worker and downstream
   idempotency already make replay safe.
-- [ ] Add processing guardrails: every accepted event is accounted for, duplicate business effects remain zero, final shipment states are correct, and the queue drains by a documented deadline after offered load falls.
+- [x] Add processing guardrails: every request is reconciled, every unique
+  accepted event has a durable outbox row and a recorded successful downstream
+  effect, duplicate business effects remain zero, final shipment states are
+  correct, and no message reaches the DLQ. Require PostgreSQL pending-outbox
+  work plus SQS visible, in-flight, and delayed source work to reach zero no
+  later than 120 seconds after offered load ends, then remain continuously zero
+  for 180 seconds with no more than 20 seconds between observations before
+  confirming drain. Preserve the aligned observation timeline as
+  machine-checkable evidence; the confirmation window accounts for SQS's
+  eventually consistent approximate queue attributes and does not extend the
+  120-second drain deadline.
 
 ### Stage 9.5 — Containerize on ECS/Fargate
 

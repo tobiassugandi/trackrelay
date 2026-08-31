@@ -202,6 +202,92 @@ class SqsRedrivePolicy:
     max_receive_count: int
 
 
+class SqsBacklogInspectionError(RuntimeError):
+    """Report queue state that cannot support processing guardrails."""
+
+
+@dataclass(frozen=True)
+class SqsDeliveryBacklog:
+    """Source and dead-letter queue counts relevant to drain evaluation."""
+
+    source_visible_messages: int
+    source_in_flight_messages: int
+    source_delayed_messages: int
+    dead_letter_queue_messages: int
+
+
+def _queue_count(
+    attributes: Mapping[str, object],
+    attribute_name: str,
+) -> int:
+    raw_count = attributes.get(attribute_name)
+    try:
+        count = int(raw_count)
+    except (TypeError, ValueError) as error:
+        raise SqsBacklogInspectionError(
+            f"SQS queue omitted or reported invalid {attribute_name}"
+        ) from error
+    if count < 0:
+        raise SqsBacklogInspectionError(
+            f"SQS queue reported a negative {attribute_name}"
+        )
+    return count
+
+
+def inspect_sqs_delivery_backlog(
+    *,
+    client: SqsClient,
+    source_queue_url: str,
+    dead_letter_queue_url: str,
+) -> SqsDeliveryBacklog:
+    """Read visible, in-flight, delayed, and DLQ queue counts."""
+    try:
+        source_response = client.get_queue_attributes(
+            QueueUrl=source_queue_url,
+            AttributeNames=[
+                "ApproximateNumberOfMessages",
+                "ApproximateNumberOfMessagesNotVisible",
+                "ApproximateNumberOfMessagesDelayed",
+            ],
+        )
+        dead_letter_response = client.get_queue_attributes(
+            QueueUrl=dead_letter_queue_url,
+            AttributeNames=["ApproximateNumberOfMessages"],
+        )
+    except (BotoCoreError, ClientError) as error:
+        raise SqsBacklogInspectionError(
+            "SQS delivery backlog could not be inspected"
+        ) from error
+
+    source_attributes = source_response.get("Attributes")
+    dead_letter_attributes = dead_letter_response.get("Attributes")
+    if not isinstance(source_attributes, Mapping) or not isinstance(
+        dead_letter_attributes,
+        Mapping,
+    ):
+        raise SqsBacklogInspectionError(
+            "SQS queue attributes omitted delivery backlog counts"
+        )
+    return SqsDeliveryBacklog(
+        source_visible_messages=_queue_count(
+            source_attributes,
+            "ApproximateNumberOfMessages",
+        ),
+        source_in_flight_messages=_queue_count(
+            source_attributes,
+            "ApproximateNumberOfMessagesNotVisible",
+        ),
+        source_delayed_messages=_queue_count(
+            source_attributes,
+            "ApproximateNumberOfMessagesDelayed",
+        ),
+        dead_letter_queue_messages=_queue_count(
+            dead_letter_attributes,
+            "ApproximateNumberOfMessages",
+        ),
+    )
+
+
 def verify_sqs_redrive_policy(
     *,
     client: SqsClient,

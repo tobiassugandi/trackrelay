@@ -527,6 +527,24 @@ The real AWS path is available behind the same boundaries. Set `TRACKRELAY_DELIV
 
 SQS standard queues are an at-least-once transport, so retry safety has two layers. A recorded successful attempt suppresses a later downstream call, while every actual call carries the persisted event ID in `Idempotency-Key`. The controlled downstream simulator enforces that key atomically: the first request records the business effect and a replay returns `duplicate: true` without recording another effect. A real downstream service must honor the same idempotency contract; TrackRelay's database check alone cannot eliminate the crash window after a remote service accepts a request but before TrackRelay records the success.
 
+Stage 9.4 freezes the `async-processing-v1` completion and drain guardrail. Its
+aligned post-load timeline combines PostgreSQL counts with SQS queue attributes.
+Every generated request must be reconciled; every unique accepted event must
+have exactly one durable outbox entry, at least one recorded successful delivery,
+and one unique simulator business effect; duplicate effects, incorrect final
+shipment states, unaccounted requests, and DLQ messages must remain zero. Drain
+is first reached only when pending outbox entries, incomplete deliveries, and
+the source queue's visible, in-flight, and delayed messages are all zero. It must
+be reached within 120 seconds after offered load ends and remain continuously
+zero for another 180 seconds before the result is confirmed, with observations
+no more than 20 seconds apart. A wider sampling gap resets confirmation instead
+of assuming the unobserved interval stayed empty. The confirmation window does
+not relax the 120-second deadline: it protects the claim from SQS's eventually
+consistent approximate attributes, which AWS says may need at least one minute
+after producers stop and recommends observing at zero for several minutes
+([GetQueueAttributes](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_GetQueueAttributes.html),
+[confirming an empty queue](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/confirm-queue-is-empty.html)). The Stage 9.5 cloud integration runner will capture these observations and preserve the resulting machine-checkable evaluation.
+
 Start the downstream order-system simulator in a separate terminal:
 
 ```bash
@@ -575,4 +593,4 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the step-by-s
 
 ## Current status
 
-The local synchronous implementation is complete and measured through Step 8.6. Its frozen reference sustains 250 events/s on the recorded machine and first fails at 500 events/s. Phase 9 cloud sessions 1 and 2 validated the synchronous RDS-backed rehost and completed the controlled 2.5× hardware-flexibility result; both stacks were fully torn down. Stage 9.4 has now defined the queue boundary, added the separately runnable SQS worker, completed retry/DLQ and replay safety, and closed the durable-acceptance gap with a transactional PostgreSQL outbox. The next increment adds the end-to-end processing and drain guardrails required before cloud integration.
+The local synchronous implementation is complete and measured through Step 8.6. Its frozen reference sustains 250 events/s on the recorded machine and first fails at 500 events/s. Phase 9 cloud sessions 1 and 2 validated the synchronous RDS-backed rehost and completed the controlled 2.5× hardware-flexibility result; both stacks were fully torn down. Stage 9.4 is locally complete: it defines the queue boundary, adds the separately runnable SQS worker, makes retry and replay safe, closes durable acceptance with a transactional PostgreSQL outbox, and freezes machine-checkable end-to-end completion and queue-drain guardrails. The next increment begins Stage 9.5 with separate API, worker, and simulator container images before any approved cloud integration.

@@ -85,6 +85,23 @@ resource "aws_security_group" "async_worker" {
   }
 }
 
+resource "aws_security_group" "async_migration" {
+  name        = "${local.name_prefix}-async-migration"
+  description = "One-off migration tasks with no inbound network path"
+  vpc_id      = aws_vpc.rehost.id
+
+  egress {
+    cidr_blocks = ["0.0.0.0/0"]
+    from_port   = 0
+    protocol    = "-1"
+    to_port     = 0
+  }
+
+  tags = {
+    Name = "${local.name_prefix}-async-migration"
+  }
+}
+
 resource "aws_security_group" "async_simulator" {
   name        = "${local.name_prefix}-async-simulator"
   description = "Controlled downstream reachable only by worker tasks"

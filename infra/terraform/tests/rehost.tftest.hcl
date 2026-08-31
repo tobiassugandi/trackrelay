@@ -50,6 +50,14 @@ override_resource {
   }
 }
 
+override_resource {
+  target          = aws_security_group.async_migration
+  override_during = plan
+  values = {
+    id = "sg-mocked-migration"
+  }
+}
+
 run "rds_is_private_small_and_disposable" {
   command = plan
 
@@ -79,15 +87,15 @@ run "rds_is_private_small_and_disposable" {
   }
 
   assert {
-    condition     = length(aws_security_group.database.ingress) == 3
-    error_message = "Only the rehost, asynchronous API, and worker may reach PostgreSQL."
+    condition     = length(aws_security_group.database.ingress) == 4
+    error_message = "Only the rehost, asynchronous API, migration, and worker may reach PostgreSQL."
   }
 
   assert {
     condition = toset(flatten([
       for rule in aws_security_group.database.ingress : tolist(rule.security_groups)
-    ])) == toset(["sg-mocked-rehost", "sg-mocked-api", "sg-mocked-worker"])
-    error_message = "Database ingress must name only the three authorized compute security groups."
+    ])) == toset(["sg-mocked-rehost", "sg-mocked-api", "sg-mocked-migration", "sg-mocked-worker"])
+    error_message = "Database ingress must name only the four authorized compute security groups."
   }
 
   assert {

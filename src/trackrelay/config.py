@@ -1,8 +1,9 @@
 """Typed application configuration loaded from the environment."""
 
 from typing import Annotated, Literal, Self
+from urllib.parse import quote
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PositiveInteger = Annotated[int, Field(gt=0)]
@@ -11,6 +12,11 @@ NonNegativeInteger = Annotated[int, Field(ge=0)]
 SqsWaitTimeSeconds = Annotated[int, Field(ge=0, le=20)]
 SqsVisibilityTimeoutSeconds = Annotated[int, Field(gt=0, le=43_200)]
 SqsMaxMessages = Annotated[int, Field(gt=0, le=10)]
+DatabasePort = Annotated[int, Field(gt=0, le=65_535)]
+DatabaseHost = Annotated[
+    str,
+    Field(min_length=1, pattern=r"^[A-Za-z0-9.-]+$"),
+]
 
 
 class Settings(BaseSettings):
@@ -29,6 +35,14 @@ class Settings(BaseSettings):
     database_url: str = (
         "postgresql+psycopg://trackrelay:trackrelay@localhost:5433/trackrelay"
     )
+    database_host: DatabaseHost | None = None
+    database_port: DatabasePort = 5432
+    database_name: str = "trackrelay"
+    database_user: str = "trackrelay"
+    database_password: SecretStr | None = None
+    database_sslmode: Literal["disable", "require", "verify-ca", "verify-full"] | None = (
+        None
+    )
     database_pool_size: PositiveInteger = 5
     database_max_overflow: NonNegativeInteger = 10
     downstream_url: str = "http://127.0.0.1:8001"
@@ -42,9 +56,26 @@ class Settings(BaseSettings):
     sqs_max_messages: SqsMaxMessages = 10
     aws_region: str = "ap-southeast-3"
 
+    def database_connection_url(self) -> str:
+        """Build a database URL without storing the injected password in the model."""
+        if self.database_host is None or self.database_password is None:
+            return self.database_url
+        username = quote(self.database_user, safe="")
+        password = quote(self.database_password.get_secret_value(), safe="")
+        database = quote(self.database_name, safe="")
+        query = f"?sslmode={self.database_sslmode}" if self.database_sslmode else ""
+        return (
+            f"postgresql+psycopg://{username}:{password}@{self.database_host}:"
+            f"{self.database_port}/{database}{query}"
+        )
+
     @model_validator(mode="after")
-    def validate_sqs_runtime(self) -> Self:
-        """Reject incomplete or internally unsafe SQS configuration."""
+    def validate_runtime(self) -> Self:
+        """Reject incomplete database and internally unsafe SQS configuration."""
+        if (self.database_host is None) != (self.database_password is None):
+            raise ValueError(
+                "database_host and database_password must be configured together"
+            )
         if self.delivery_queue_backend == "sqs":
             if not self.sqs_queue_url:
                 raise ValueError(

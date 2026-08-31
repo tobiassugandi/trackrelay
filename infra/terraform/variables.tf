@@ -116,3 +116,51 @@ variable "rds_allocated_storage_gib" {
     error_message = "Cloud session 1 is fixed at 20 GiB of RDS storage."
   }
 }
+
+variable "api_image_digest" {
+  description = "Immutable API image digest; leave empty until the session repository is populated."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      var.api_image_digest == ""
+      || can(regex("^sha256:[0-9a-f]{64}$", var.api_image_digest))
+    )
+    error_message = "api_image_digest must be empty or one lowercase sha256 digest."
+  }
+}
+
+variable "worker_image_digest" {
+  description = "Immutable worker image digest; leave empty until the session repository is populated."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      var.worker_image_digest == ""
+      || can(regex("^sha256:[0-9a-f]{64}$", var.worker_image_digest))
+    )
+    error_message = "worker_image_digest must be empty or one lowercase sha256 digest."
+  }
+}
+
+variable "simulator_image_digest" {
+  description = "Immutable simulator image digest; leave empty until the session repository is populated."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      var.simulator_image_digest == ""
+      || can(regex("^sha256:[0-9a-f]{64}$", var.simulator_image_digest))
+    )
+    error_message = "simulator_image_digest must be empty or one lowercase sha256 digest."
+  }
+}
+
+variable "async_services_enabled" {
+  description = "Start the fixed asynchronous services only after the migration task succeeds."
+  type        = bool
+  default     = false
+}

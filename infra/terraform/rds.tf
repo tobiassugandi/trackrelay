@@ -69,10 +69,18 @@ resource "aws_security_group" "database" {
   }
 
   ingress {
-    description     = "PostgreSQL from asynchronous API and migration tasks"
+    description     = "PostgreSQL from asynchronous API tasks"
     from_port       = 5432
     protocol        = "tcp"
     security_groups = [aws_security_group.async_api.id]
+    to_port         = 5432
+  }
+
+  ingress {
+    description     = "PostgreSQL from one-off migration tasks"
+    from_port       = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.async_migration.id]
     to_port         = 5432
   }
 

@@ -61,6 +61,32 @@ def named_resource_exists(
     raise AwsTeardownCheckError(f"native absence check failed: {name}")
 
 
+def count_query_or_not_found(
+    *,
+    name: str,
+    command: Sequence[str],
+    not_found_marker: str,
+    runner: CommandRunner,
+) -> int:
+    """Count a nested resource or accept authoritative parent absence as zero."""
+    result = runner(command)
+    if result.returncode != 0 and not_found_marker in result.stderr:
+        return 0
+    if result.returncode != 0:
+        raise AwsTeardownCheckError(f"native absence check failed: {name}")
+    try:
+        count = int(result.stdout.strip())
+    except ValueError as error:
+        raise AwsTeardownCheckError(
+            f"native absence check returned an invalid count: {name}"
+        ) from error
+    if count < 0:
+        raise AwsTeardownCheckError(
+            f"native absence check returned an invalid count: {name}"
+        )
+    return count
+
+
 def inventory_rehost_resources(
     *,
     profile: str,
@@ -204,6 +230,53 @@ def inventory_rehost_resources(
             f"{name_prefix}-async",
             "--query",
             "length(clusters[?status!='INACTIVE'])",
+            "--output",
+            "text",
+        ),
+        runner=runner,
+    )
+    counts["ecs_services"] = count_query_or_not_found(
+        name="ecs_services",
+        command=(
+            *prefix,
+            "ecs",
+            "list-services",
+            "--cluster",
+            f"{name_prefix}-async",
+            "--query",
+            "length(serviceArns)",
+            "--output",
+            "text",
+        ),
+        not_found_marker="ClusterNotFoundException",
+        runner=runner,
+    )
+    counts["active_ecs_task_definitions"] = count_query(
+        name="active_ecs_task_definitions",
+        command=(
+            *prefix,
+            "ecs",
+            "list-task-definitions",
+            "--family-prefix",
+            f"{name_prefix}-",
+            "--status",
+            "ACTIVE",
+            "--query",
+            "length(taskDefinitionArns)",
+            "--output",
+            "text",
+        ),
+        runner=runner,
+    )
+    namespace_name = f"trackrelay-{resource_suffix}.internal"
+    counts["service_discovery_namespaces"] = count_query(
+        name="service_discovery_namespaces",
+        command=(
+            *prefix,
+            "servicediscovery",
+            "list-namespaces",
+            "--query",
+            f"length(Namespaces[?Name=='{namespace_name}'])",
             "--output",
             "text",
         ),

@@ -218,7 +218,7 @@ def capture_legacy_baseline_environment(
     settings: Settings,
 ) -> LegacyBaselineEnvironment:
     """Capture enough local context to interpret, not normalize, the result."""
-    database_url = make_url(settings.database_url).render_as_string(
+    database_url = make_url(settings.database_connection_url()).render_as_string(
         hide_password=True
     )
     return LegacyBaselineEnvironment(

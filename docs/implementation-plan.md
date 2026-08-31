@@ -600,7 +600,7 @@ This result demonstrates rapid cloud hardware flexibility, not automatic elastic
   workflow, and locally smoke all three without AWS: verify API and simulator
   liveness plus UID `10001`, and verify the installed worker entry point, UID,
   and fail-closed response to missing SQS configuration with networking disabled.
-- [ ] Define ECS/Fargate, ECR, SQS, dead-letter queue, RDS, networking, load balancing, secrets, and observability as code.
+- [x] Define ECS/Fargate, ECR, SQS, dead-letter queue, RDS, networking, load balancing, secrets, and observability as code.
   - [x] Add encrypted, scan-on-push, force-removable ECR repositories for all
     three service images. Add the encrypted standard delivery queue and DLQ with
     the worker's 20-second polling, 120-second visibility, five-receive redrive,
@@ -614,8 +614,12 @@ This result demonstrates rapid cloud hardware flexibility, not automatic elastic
     one-day task log groups, role-specific queue permissions, RDS secret access,
     and native teardown checks for every new resource type. Document why public
     task ENIs are acceptable only for this synthetic bounded experiment.
-  - [ ] Add digest-pinned Fargate task definitions, the one-off migration task,
-    and fixed API, worker, and simulator services around these foundations.
+  - [x] Add all-or-none digest-pinned x86_64 Fargate task definitions, a
+    standalone one-off migration task, private simulator service discovery,
+    and separately gated one-task API, worker, and simulator services. Keep
+    services disabled until the migration has succeeded, inject only the RDS
+    password as a secret, require TLS, preserve the non-root read-only runtime,
+    and natively verify service discovery plus active ECS runtime artifacts.
 - [ ] Define CloudWatch metrics for offered load, API p95 latency, request errors, running worker tasks, queue depth, and message age or processing lag.
 - [ ] Configure the API at a fixed, documented capacity with enough headroom that worker delivery capacity is the variable under test.
 

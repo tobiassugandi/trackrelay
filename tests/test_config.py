@@ -53,6 +53,34 @@ def test_settings_load_prefixed_environment_variables(monkeypatch: MonkeyPatch) 
     assert settings.aws_region == "ap-southeast-3"
 
 
+def test_database_components_build_an_encoded_tls_url(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TRACKRELAY_DATABASE_HOST", "database.example.internal")
+    monkeypatch.setenv("TRACKRELAY_DATABASE_PORT", "5432")
+    monkeypatch.setenv("TRACKRELAY_DATABASE_NAME", "track/relay")
+    monkeypatch.setenv("TRACKRELAY_DATABASE_USER", "trackrelay_admin")
+    monkeypatch.setenv("TRACKRELAY_DATABASE_PASSWORD", "secret:@/?# value")
+    monkeypatch.setenv("TRACKRELAY_DATABASE_SSLMODE", "require")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.database_connection_url() == (
+        "postgresql+psycopg://trackrelay_admin:secret%3A%40%2F%3F%23%20value@"
+        "database.example.internal:5432/track%2Frelay?sslmode=require"
+    )
+    assert "secret:@/?# value" not in repr(settings)
+
+
+def test_database_components_require_host_and_password_together() -> None:
+    with raises(ValueError, match="must be configured together"):
+        Settings(
+            _env_file=None,
+            database_host="database.example.internal",
+            database_password=None,
+        )
+
+
 def test_sqs_backend_requires_a_queue_url() -> None:
     with raises(ValueError, match="sqs_queue_url is required"):
         Settings(

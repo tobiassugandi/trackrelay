@@ -27,6 +27,30 @@ mock_provider "aws" {
 }
 
 override_resource {
+  target          = aws_ecr_repository.api
+  override_during = plan
+  values = {
+    repository_url = "123456789012.dkr.ecr.ap-southeast-3.amazonaws.com/trackrelay-test-api"
+  }
+}
+
+override_resource {
+  target          = aws_ecr_repository.worker
+  override_during = plan
+  values = {
+    repository_url = "123456789012.dkr.ecr.ap-southeast-3.amazonaws.com/trackrelay-test-worker"
+  }
+}
+
+override_resource {
+  target          = aws_ecr_repository.simulator
+  override_during = plan
+  values = {
+    repository_url = "123456789012.dkr.ecr.ap-southeast-3.amazonaws.com/trackrelay-test-simulator"
+  }
+}
+
+override_resource {
   target          = aws_sqs_queue.delivery
   override_during = plan
   values = {
@@ -40,11 +64,15 @@ override_resource {
   target          = aws_db_instance.postgres
   override_during = plan
   values = {
+    address = "trackrelay-test.example.ap-southeast-3.rds.amazonaws.com"
+    db_name = "trackrelay"
     master_user_secret = [{
       kms_key_id    = "arn:aws:kms:ap-southeast-3:123456789012:key/mocked"
       secret_arn    = "arn:aws:secretsmanager:ap-southeast-3:123456789012:secret:trackrelay-test"
       secret_status = "active"
     }]
+    port     = 5432
+    username = "trackrelay_admin"
   }
 }
 
@@ -57,10 +85,34 @@ override_resource {
 }
 
 override_resource {
+  target          = aws_security_group.async_api
+  override_during = plan
+  values = {
+    id = "sg-mocked-async-api"
+  }
+}
+
+override_resource {
   target          = aws_security_group.async_worker
   override_during = plan
   values = {
     id = "sg-mocked-async-worker"
+  }
+}
+
+override_resource {
+  target          = aws_security_group.async_migration
+  override_during = plan
+  values = {
+    id = "sg-mocked-async-migration"
+  }
+}
+
+override_resource {
+  target          = aws_security_group.async_simulator
+  override_during = plan
+  values = {
+    id = "sg-mocked-async-simulator"
   }
 }
 
@@ -91,10 +143,14 @@ override_resource {
 }
 
 variables {
-  api_ingress_cidr = "203.0.113.10/32"
-  aws_profile      = "trackrelay-admin"
-  aws_region       = "ap-southeast-3"
-  session_id       = "cloud-session-3-20260831T120000Z"
+  api_image_digest       = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  api_ingress_cidr       = "203.0.113.10/32"
+  async_services_enabled = true
+  aws_profile            = "trackrelay-admin"
+  aws_region             = "ap-southeast-3"
+  session_id             = "cloud-session-3-20260831T120000Z"
+  simulator_image_digest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  worker_image_digest    = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 }
 
 run "service_images_have_disposable_encrypted_registries" {
@@ -245,10 +301,11 @@ run "async_network_exposes_only_the_load_balancer" {
   assert {
     condition = (
       length(aws_security_group.async_worker.ingress) == 0
+      && length(aws_security_group.async_migration.ingress) == 0
       && one(aws_security_group.async_simulator.ingress).from_port == 8001
       && one(aws_security_group.async_simulator.ingress).security_groups == toset(["sg-mocked-async-worker"])
     )
-    error_message = "Workers need no ingress and are the simulator's only caller."
+    error_message = "Workers and migrations need no ingress, and workers are the simulator's only caller."
   }
 
   assert {
@@ -310,4 +367,194 @@ run "async_platform_has_bounded_logs_and_least_privilege_roles" {
     )
     error_message = "API and worker queue permissions must stay role-specific."
   }
+}
+
+run "async_task_definitions_are_digest_pinned_fargate_contracts" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for definition in [
+        aws_ecs_task_definition.async_api[0],
+        aws_ecs_task_definition.async_worker[0],
+        aws_ecs_task_definition.async_simulator[0],
+        aws_ecs_task_definition.async_migration[0],
+        ] : (
+        definition.network_mode == "awsvpc"
+        && definition.requires_compatibilities == toset(["FARGATE"])
+        && one(definition.runtime_platform).cpu_architecture == "X86_64"
+        && one(definition.runtime_platform).operating_system_family == "LINUX"
+        && !definition.skip_destroy
+        && !definition.track_latest
+      )
+    ])
+    error_message = "Every runtime role must use a pinned, destroyable x86_64 Fargate definition."
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_ecs_task_definition.async_api[0].container_definitions)[0].image
+      == "123456789012.dkr.ecr.ap-southeast-3.amazonaws.com/trackrelay-test-api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      && jsondecode(aws_ecs_task_definition.async_worker[0].container_definitions)[0].image
+      == "123456789012.dkr.ecr.ap-southeast-3.amazonaws.com/trackrelay-test-worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      && jsondecode(aws_ecs_task_definition.async_simulator[0].container_definitions)[0].image
+      == "123456789012.dkr.ecr.ap-southeast-3.amazonaws.com/trackrelay-test-simulator@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      && jsondecode(aws_ecs_task_definition.async_migration[0].container_definitions)[0].image
+      == "123456789012.dkr.ecr.ap-southeast-3.amazonaws.com/trackrelay-test-api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    )
+    error_message = "Every role must reference its exact ECR repository and immutable image digest."
+  }
+
+  assert {
+    condition = alltrue([
+      for definition in [
+        aws_ecs_task_definition.async_api[0],
+        aws_ecs_task_definition.async_worker[0],
+        aws_ecs_task_definition.async_simulator[0],
+        aws_ecs_task_definition.async_migration[0],
+        ] : (
+        jsondecode(definition.container_definitions)[0].user == "10001:10001"
+        && jsondecode(definition.container_definitions)[0].readonlyRootFilesystem
+        && jsondecode(definition.container_definitions)[0].linuxParameters.initProcessEnabled
+        && jsondecode(definition.container_definitions)[0].mountPoints[0].containerPath == "/tmp"
+        && jsondecode(definition.container_definitions)[0].logConfiguration.logDriver == "awslogs"
+      )
+    ])
+    error_message = "Every container must remain non-root, read-only, init-enabled, writable only at /tmp, and log through awslogs."
+  }
+
+  assert {
+    condition = (
+      aws_ecs_task_definition.async_api[0].cpu == "512"
+      && aws_ecs_task_definition.async_api[0].memory == "1024"
+      && alltrue([
+        for definition in [
+          aws_ecs_task_definition.async_worker[0],
+          aws_ecs_task_definition.async_simulator[0],
+          aws_ecs_task_definition.async_migration[0],
+        ] : definition.cpu == "256" && definition.memory == "512"
+      ])
+      && jsondecode(aws_ecs_task_definition.async_migration[0].container_definitions)[0].command
+      == ["alembic", "upgrade", "head"]
+    )
+    error_message = "Task sizes must stay cost-bounded and migration must remain one-shot."
+  }
+}
+
+run "async_runtime_injects_only_the_password_and_discovers_the_simulator" {
+  command = plan
+
+  assert {
+    condition = (
+      aws_service_discovery_private_dns_namespace.async[0].name
+      == "trackrelay-8a7e37db.internal"
+      && aws_service_discovery_service.simulator[0].name == "simulator"
+      && one(aws_service_discovery_service.simulator[0].dns_config).routing_policy
+      == "MULTIVALUE"
+      && one(one(aws_service_discovery_service.simulator[0].dns_config).dns_records).type
+      == "A"
+      && one(one(aws_service_discovery_service.simulator[0].dns_config).dns_records).ttl
+      == 10
+    )
+    error_message = "The worker must discover replaceable simulator task IPs through private Cloud Map DNS."
+  }
+
+  assert {
+    condition = (
+      { for item in jsondecode(aws_ecs_task_definition.async_api[0].container_definitions)[0].environment : item.name => item.value }["TRACKRELAY_DATABASE_SSLMODE"]
+      == "require"
+      && { for item in jsondecode(aws_ecs_task_definition.async_api[0].container_definitions)[0].environment : item.name => item.value }["TRACKRELAY_DELIVERY_QUEUE_BACKEND"]
+      == "sqs"
+      && { for item in jsondecode(aws_ecs_task_definition.async_worker[0].container_definitions)[0].environment : item.name => item.value }["TRACKRELAY_DOWNSTREAM_URL"]
+      == "http://simulator.trackrelay-8a7e37db.internal:8001"
+    )
+    error_message = "API and worker runtime environment must select TLS, SQS, and private simulator discovery."
+  }
+
+  assert {
+    condition = alltrue([
+      for definition in [
+        aws_ecs_task_definition.async_api[0],
+        aws_ecs_task_definition.async_worker[0],
+        aws_ecs_task_definition.async_migration[0],
+        ] : (
+        length(jsondecode(definition.container_definitions)[0].secrets) == 1
+        && jsondecode(definition.container_definitions)[0].secrets[0].name == "TRACKRELAY_DATABASE_PASSWORD"
+        && jsondecode(definition.container_definitions)[0].secrets[0].valueFrom
+        == "arn:aws:secretsmanager:ap-southeast-3:123456789012:secret:trackrelay-test:password::"
+        && !contains(
+          [for item in jsondecode(definition.container_definitions)[0].environment : item.name],
+          "TRACKRELAY_DATABASE_PASSWORD",
+        )
+      )
+    ])
+    error_message = "Database consumers must receive only the password through ECS secret injection."
+  }
+}
+
+run "async_services_are_fixed_and_start_only_when_enabled" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for service in [
+        aws_ecs_service.async_api[0],
+        aws_ecs_service.async_worker[0],
+        aws_ecs_service.async_simulator[0],
+        ] : (
+        service.desired_count == 1
+        && service.launch_type == "FARGATE"
+        && service.platform_version == "1.4.0"
+        && service.deployment_minimum_healthy_percent == 0
+        && service.deployment_maximum_percent == 100
+        && one(service.network_configuration).assign_public_ip
+        && !service.enable_execute_command
+        && service.force_delete
+        && !service.wait_for_steady_state
+        && one(service.deployment_circuit_breaker).enable
+        && one(service.deployment_circuit_breaker).rollback
+      )
+    ])
+    error_message = "Each service must run one cost-bounded Fargate task with guarded replacement and teardown."
+  }
+
+  assert {
+    condition = (
+      one(aws_ecs_service.async_api[0].load_balancer).container_name == "api"
+      && one(aws_ecs_service.async_api[0].load_balancer).container_port == 8000
+      && one(aws_ecs_service.async_api[0].network_configuration).security_groups
+      == toset(["sg-mocked-async-api"])
+      && one(aws_ecs_service.async_worker[0].network_configuration).security_groups
+      == toset(["sg-mocked-async-worker"])
+      && one(aws_ecs_service.async_simulator[0].network_configuration).security_groups
+      == toset(["sg-mocked-async-simulator"])
+      && length(aws_ecs_service.async_simulator[0].service_registries) == 1
+    )
+    error_message = "Services must retain their exact ingress and discovery boundaries."
+  }
+}
+
+run "partial_image_configuration_is_rejected" {
+  command = plan
+
+  variables {
+    async_services_enabled = false
+    simulator_image_digest = ""
+    worker_image_digest    = ""
+  }
+
+  expect_failures = [check.async_image_digests_are_all_set_or_all_empty]
+}
+
+run "services_without_registered_runtime_are_rejected" {
+  command = plan
+
+  variables {
+    api_image_digest       = ""
+    async_services_enabled = true
+    simulator_image_digest = ""
+    worker_image_digest    = ""
+  }
+
+  expect_failures = [check.async_services_require_runtime]
 }

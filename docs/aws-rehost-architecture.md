@@ -72,7 +72,7 @@ Cloud session 1 used one ARM64 `t4g.small` instance, its encrypted 16 GiB gp3 ro
 
 The frozen synchronous workload established 25 events/s as the maximum sustainable rate and 50 events/s as the first failing rate on this rehost. The later RDS checkpoint passed normal, duplicate, out-of-order, and downstream-outage reconciliation. This is portability and migration evidence, not the later fixed-versus-elastic headline comparison. Terraform destroy completed, Terraform state was empty, and every native resource inventory—including the RDS-managed secret—returned zero.
 
-Teardown is not considered complete merely because Terraform destroy succeeds. `make aws-verify-down` requires empty Terraform state and zero native EC2, EBS, network, ELBv2, ECS, CloudWatch Logs, all-service ECR, SQS, IAM, RDS, snapshot, retained-backup, and RDS-managed-secret inventories. It also saves the generic tag-index count, but does not mistake its previously tagged resource tombstones for live resources. Later AWS resource types must extend the native verifier before they are used.
+Teardown is not considered complete merely because Terraform destroy succeeds. `make aws-verify-down` requires empty Terraform state and zero native EC2, EBS, network, ELBv2, active ECS, Cloud Map namespace, CloudWatch Logs, all-service ECR, SQS, IAM, RDS, snapshot, retained-backup, and RDS-managed-secret inventories. It also saves the generic tag-index count, but does not mistake its previously tagged resource tombstones for live resources. Later AWS resource types must extend the native verifier before they are used.
 
 ## References
 

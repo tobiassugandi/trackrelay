@@ -36,7 +36,7 @@ def create_session_factory(database_engine: Engine) -> sessionmaker[Session]:
 
 settings = Settings()
 engine = create_database_engine(
-    settings.database_url,
+    settings.database_connection_url(),
     pool_size=settings.database_pool_size,
     max_overflow=settings.database_max_overflow,
 )

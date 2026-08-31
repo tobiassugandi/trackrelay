@@ -13,6 +13,30 @@ locals {
   })
 
   async_log_groups = toset(["api", "migration", "simulator", "worker"])
+
+  async_image_digests = compact([
+    var.api_image_digest,
+    var.worker_image_digest,
+    var.simulator_image_digest,
+  ])
+  async_runtime_enabled = length(local.async_image_digests) == 3
+}
+
+check "async_image_digests_are_all_set_or_all_empty" {
+  assert {
+    condition = contains(
+      [0, 3],
+      length(local.async_image_digests),
+    )
+    error_message = "API, worker, and simulator image digests must be supplied together."
+  }
+}
+
+check "async_services_require_runtime" {
+  assert {
+    condition     = !var.async_services_enabled || local.async_runtime_enabled
+    error_message = "async_services_enabled requires all three image digests."
+  }
 }
 
 resource "aws_ecs_cluster" "async" {

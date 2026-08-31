@@ -43,6 +43,16 @@ output "async_api_url" {
   value       = "http://${aws_lb.async.dns_name}"
 }
 
+output "async_migration_run_configuration" {
+  description = "Non-secret inputs for running the one-off migration before services are enabled."
+  value = local.async_runtime_enabled ? {
+    cluster_name        = aws_ecs_cluster.async.name
+    security_group_ids  = [aws_security_group.async_migration.id]
+    subnet_ids          = aws_subnet.async_public[*].id
+    task_definition_arn = aws_ecs_task_definition.async_migration[0].arn
+  } : null
+}
+
 output "rehost_instance_id" {
   description = "EC2 instance managed through AWS Systems Manager."
   value       = aws_instance.rehost.id

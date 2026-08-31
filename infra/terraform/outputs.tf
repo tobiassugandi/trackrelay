@@ -3,6 +3,36 @@ output "rehost_ecr_repository_url" {
   value       = aws_ecr_repository.api.repository_url
 }
 
+output "worker_ecr_repository_url" {
+  description = "Repository that receives the asynchronous worker image."
+  value       = aws_ecr_repository.worker.repository_url
+}
+
+output "simulator_ecr_repository_url" {
+  description = "Repository that receives the controlled simulator image."
+  value       = aws_ecr_repository.simulator.repository_url
+}
+
+output "delivery_queue_url" {
+  description = "URL consumed by API publishers and worker receivers."
+  value       = aws_sqs_queue.delivery.url
+}
+
+output "delivery_queue_arn" {
+  description = "ARN used to scope API and worker queue permissions."
+  value       = aws_sqs_queue.delivery.arn
+}
+
+output "delivery_dead_letter_queue_url" {
+  description = "URL inspected by asynchronous processing guardrails."
+  value       = aws_sqs_queue.delivery_dead_letter.url
+}
+
+output "delivery_dead_letter_queue_arn" {
+  description = "ARN verified against the source queue redrive policy."
+  value       = aws_sqs_queue.delivery_dead_letter.arn
+}
+
 output "rehost_instance_id" {
   description = "EC2 instance managed through AWS Systems Manager."
   value       = aws_instance.rehost.id

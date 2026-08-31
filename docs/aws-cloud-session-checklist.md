@@ -107,7 +107,7 @@ A session is closed only when all of the following are true:
 
 A successful Terraform destroy by itself is not sufficient. If any check fails or cannot run, the session remains open and teardown work continues. Billing dashboards and budget alerts may be reviewed later, but their delayed data is not the immediate teardown proof.
 
-The current `aws-verify-down` command saves the generic tag-index count and implements authoritative Terraform-state plus native EC2, EBS, network, ECR, IAM, RDS instance, RDS subnet-group, RDS parameter-group, manual-snapshot, retained-automated-backup, and RDS-managed-secret checks through Stage 9.2. Before a later stage introduces another resource type, its native service-specific absence check must be added to the verifier and tested.
+The current `aws-verify-down` command saves the generic tag-index count and implements authoritative Terraform-state plus native EC2, EBS, network, all-service ECR, SQS, IAM, RDS instance, RDS subnet-group, RDS parameter-group, manual-snapshot, retained-automated-backup, and RDS-managed-secret checks through the Stage 9.5 queue and registry foundation. Before a later increment introduces another resource type, its native service-specific absence check must be added to the verifier and tested.
 
 ## References
 

@@ -1,4 +1,4 @@
-"""Native AWS absence checks for TrackRelay's synchronous rehost resources."""
+"""Native AWS absence checks for every TrackRelay infrastructure resource."""
 
 from collections.abc import Callable, Sequence
 from hashlib import sha256
@@ -68,7 +68,7 @@ def inventory_rehost_resources(
     session_id: str,
     runner: CommandRunner,
 ) -> dict[str, int]:
-    """Count every native resource type introduced through Stage 9.2."""
+    """Count every native resource type introduced through Stage 9.5."""
     prefix = aws_command_prefix(profile=profile, region=region)
     tag_filters = (
         "Name=tag:Project,Values=TrackRelay",
@@ -166,19 +166,39 @@ def inventory_rehost_resources(
     resource_suffix = sha256(session_id.encode()).hexdigest()[:8]
     name_prefix = f"trackrelay-{resource_suffix}"
     database_identifier = f"{name_prefix}-postgres"
-    counts["ecr_repositories"] = named_resource_exists(
-        name="ecr_repositories",
-        command=(
-            *prefix,
-            "ecr",
-            "describe-repositories",
-            "--repository-names",
-            f"{name_prefix}-api",
-            "--output",
-            "json",
-        ),
-        not_found_marker="RepositoryNotFoundException",
-        runner=runner,
+    counts["ecr_repositories"] = sum(
+        named_resource_exists(
+            name=f"ecr_repositories_{role}",
+            command=(
+                *prefix,
+                "ecr",
+                "describe-repositories",
+                "--repository-names",
+                f"{name_prefix}-{role}",
+                "--output",
+                "json",
+            ),
+            not_found_marker="RepositoryNotFoundException",
+            runner=runner,
+        )
+        for role in ("api", "worker", "simulator")
+    )
+    counts["sqs_queues"] = sum(
+        named_resource_exists(
+            name=f"sqs_queues_{queue_suffix}",
+            command=(
+                *prefix,
+                "sqs",
+                "get-queue-url",
+                "--queue-name",
+                f"{name_prefix}-{queue_suffix}",
+                "--output",
+                "json",
+            ),
+            not_found_marker="AWS.SimpleQueueService.NonExistentQueue",
+            runner=runner,
+        )
+        for queue_suffix in ("delivery", "delivery-dlq")
     )
     counts["iam_instance_profiles"] = named_resource_exists(
         name="iam_instance_profiles",

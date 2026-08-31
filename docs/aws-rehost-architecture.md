@@ -16,11 +16,11 @@ public subnet: one t3.small EC2 instance
 EC2 pulls the API image from ECR and is administered through SSM, not SSH.
 ```
 
-## What Terraform defines now
+## What the rehost Terraform slice defines
 
-The module defines one dedicated VPC, one public subnet and route, an internet gateway, a restricted security group, one ECR repository, the minimum EC2 IAM role and instance profile, and one x86_64 Amazon Linux 2023 `t3.small` host. The instance uses standard CPU credits and one encrypted 16 GiB gp3 root volume that is deleted on termination.
+The Stage 9.1 rehost slice defines one dedicated VPC, one public subnet and route, an internet gateway, a restricted security group, the API ECR repository, the minimum EC2 IAM role and instance profile, and one x86_64 Amazon Linux 2023 `t3.small` host. The instance uses standard CPU credits and one encrypted 16 GiB gp3 root volume that is deleted on termination. The shared root module now also contains the later RDS layer and Stage 9.5 worker/simulator registries and delivery queues; those additions do not change this synchronous host runtime.
 
-The module deliberately has no NAT gateway, load balancer, Elastic IP, SSH key, snapshot, or RDS instance. The instance receives a temporary public IPv4 so it can reach ECR and SSM without a chargeable NAT gateway. Only port `8000` is reachable, and only from the benchmark location's explicitly supplied `/32`; port `22` is closed. IMDSv2 tokens are required.
+The rehost slice deliberately has no NAT gateway, load balancer, Elastic IP, SSH key, or snapshot. Its later RDS instance remains private and separately described below. The instance receives a temporary public IPv4 so it can reach ECR and SSM without a chargeable NAT gateway. Only port `8000` is reachable, and only from the benchmark location's explicitly supplied `/32`; port `22` is closed. IMDSv2 tokens are required.
 
 The three current x86_64 instance types are regionally offered in Asia Pacific (Jakarta), and the selected Amazon Linux 2023 x86_64 image is compatible with all three. AWS documents that the SSM Agent is commonly preinstalled on Amazon Linux 2023 images; bootstrap also enables it explicitly.
 
@@ -72,7 +72,7 @@ Cloud session 1 used one ARM64 `t4g.small` instance, its encrypted 16 GiB gp3 ro
 
 The frozen synchronous workload established 25 events/s as the maximum sustainable rate and 50 events/s as the first failing rate on this rehost. The later RDS checkpoint passed normal, duplicate, out-of-order, and downstream-outage reconciliation. This is portability and migration evidence, not the later fixed-versus-elastic headline comparison. Terraform destroy completed, Terraform state was empty, and every native resource inventory—including the RDS-managed secret—returned zero.
 
-Teardown is not considered complete merely because Terraform destroy succeeds. `make aws-verify-down` requires empty Terraform state and zero native EC2, EBS, network, ECR, IAM, RDS, snapshot, retained-backup, and RDS-managed-secret inventories. It also saves the generic tag-index count, but does not mistake its previously tagged resource tombstones for live resources. Later AWS resource types must extend the native verifier before they are used.
+Teardown is not considered complete merely because Terraform destroy succeeds. `make aws-verify-down` requires empty Terraform state and zero native EC2, EBS, network, all-service ECR, SQS, IAM, RDS, snapshot, retained-backup, and RDS-managed-secret inventories. It also saves the generic tag-index count, but does not mistake its previously tagged resource tombstones for live resources. Later AWS resource types must extend the native verifier before they are used.
 
 ## References
 

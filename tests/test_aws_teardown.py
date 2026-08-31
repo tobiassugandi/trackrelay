@@ -1,4 +1,4 @@
-"""Tests for service-native synchronous-rehost teardown checks."""
+"""Tests for service-native TrackRelay teardown checks."""
 
 from collections.abc import Sequence
 from subprocess import CompletedProcess
@@ -25,7 +25,7 @@ def completed(
     return CompletedProcess(arguments, returncode, stdout, stderr)
 
 
-def absent_rehost_runner(
+def absent_resource_runner(
     arguments: Sequence[str],
 ) -> CompletedProcess[str]:
     call = tuple(arguments)
@@ -33,6 +33,12 @@ def absent_rehost_runner(
         return completed(
             call,
             stderr="RepositoryNotFoundException",
+            returncode=254,
+        )
+    if "get-queue-url" in call:
+        return completed(
+            call,
+            stderr="AWS.SimpleQueueService.NonExistentQueue",
             returncode=254,
         )
     if "get-instance-profile" in call or "get-role" in call:
@@ -51,12 +57,12 @@ def absent_rehost_runner(
     return completed(call, stdout="0\n")
 
 
-def test_inventory_proves_every_rehost_resource_type_absent() -> None:
+def test_inventory_proves_every_resource_type_absent() -> None:
     counts = inventory_rehost_resources(
         profile=PROFILE,
         region=REGION,
         session_id=SESSION_ID,
-        runner=absent_rehost_runner,
+        runner=absent_resource_runner,
     )
 
     assert counts == {
@@ -74,6 +80,7 @@ def test_inventory_proves_every_rehost_resource_type_absent() -> None:
         "rds_subnet_groups": 0,
         "route_tables": 0,
         "security_groups": 0,
+        "sqs_queues": 0,
         "subnets": 0,
         "vpcs": 0,
     }
@@ -84,7 +91,7 @@ def test_inventory_counts_a_remaining_instance_without_persisting_its_id() -> No
         call = tuple(arguments)
         if "describe-instances" in call:
             return completed(call, stdout="1\n")
-        return absent_rehost_runner(call)
+        return absent_resource_runner(call)
 
     counts = inventory_rehost_resources(
         profile=PROFILE,
@@ -102,7 +109,7 @@ def test_inventory_counts_an_rds_managed_secret_pending_deletion() -> None:
         call = tuple(arguments)
         if "list-secrets" in call:
             return completed(call, stdout="1\n")
-        return absent_rehost_runner(call)
+        return absent_resource_runner(call)
 
     counts = inventory_rehost_resources(
         profile=PROFILE,
@@ -115,13 +122,39 @@ def test_inventory_counts_an_rds_managed_secret_pending_deletion() -> None:
     assert sum(counts.values()) == 1
 
 
+def test_inventory_counts_each_service_repository_and_delivery_queue() -> None:
+    def runner(arguments: Sequence[str]) -> CompletedProcess[str]:
+        call = tuple(arguments)
+        if "describe-repositories" in call and (
+            "trackrelay-" in call[call.index("--repository-names") + 1]
+            and call[call.index("--repository-names") + 1].endswith("-worker")
+        ):
+            return completed(call, stdout="{}\n")
+        if "get-queue-url" in call and call[
+            call.index("--queue-name") + 1
+        ].endswith("-delivery"):
+            return completed(call, stdout="{}\n")
+        return absent_resource_runner(call)
+
+    counts = inventory_rehost_resources(
+        profile=PROFILE,
+        region=REGION,
+        session_id=SESSION_ID,
+        runner=runner,
+    )
+
+    assert counts["ecr_repositories"] == 1
+    assert counts["sqs_queues"] == 1
+    assert sum(counts.values()) == 2
+
+
 def test_inventory_uses_explicit_profile_region_and_session_tags() -> None:
     calls: list[tuple[str, ...]] = []
 
     def runner(arguments: Sequence[str]) -> CompletedProcess[str]:
         call = tuple(arguments)
         calls.append(call)
-        return absent_rehost_runner(call)
+        return absent_resource_runner(call)
 
     inventory_rehost_resources(
         profile=PROFILE,
@@ -145,6 +178,26 @@ def test_inventory_uses_explicit_profile_region_and_session_tags() -> None:
     for call in tag_filtered_calls:
         assert "Name=tag:Project,Values=TrackRelay" in call
         assert f"Name=tag:SessionId,Values={SESSION_ID}" in call
+
+    repository_names = {
+        call[call.index("--repository-names") + 1]
+        for call in calls
+        if "describe-repositories" in call
+    }
+    queue_names = {
+        call[call.index("--queue-name") + 1]
+        for call in calls
+        if "get-queue-url" in call
+    }
+    assert {name.rsplit("-", 1)[-1] for name in repository_names} == {
+        "api",
+        "simulator",
+        "worker",
+    }
+    assert {name.split("-delivery", 1)[-1] for name in queue_names} == {
+        "",
+        "-dlq",
+    }
 
     secret_call = next(call for call in calls if "list-secrets" in call)
     assert "--include-planned-deletion" in secret_call

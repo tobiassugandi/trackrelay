@@ -601,6 +601,15 @@ This result demonstrates rapid cloud hardware flexibility, not automatic elastic
   liveness plus UID `10001`, and verify the installed worker entry point, UID,
   and fail-closed response to missing SQS configuration with networking disabled.
 - [ ] Define ECS/Fargate, ECR, SQS, dead-letter queue, RDS, networking, load balancing, secrets, and observability as code.
+  - [x] Add encrypted, scan-on-push, force-removable ECR repositories for all
+    three service images. Add the encrypted standard delivery queue and DLQ with
+    the worker's 20-second polling, 120-second visibility, five-receive redrive,
+    longer DLQ retention, and a redrive allow policy restricted to the exact
+    source queue. Expose only non-secret deployment outputs, cover the contract
+    with mocked plans, and extend native teardown verification to all three
+    repositories and both queues.
+  - [ ] Add the ECS/Fargate, network, load-balancer, task-role, secret-access,
+    logging, and service definitions around this foundation.
 - [ ] Define CloudWatch metrics for offered load, API p95 latency, request errors, running worker tasks, queue depth, and message age or processing lag.
 - [ ] Configure the API at a fixed, documented capacity with enough headroom that worker delivery capacity is the variable under test.
 

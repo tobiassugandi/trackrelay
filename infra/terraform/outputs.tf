@@ -76,6 +76,20 @@ output "async_api_url" {
   value       = try("http://${aws_lb.async[0].dns_name}", null)
 }
 
+output "async_observability_dimensions" {
+  description = "Non-secret dimensions used to collect session-3 CloudWatch evidence."
+  value = var.async_services_enabled && local.async_runtime_enabled ? {
+    api_service_name        = aws_ecs_service.async_api[0].name
+    cluster_name            = aws_ecs_cluster.async[0].name
+    dashboard_name          = aws_cloudwatch_dashboard.async[0].dashboard_name
+    delivery_queue_name     = aws_sqs_queue.delivery[0].name
+    load_balancer_dimension = aws_lb.async[0].arn_suffix
+    rds_identifier          = aws_db_instance.postgres.identifier
+    simulator_service_name  = aws_ecs_service.async_simulator[0].name
+    worker_service_name     = aws_ecs_service.async_worker[0].name
+  } : {}
+}
+
 output "async_migration_run_configuration" {
   description = "Non-secret inputs for running the one-off migration before services are enabled."
   value = local.async_runtime_enabled ? {

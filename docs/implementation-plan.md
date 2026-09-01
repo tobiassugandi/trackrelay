@@ -652,6 +652,14 @@ This result demonstrates rapid cloud hardware flexibility, not automatic elastic
   headroom. If no workload can exceed one-worker delivery capacity while
   passing that gate, revise and re-freeze the non-worker capacities before
   either fixed or elastic treatment; never resize them between treatments.
+- [x] Add the locally tested cloud-session-3 integration runner. Register each
+  exact synthetic manifest through the restricted API, exercise 1, 10, and 100
+  events through the load balancer, sample database/outbox plus source-queue
+  and DLQ state every 10 seconds, require the frozen drain and reconciliation
+  guardrails, and retain evidence continuously. Require the seven-panel
+  dashboard plus published ALB, ECS, Container Insights, SQS, and RDS series,
+  then unconditionally destroy and natively verify after success, failure, or
+  interruption.
 
 Use cloud session 3 as a small integration checkpoint:
 

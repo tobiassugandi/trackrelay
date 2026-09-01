@@ -114,7 +114,7 @@ resource "aws_security_group" "async_simulator" {
   count = local.async_enabled ? 1 : 0
 
   name        = "${local.name_prefix}-async-simulator"
-  description = "Controlled downstream reachable only by worker tasks"
+  description = "Controlled downstream reachable only by worker and API evidence paths"
   vpc_id      = aws_vpc.rehost.id
 
   ingress {
@@ -122,6 +122,14 @@ resource "aws_security_group" "async_simulator" {
     from_port       = 8001
     protocol        = "tcp"
     security_groups = [aws_security_group.async_worker[0].id]
+    to_port         = 8001
+  }
+
+  ingress {
+    description     = "Read-only integration evidence from API tasks"
+    from_port       = 8001
+    protocol        = "tcp"
+    security_groups = [aws_security_group.async_api[0].id]
     to_port         = 8001
   }
 

@@ -2,10 +2,10 @@
 
 Stage 9.5 replaces the single-host runtime with separately deployable API,
 worker, and controlled downstream-simulator roles. This note describes the
-infrastructure boundary currently defined in Terraform and the guarded
-multi-phase workflow that deploys it. Experiment metric collection and the
-session-3 integration runner remain unfinished, so this configuration is not
-yet ready to apply.
+infrastructure boundary currently defined in Terraform, the guarded
+multi-phase workflow that deploys it, and the tiny integration runner that
+closes cloud session 3. No resource is applied until the separately reviewed
+session proposal receives explicit authorization.
 
 ```text
 approved benchmark /32
@@ -139,7 +139,11 @@ Cloud Map DNS namespace. The worker calls
 `simulator.<session-hash>.internal:8001`; no simulator address enters Terraform
 variables or experiment configuration. The namespace creates a billed Route 53
 private hosted zone, so the cloud-session estimate must include it and teardown
-must remove the namespace.
+must remove the namespace. Simulator ingress accepts the worker delivery path
+and the API's read-only reconciliation path, but no public source. The
+`/32`-restricted API registers and completes synthetic test-run manifests and
+returns only their database summary or reconciled evidence; RDS and the
+simulator remain private.
 
 The ECS cluster enables Container Insights. API, migration, simulator, and
 worker processes each use a dedicated CloudWatch log group with one-day
@@ -169,6 +173,20 @@ authoritative completion and drain proof. The dashboard makes the aligned
 elasticity story visible; it does not replace experiment guardrails. No paging
 alarms are created for this short-lived synthetic environment.
 
+After successful service convergence, `make aws-async-integration` executes
+exact 1-, 10-, and 100-event workloads from the approved benchmark location.
+For each run it saves the input and request evidence as it proceeds, then
+samples exact database/outbox counts and approximate SQS/DLQ attributes every
+10 seconds. A run passes only when ingestion p95 is below 500 ms, errors are
+below 1%, every event reconciles through the private simulator without a
+duplicate business effect or incorrect final shipment, work first drains no
+later than 120 seconds, and the empty state remains continuously observed for
+180 seconds. Before teardown, the runner also requires the seven-widget
+dashboard and published native series for ALB requests, API and simulator CPU,
+worker running tasks, SQS sends, and RDS CPU. A normal failure, success,
+`SIGINT`, or `SIGTERM` reaches unconditional destroy and native absence
+verification.
+
 ## Teardown boundary
 
 Every taggable resource inherits the session tags; the globally scoped
@@ -185,10 +203,10 @@ implies that its service and managed private hosted zone are gone. Deregistered
 inactive task-definition revisions are non-runnable control-plane history, so
 the authoritative safety check is that no session family remains `ACTIVE`.
 
-No Stage 9.5 infrastructure has been applied to AWS. Cloud session 3 still
-requires metric collection, its locally tested integration runner, a reviewed
-resource and cost proposal, explicit authorization, and unconditional verified
-teardown.
+No Stage 9.5 infrastructure has been applied to AWS. Cloud session 3 now needs
+only a reviewed resource and cost proposal, explicit authorization, execution
+of the locally tested deployment and integration controllers, and review of
+their collected evidence plus verified teardown.
 
 ## References
 

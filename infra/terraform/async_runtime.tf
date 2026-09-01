@@ -81,6 +81,17 @@ locals {
     },
   ] : []
 
+  async_downstream_environment = local.async_runtime_enabled ? [
+    {
+      name  = "TRACKRELAY_DOWNSTREAM_URL"
+      value = "http://simulator.${aws_service_discovery_private_dns_namespace.async[0].name}:8001"
+    },
+    {
+      name  = "TRACKRELAY_DOWNSTREAM_TIMEOUT_SECONDS"
+      value = "5.0"
+    },
+  ] : []
+
   async_container_base = {
     essential              = true
     linuxParameters        = { initProcessEnabled = true }
@@ -146,6 +157,7 @@ resource "aws_ecs_task_definition" "async_api" {
       environment = concat(
         local.async_database_environment,
         local.async_queue_environment,
+        local.async_downstream_environment,
       )
       secrets = local.async_database_secrets
       portMappings = [{
@@ -200,16 +212,7 @@ resource "aws_ecs_task_definition" "async_worker" {
       environment = concat(
         local.async_database_environment,
         local.async_queue_environment,
-        [
-          {
-            name  = "TRACKRELAY_DOWNSTREAM_URL"
-            value = "http://simulator.${aws_service_discovery_private_dns_namespace.async[0].name}:8001"
-          },
-          {
-            name  = "TRACKRELAY_DOWNSTREAM_TIMEOUT_SECONDS"
-            value = "5.0"
-          },
-        ],
+        local.async_downstream_environment,
       )
       secrets          = local.async_database_secrets
       logConfiguration = local.async_log_configurations["worker"]

@@ -7,10 +7,11 @@ from functools import lru_cache
 from typing import Annotated, Literal
 from uuid import UUID
 
+import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import distinct, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -22,7 +23,21 @@ from trackrelay.domain import (
     NormalizedEvent,
     ShipmentStatus,
 )
-from trackrelay.models import DeliveryAttempt, Event, Partner, Shipment
+from trackrelay.experiments.generator import InputManifest
+from trackrelay.experiments.reconciliation import (
+    ReconciliationReport,
+    TestRunDefinitionMismatchError,
+    TestRunNotFoundError,
+    fetch_simulator_receipts,
+    reconcile_manifest,
+)
+from trackrelay.models import (
+    DeliveryAttempt,
+    DeliveryOutboxEntry,
+    Event,
+    Partner,
+    Shipment,
+)
 from trackrelay.models import TestRun as ExperimentRunModel
 from trackrelay.partners import PARTNER_ADAPTERS
 from trackrelay.runtime_metrics import RuntimeMetricsSnapshot, capture_runtime_metrics
@@ -140,8 +155,16 @@ class DatabaseDeliveryAttemptSummary(BaseModel):
 
     total: NonNegativeCount
     delivered: NonNegativeCount
+    delivered_unique_events: NonNegativeCount
     http_error: NonNegativeCount
     transport_error: NonNegativeCount
+
+
+class DatabaseOutboxSummary(BaseModel):
+    """Durable publication state for one test run."""
+
+    durable: NonNegativeCount
+    pending_publication: NonNegativeCount
 
 
 class TestRunSummaryResponse(BaseModel):
@@ -157,6 +180,15 @@ class TestRunSummaryResponse(BaseModel):
     completed_at: datetime | None
     database_events: DatabaseEventSummary
     database_delivery_attempts: DatabaseDeliveryAttemptSummary
+    database_outbox: DatabaseOutboxSummary
+
+
+class TestRunLifecycleResponse(BaseModel):
+    """Identity and lifecycle state for one registered synthetic run."""
+
+    schema_version: Literal[1] = 1
+    test_run_id: UUID
+    status: Literal["registered", "completed"]
 
 
 def get_event_persister() -> EventPersister:
@@ -258,6 +290,29 @@ def get_test_run_summary(
             .group_by(DeliveryAttempt.result)
         ).tuples()
     }
+    delivered_unique_events = session.scalar(
+        select(func.count(distinct(DeliveryAttempt.event_id)))
+        .join(Event, DeliveryAttempt.event_id == Event.id)
+        .where(
+            Event.test_run_id == test_run_id,
+            DeliveryAttempt.result == DeliveryAttemptResult.DELIVERED,
+        )
+    )
+    durable_outbox_entries = session.scalar(
+        select(func.count())
+        .select_from(DeliveryOutboxEntry)
+        .join(Event, DeliveryOutboxEntry.event_id == Event.id)
+        .where(Event.test_run_id == test_run_id)
+    )
+    pending_outbox_entries = session.scalar(
+        select(func.count())
+        .select_from(DeliveryOutboxEntry)
+        .join(Event, DeliveryOutboxEntry.event_id == Event.id)
+        .where(
+            Event.test_run_id == test_run_id,
+            DeliveryOutboxEntry.published_at.is_(None),
+        )
+    )
 
     return TestRunSummaryResponse(
         test_run_id=database_test_run.id,
@@ -288,6 +343,7 @@ def get_test_run_summary(
                 DeliveryAttemptResult.DELIVERED,
                 0,
             ),
+            delivered_unique_events=delivered_unique_events or 0,
             http_error=database_delivery_attempt_count_by_result.get(
                 DeliveryAttemptResult.HTTP_ERROR,
                 0,
@@ -297,7 +353,126 @@ def get_test_run_summary(
                 0,
             ),
         ),
+        database_outbox=DatabaseOutboxSummary(
+            durable=durable_outbox_entries or 0,
+            pending_publication=pending_outbox_entries or 0,
+        ),
     )
+
+
+@app.post(
+    "/api/v1/test-runs",
+    status_code=status.HTTP_201_CREATED,
+    response_model=TestRunLifecycleResponse,
+    tags=["test runs"],
+)
+def register_test_run(
+    manifest: InputManifest,
+    session: Annotated[Session, Depends(get_session)],
+) -> TestRunLifecycleResponse:
+    """Register one synthetic manifest before accepting its event requests."""
+    if session.get(ExperimentRunModel, manifest.test_run_id) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Test run already exists",
+        )
+    partner = session.get(Partner, manifest.configuration.partner_id)
+    if partner is None:
+        session.add(
+            Partner(
+                id=manifest.configuration.partner_id,
+                name=f"Experiment {manifest.configuration.partner_id}",
+                adapter_type="courier-alpha",
+                is_active=True,
+            )
+        )
+    elif partner.adapter_type != "courier-alpha" or not partner.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Test-run partner must be active and use courier-alpha",
+        )
+    session.add(
+        ExperimentRunModel(
+            id=manifest.test_run_id,
+            scenario_name=manifest.scenario_name,
+            random_seed=manifest.seed,
+            configuration=manifest.configuration.model_dump(mode="json"),
+            expected_event_count=manifest.events_generated,
+        )
+    )
+    session.commit()
+    return TestRunLifecycleResponse(
+        test_run_id=manifest.test_run_id,
+        status="registered",
+    )
+
+
+@app.post(
+    "/api/v1/test-runs/{test_run_id}/complete",
+    response_model=TestRunLifecycleResponse,
+    tags=["test runs"],
+)
+def complete_test_run(
+    test_run_id: UUID,
+    session: Annotated[Session, Depends(get_session)],
+) -> TestRunLifecycleResponse:
+    """Freeze the server-observed end of one synthetic offered-load window."""
+    database_test_run = session.get(ExperimentRunModel, test_run_id)
+    if database_test_run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Test run not found",
+        )
+    if database_test_run.completed_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Test run is already complete",
+        )
+    database_test_run.completed_at = datetime.now(UTC)
+    session.commit()
+    return TestRunLifecycleResponse(
+        test_run_id=test_run_id,
+        status="completed",
+    )
+
+
+@app.post(
+    "/api/v1/test-runs/{test_run_id}/reconciliation",
+    response_model=ReconciliationReport,
+    tags=["test runs"],
+)
+def reconcile_test_run(
+    test_run_id: UUID,
+    manifest: InputManifest,
+    session: Annotated[Session, Depends(get_session)],
+) -> ReconciliationReport:
+    """Reconcile one manifest using private database and simulator evidence."""
+    if manifest.test_run_id != test_run_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Manifest and path test-run IDs differ",
+        )
+    try:
+        simulator_receipts = fetch_simulator_receipts(
+            settings.downstream_url,
+            test_run_id=test_run_id,
+            timeout_seconds=settings.downstream_timeout_seconds,
+        )
+        return reconcile_manifest(
+            manifest,
+            session=session,
+            simulator_receipts=simulator_receipts,
+        )
+    except (TestRunNotFoundError, TestRunDefinitionMismatchError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(error),
+        ) from error
+    except httpx.HTTPError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Simulator reconciliation evidence is unavailable",
+        ) from error
 
 
 @app.get(

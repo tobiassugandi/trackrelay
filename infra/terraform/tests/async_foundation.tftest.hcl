@@ -324,10 +324,12 @@ run "async_network_exposes_only_the_load_balancer" {
     condition = (
       length(aws_security_group.async_worker[0].ingress) == 0
       && length(aws_security_group.async_migration[0].ingress) == 0
-      && one(aws_security_group.async_simulator[0].ingress).from_port == 8001
-      && one(aws_security_group.async_simulator[0].ingress).security_groups == toset(["sg-mocked-async-worker"])
+      && length(aws_security_group.async_simulator[0].ingress) == 2
+      && toset(flatten([for rule in aws_security_group.async_simulator[0].ingress : rule.security_groups]))
+      == toset(["sg-mocked-async-api", "sg-mocked-async-worker"])
+      && alltrue([for rule in aws_security_group.async_simulator[0].ingress : rule.from_port == 8001 && rule.to_port == 8001])
     )
-    error_message = "Workers and migrations need no ingress, and workers are the simulator's only caller."
+    error_message = "Workers and migrations need no ingress, and only workers plus the API evidence path may reach the simulator."
   }
 
   assert {
@@ -393,6 +395,30 @@ run "async_platform_has_bounded_logs_and_least_privilege_roles" {
 
 run "async_observability_has_one_native_metric_contract" {
   command = plan
+
+  assert {
+    condition = (
+      toset(keys(output.async_observability_dimensions)) == toset([
+        "api_service_name",
+        "cluster_name",
+        "dashboard_name",
+        "delivery_queue_name",
+        "load_balancer_dimension",
+        "rds_identifier",
+        "simulator_service_name",
+        "worker_service_name",
+      ])
+      && output.async_observability_dimensions.api_service_name == "trackrelay-8a7e37db-api"
+      && output.async_observability_dimensions.cluster_name == "trackrelay-8a7e37db-async"
+      && output.async_observability_dimensions.dashboard_name == "trackrelay-8a7e37db-async"
+      && output.async_observability_dimensions.delivery_queue_name == "trackrelay-8a7e37db-delivery"
+      && output.async_observability_dimensions.load_balancer_dimension == "app/trackrelay-test-async/0123456789abcdef"
+      && output.async_observability_dimensions.rds_identifier == "trackrelay-8a7e37db-postgres"
+      && output.async_observability_dimensions.simulator_service_name == "trackrelay-8a7e37db-simulator"
+      && output.async_observability_dimensions.worker_service_name == "trackrelay-8a7e37db-worker"
+    )
+    error_message = "CloudWatch collection must receive the exact non-secret session dimensions."
+  }
 
   assert {
     condition = (
@@ -638,6 +664,8 @@ run "async_runtime_injects_only_the_password_and_discovers_the_simulator" {
       == "require"
       && { for item in jsondecode(aws_ecs_task_definition.async_api[0].container_definitions)[0].environment : item.name => item.value }["TRACKRELAY_DELIVERY_QUEUE_BACKEND"]
       == "sqs"
+      && { for item in jsondecode(aws_ecs_task_definition.async_api[0].container_definitions)[0].environment : item.name => item.value }["TRACKRELAY_DOWNSTREAM_URL"]
+      == "http://simulator.trackrelay-8a7e37db.internal:8001"
       && { for item in jsondecode(aws_ecs_task_definition.async_worker[0].container_definitions)[0].environment : item.name => item.value }["TRACKRELAY_DOWNSTREAM_URL"]
       == "http://simulator.trackrelay-8a7e37db.internal:8001"
     )

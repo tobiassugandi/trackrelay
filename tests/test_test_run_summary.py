@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 from fastapi.testclient import TestClient
 from pytest import fixture
 
+import trackrelay.main as trackrelay_main
 from trackrelay.database import (
     Base,
     create_database_engine,
@@ -19,8 +20,19 @@ from trackrelay.domain import (
     EventProcessingStatus,
     ShipmentStatus,
 )
+from trackrelay.experiments.generator import (
+    GeneratorConfiguration,
+    generate_input_manifest,
+)
+from trackrelay.experiments.reconciliation import ReconciliationReport
 from trackrelay.main import app
-from trackrelay.models import DeliveryAttempt, Event, Partner, Shipment
+from trackrelay.models import (
+    DeliveryAttempt,
+    DeliveryOutboxEntry,
+    Event,
+    Partner,
+    Shipment,
+)
 from trackrelay.models import TestRun as ExperimentRunModel
 
 TEST_RUN_ID = UUID("00000000-0000-0000-0000-000000000705")
@@ -124,6 +136,19 @@ def summary_client(tmp_path: Path) -> Iterator[TestClient]:
                 )
             ]
         )
+        session.add_all(
+            [
+                DeliveryOutboxEntry(
+                    event_id=database_events[0].id,
+                    created_at=STARTED_AT,
+                    published_at=STARTED_AT + timedelta(seconds=2),
+                ),
+                DeliveryOutboxEntry(
+                    event_id=database_events[1].id,
+                    created_at=STARTED_AT,
+                ),
+            ]
+        )
 
     def override_session() -> Iterator[object]:
         with sessions() as session:
@@ -165,8 +190,13 @@ def test_summary_reports_run_definition_and_database_evidence(
         "database_delivery_attempts": {
             "total": 3,
             "delivered": 1,
+            "delivered_unique_events": 1,
             "http_error": 1,
             "transport_error": 1,
+        },
+        "database_outbox": {
+            "durable": 2,
+            "pending_publication": 1,
         },
     }
 
@@ -191,8 +221,13 @@ def test_summary_uses_zero_counts_when_a_run_has_no_database_evidence(
     assert summary["database_delivery_attempts"] == {
         "total": 0,
         "delivered": 0,
+        "delivered_unique_events": 0,
         "http_error": 0,
         "transport_error": 0,
+    }
+    assert summary["database_outbox"] == {
+        "durable": 0,
+        "pending_publication": 0,
     }
 
 
@@ -203,3 +238,122 @@ def test_summary_returns_not_found_for_an_unknown_test_run(
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Test run not found"}
+
+
+def test_test_run_registration_and_completion_are_single_use(
+    summary_client: TestClient,
+) -> None:
+    manifest = generate_input_manifest(
+        seed=20260901,
+        configuration=GeneratorConfiguration(
+            partner_id="integration-alpha",
+            shipment_count=1,
+        ),
+        test_run_id=UUID("00000000-0000-0000-0000-000000000707"),
+    )
+
+    registration = summary_client.post(
+        "/api/v1/test-runs",
+        json=manifest.model_dump(mode="json"),
+    )
+    duplicate = summary_client.post(
+        "/api/v1/test-runs",
+        json=manifest.model_dump(mode="json"),
+    )
+    completion = summary_client.post(
+        f"/api/v1/test-runs/{manifest.test_run_id}/complete"
+    )
+    repeated_completion = summary_client.post(
+        f"/api/v1/test-runs/{manifest.test_run_id}/complete"
+    )
+
+    assert registration.status_code == 201
+    assert registration.json() == {
+        "schema_version": 1,
+        "test_run_id": str(manifest.test_run_id),
+        "status": "registered",
+    }
+    assert duplicate.status_code == 409
+    assert completion.status_code == 200
+    assert completion.json()["status"] == "completed"
+    assert repeated_completion.status_code == 409
+
+
+def test_reconciliation_uses_private_simulator_evidence(
+    summary_client: TestClient,
+    monkeypatch,
+) -> None:
+    manifest = generate_input_manifest(
+        seed=20260902,
+        configuration=GeneratorConfiguration(
+            partner_id="reconciliation-alpha",
+            shipment_count=1,
+        ),
+        test_run_id=UUID("00000000-0000-0000-0000-000000000708"),
+    )
+    summary_client.post(
+        "/api/v1/test-runs",
+        json=manifest.model_dump(mode="json"),
+    ).raise_for_status()
+    expected = ReconciliationReport(
+        test_run_id=manifest.test_run_id,
+        generated=5,
+        accepted=5,
+        rejected=0,
+        unique=5,
+        processed=5,
+        failed=0,
+        pending=0,
+        unaccounted=0,
+        simulator_receipts=5,
+        simulator_unique_events=5,
+        duplicate_business_effects=0,
+        incorrect_final_shipment_states=0,
+        invariants_passed=True,
+    )
+    calls = []
+
+    monkeypatch.setattr(
+        trackrelay_main,
+        "fetch_simulator_receipts",
+        lambda downstream_url, **kwargs: calls.append(
+            (downstream_url, kwargs["test_run_id"])
+        )
+        or (),
+    )
+    monkeypatch.setattr(
+        trackrelay_main,
+        "reconcile_manifest",
+        lambda observed_manifest, **_kwargs: expected
+        if observed_manifest == manifest
+        else None,
+    )
+
+    response = summary_client.post(
+        f"/api/v1/test-runs/{manifest.test_run_id}/reconciliation",
+        json=manifest.model_dump(mode="json"),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == expected.model_dump(mode="json")
+    assert calls == [(trackrelay_main.settings.downstream_url, manifest.test_run_id)]
+
+
+def test_reconciliation_rejects_a_different_path_identity(
+    summary_client: TestClient,
+) -> None:
+    manifest = generate_input_manifest(
+        seed=20260903,
+        configuration=GeneratorConfiguration(
+            partner_id="mismatch-alpha",
+            shipment_count=1,
+        ),
+    )
+
+    response = summary_client.post(
+        f"/api/v1/test-runs/{uuid4()}/reconciliation",
+        json=manifest.model_dump(mode="json"),
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Manifest and path test-run IDs differ"}

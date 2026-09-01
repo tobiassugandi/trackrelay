@@ -105,6 +105,24 @@ and verifies fixed-service convergence. It destroys and natively verifies the
 session after any normal failure or interrupt, while a successful deployment
 remains running for the integration checkpoint.
 
+Immediately after successful convergence, run the separately armed integration
+controller with the same reviewed approval values:
+
+```bash
+make aws-async-integration \
+  SESSION_ID=cloud-session-3-20260901T090000Z \
+  API_INGRESS_CIDR=203.0.113.10/32 \
+  APPROVED_SESSION_ID=cloud-session-3-20260901T090000Z \
+  APPROVED_COST_CEILING_USD=5 \
+  APPROVED_UNCONDITIONAL_TEARDOWN_SESSION_ID=cloud-session-3-20260901T090000Z
+```
+
+It sends exactly 1, 10, and 100 events, continuously saves request and drain
+evidence, reconciles RDS and private-simulator outcomes, requires representative
+native CloudWatch series, and always attempts complete destroy plus native
+absence verification. It is also cloud-mutating and is authorized only by the
+reviewed session-3 proposal.
+
 Async mode also creates one session-specific CloudWatch dashboard with seven
 60-second panels: observed ALB request rate, API p95 target latency, request
 error percentage, running worker tasks, total unfinished source-queue work plus

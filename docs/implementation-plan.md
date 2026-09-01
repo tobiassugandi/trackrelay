@@ -654,7 +654,8 @@ This result demonstrates rapid cloud hardware flexibility, not automatic elastic
   either fixed or elastic treatment; never resize them between treatments.
 - [x] Add the locally tested cloud-session-3 integration runner. Register each
   exact synthetic manifest through the restricted API, exercise 1, 10, and 100
-  events through the load balancer, sample database/outbox plus source-queue
+  total events through the load balancer as finite back-to-back batches rather
+  than scheduled events/s, sample database/outbox plus source-queue
   and DLQ state every 10 seconds, require the frozen drain and reconciliation
   guardrails, and retain evidence continuously. Require the seven-panel
   dashboard plus published ALB, ECS, Container Insights, SQS, and RDS series,
@@ -665,7 +666,7 @@ Use cloud session 3 as a small integration checkpoint:
 
 - [ ] **You:** Explicitly authorize cloud session 3 after reviewing its resource list, region, estimated duration, cost guardrail, and teardown command.
 - [ ] Provision the complete asynchronous stack and deploy the locally tested artifacts.
-- [ ] Exercise 1-, 10-, and 100-event workloads before attempting a performance experiment.
+- [ ] Exercise 1-, 10-, and 100-event total batches—not events/s—before attempting a performance experiment.
 - [ ] Verify the full path through the load balancer, API, RDS, SQS, worker, simulator, dead-letter queue, and CloudWatch.
 - [ ] Reconcile every accepted event and confirm that the new processing and drain guardrails work.
 - [ ] Collect integration evidence, destroy the complete session-3 stack, and verify the teardown.

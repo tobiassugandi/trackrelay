@@ -117,7 +117,8 @@ make aws-async-integration \
   APPROVED_UNCONDITIONAL_TEARDOWN_SESSION_ID=cloud-session-3-20260901T090000Z
 ```
 
-It sends exactly 1, 10, and 100 events, continuously saves request and drain
+It sends exactly 1, 10, and 100 total events per case as finite back-to-back
+batches, not as scheduled events/s. It continuously saves request and drain
 evidence, reconciles RDS and private-simulator outcomes, requires representative
 native CloudWatch series, and always attempts complete destroy plus native
 absence verification. It is also cloud-mutating and is authorized only by the

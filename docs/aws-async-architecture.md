@@ -174,7 +174,10 @@ elasticity story visible; it does not replace experiment guardrails. No paging
 alarms are created for this short-lived synthetic environment.
 
 After successful service convergence, `make aws-async-integration` executes
-exact 1-, 10-, and 100-event workloads from the approved benchmark location.
+exact 1-, 10-, and 100-event **total batches** from the approved benchmark
+location. These values are event counts, not scheduled events/s, and this
+checkpoint makes no capacity claim. The rate-controlled performance ladder is
+reserved for the Stage 9.6/9.7 experiment.
 For each run it saves the input and request evidence as it proceeds, then
 samples exact database/outbox counts and approximate SQS/DLQ attributes every
 10 seconds. A run passes only when ingestion p95 is below 500 ms, errors are
@@ -209,6 +212,8 @@ of the locally tested deployment and integration controllers, and review of
 their collected evidence plus verified teardown.
 
 ## References
+
+- [Stage 9.5 operator runbook](aws-async-integration-runbook.md)
 
 - [Amazon ECS outbound networking](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/networking-outbound.html)
 - [Amazon ECS Fargate task networking](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-task-networking.html)

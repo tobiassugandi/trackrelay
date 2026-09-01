@@ -117,6 +117,15 @@ override_resource {
 }
 
 override_resource {
+  target          = aws_lb.async[0]
+  override_during = plan
+  values = {
+    arn        = "arn:aws:elasticloadbalancing:ap-southeast-3:123456789012:loadbalancer/app/trackrelay-test-async/0123456789abcdef"
+    arn_suffix = "app/trackrelay-test-async/0123456789abcdef"
+  }
+}
+
+override_resource {
   target          = aws_subnet.async_public[0]
   override_during = plan
   values = {
@@ -379,6 +388,119 @@ run "async_platform_has_bounded_logs_and_least_privilege_roles" {
       == toset(["sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:ReceiveMessage", "sqs:SendMessage"])
     )
     error_message = "API and worker queue permissions must stay role-specific."
+  }
+}
+
+run "async_observability_has_one_native_metric_contract" {
+  command = plan
+
+  assert {
+    condition = (
+      local.async_metric_period_seconds == 60
+      && toset(keys(local.async_observability_metric_contract)) == toset([
+        "alb_elb_4xx",
+        "alb_elb_5xx",
+        "alb_request_count",
+        "alb_target_4xx",
+        "alb_target_5xx",
+        "api_p95_latency",
+        "dead_letter_queue_visible",
+        "source_queue_delayed",
+        "source_queue_in_flight",
+        "source_queue_oldest_age",
+        "source_queue_visible",
+        "worker_running_tasks",
+      ])
+    )
+    error_message = "The asynchronous experiment must use one explicit 60-second native metric contract."
+  }
+
+  assert {
+    condition = (
+      local.async_observability_metric_contract.api_p95_latency == {
+        dimensions  = ["LoadBalancer"]
+        metric_name = "TargetResponseTime"
+        namespace   = "AWS/ApplicationELB"
+        statistic   = "p95"
+      }
+      && local.async_observability_metric_contract.worker_running_tasks == {
+        dimensions  = ["ClusterName", "ServiceName"]
+        metric_name = "RunningTaskCount"
+        namespace   = "ECS/ContainerInsights"
+        statistic   = "Average"
+      }
+      && local.async_observability_metric_contract.source_queue_oldest_age == {
+        dimensions  = ["QueueName"]
+        metric_name = "ApproximateAgeOfOldestMessage"
+        namespace   = "AWS/SQS"
+        statistic   = "Maximum"
+      }
+    )
+    error_message = "Latency, worker-count, and message-age metrics must retain their native namespaces, dimensions, and statistics."
+  }
+
+  assert {
+    condition = (
+      local.async_observability_expression_contract.observed_request_rate.expression
+      == "(m_requests + m_elb_4xx + m_elb_5xx) / 60"
+      && local.async_observability_expression_contract.request_error_percentage.expression
+      == "IF((m_requests + m_elb_4xx + m_elb_5xx) > 0, 100 * (m_target_4xx + m_target_5xx + m_elb_4xx + m_elb_5xx) / (m_requests + m_elb_4xx + m_elb_5xx), 0)"
+      && local.async_observability_expression_contract.source_queue_work.expression
+      == "m_visible + m_in_flight + m_delayed"
+    )
+    error_message = "Rate, error, and unfinished-work expressions must remain comparable across fixed and elastic runs."
+  }
+
+  assert {
+    condition = (
+      length(aws_cloudwatch_dashboard.async) == 1
+      && endswith(aws_cloudwatch_dashboard.async[0].dashboard_name, "-async")
+      && jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).start == "-PT1H"
+      && jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).periodOverride == "inherit"
+      && length(jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).widgets) == 6
+      && alltrue([
+        for widget in jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).widgets : (
+          widget.type == "metric"
+          && widget.properties.period == 60
+          && widget.properties.region == "ap-southeast-3"
+        )
+      ])
+    )
+    error_message = "Async mode must create one compact six-panel dashboard at the contract's native period."
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).widgets[0].properties.metrics[3][0].expression
+      == local.async_observability_expression_contract.observed_request_rate.expression
+      && jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).widgets[1].properties.metrics[0][1]
+      == "TargetResponseTime"
+      && jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).widgets[1].properties.metrics[0][4].stat
+      == "p95"
+      && jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).widgets[1].properties.annotations.horizontal[0].value
+      == 0.5
+      && jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).widgets[2].properties.annotations.horizontal[0].value
+      == 1
+    )
+    error_message = "The API panels must expose request rate, p95 latency, request errors, and both frozen SLO lines."
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).widgets[3].properties.metrics[0][0]
+      == "ECS/ContainerInsights"
+      && jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).widgets[3].properties.metrics[0][1]
+      == "RunningTaskCount"
+      && jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).widgets[3].properties.metrics[0][3]
+      == "trackrelay-8a7e37db-async"
+      && jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).widgets[3].properties.metrics[0][5]
+      == "trackrelay-8a7e37db-worker"
+      && jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).widgets[4].properties.metrics[3][0].expression
+      == local.async_observability_expression_contract.source_queue_work.expression
+      && jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).widgets[5].properties.metrics[0][1]
+      == "ApproximateAgeOfOldestMessage"
+    )
+    error_message = "The processing panels must align worker count, total queue work, DLQ depth, and oldest-message age."
   }
 }
 

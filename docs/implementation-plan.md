@@ -630,7 +630,14 @@ This result demonstrates rapid cloud hardware flexibility, not automatic elastic
     until the one-off migration exits zero, require all three fixed services to
     converge at one task, and destroy plus natively verify after any failure or
     interrupt. Leave a successful stack running only for session-3 validation.
-- [ ] Define CloudWatch metrics for offered load, API p95 latency, request errors, running worker tasks, queue depth, and message age or processing lag.
+- [x] Define CloudWatch metrics for offered load, API p95 latency, request
+  errors, running worker tasks, queue depth, and message age or processing lag.
+  Use one 60-second native contract: ALB request and HTTP-code sums,
+  `TargetResponseTime` p95, Container Insights `RunningTaskCount`, and SQS
+  maximum visible, in-flight, delayed, oldest-age, and DLQ-visible values.
+  Provision a compact six-panel session dashboard with the frozen 500 ms and
+  1% SLO lines, keep the workload driver's schedule authoritative for offered
+  load, and natively prove the exact dashboard is absent after teardown.
 - [ ] Configure the API at a fixed, documented capacity with enough headroom that worker delivery capacity is the variable under test.
 
 Use cloud session 3 as a small integration checkpoint:

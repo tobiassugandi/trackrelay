@@ -194,6 +194,7 @@ run "economical_baseline_is_burstable_and_disposable" {
   assert {
     condition = (
       length(aws_instance.rehost) == 1
+      && length(aws_cloudwatch_dashboard.async) == 0
       && length(aws_ecs_cluster.async) == 0
       && length(aws_lb.async) == 0
       && length(aws_sqs_queue.delivery) == 0

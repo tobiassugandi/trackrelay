@@ -3,9 +3,9 @@
 Stage 9.5 replaces the single-host runtime with separately deployable API,
 worker, and controlled downstream-simulator roles. This note describes the
 infrastructure boundary currently defined in Terraform and the guarded
-multi-phase workflow that deploys it. Experiment metrics and the session-3
-integration runner remain unfinished, so this configuration is not yet ready
-to apply.
+multi-phase workflow that deploys it. Experiment metric collection and the
+session-3 integration runner remain unfinished, so this configuration is not
+yet ready to apply.
 
 ```text
 approved benchmark /32
@@ -126,26 +126,49 @@ must remove the namespace.
 
 The ECS cluster enables Container Insights. API, migration, simulator, and
 worker processes each use a dedicated CloudWatch log group with one-day
-retention and no retain-on-destroy behavior. Application metrics, ALB metrics,
-SQS depth and age, alarms, and the experiment dashboard remain separate work.
+retention and no retain-on-destroy behavior. A session-specific, destroyable
+CloudWatch dashboard fixes every AWS service series at the native 60-second
+period:
+
+- observed ALB requests per second, derived from target-selected requests plus
+  load-balancer 4xx and 5xx responses;
+- ALB target-response p95 in seconds with the frozen 500 ms SLO line;
+- target and load-balancer 4xx/5xx responses as a percentage of observed ALB
+  requests, with the frozen 1% SLO line;
+- ECS Container Insights `RunningTaskCount` for the exact worker service;
+- conservative unfinished source-queue work, calculated from the maximum
+  visible, in-flight, and delayed SQS counts, alongside visible DLQ messages;
+  and
+- the maximum age of the oldest source-queue message in seconds.
+
+These service metrics are operational approximations. ALB metrics exclude
+health checks, are sparse without traffic, and `RequestCount` includes only
+requests for which a target was selected. SQS depth metrics are approximate,
+and summing per-period maxima can overstate simultaneous work. Therefore the
+load driver's scheduled rate remains the authoritative offered load, and the
+database, queue-attribute, and simulator reconciliation evidence remains the
+authoritative completion and drain proof. The dashboard makes the aligned
+elasticity story visible; it does not replace experiment guardrails. No paging
+alarms are created for this short-lived synthetic environment.
 
 ## Teardown boundary
 
-Every resource inherits the session tags. Native teardown verification now
+Every taggable resource inherits the session tags; the globally scoped
+dashboard instead uses the exact session-derived name. Native teardown now
 checks the exact Application Load Balancer, target group, ECS cluster,
 pending/running tasks and services, active task-definition family, private
-Cloud Map namespace, all ECS
-and rehost IAM roles, all service ECR repositories, both SQS queues, every
-session log group, the RDS resources and managed secret, and the underlying EC2
-network resources. Listener deletion is implied by authoritative load-balancer
-absence because a listener cannot exist independently of its load balancer;
-Cloud Map namespace absence likewise implies that its service and managed
-private hosted zone are gone. Deregistered inactive task-definition revisions
-are non-runnable control-plane history, so the authoritative safety check is
-that no session family remains `ACTIVE`.
+Cloud Map namespace, all ECS and rehost IAM roles, all service ECR
+repositories, both SQS queues, every
+session log group, the exact session dashboard, the RDS resources and managed
+secret, and the underlying EC2 network resources. Listener deletion is implied
+by authoritative load-balancer absence because a listener cannot exist
+independently of its load balancer; Cloud Map namespace absence likewise
+implies that its service and managed private hosted zone are gone. Deregistered
+inactive task-definition revisions are non-runnable control-plane history, so
+the authoritative safety check is that no session family remains `ACTIVE`.
 
 No Stage 9.5 infrastructure has been applied to AWS. Cloud session 3 still
-requires experiment metrics, its locally tested integration runner, a reviewed
+requires metric collection, its locally tested integration runner, a reviewed
 resource and cost proposal, explicit authorization, and unconditional verified
 teardown.
 
@@ -157,5 +180,9 @@ teardown.
 - [Amazon ECS private DNS service discovery](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-discovery.html)
 - [Inject a Secrets Manager JSON key into an ECS task](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/secrets-envvar-secrets-manager.html)
 - [Send Amazon ECS logs to CloudWatch](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/using_awslogs.html)
+- [CloudWatch metrics for an Application Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-cloudwatch-metrics.html)
+- [Amazon ECS Container Insights metrics](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Container-Insights-enhanced-observability-metrics-ECS.html)
+- [Available CloudWatch metrics for Amazon SQS](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-available-cloudwatch-metrics.html)
+- [CloudWatch dashboard body syntax](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Dashboard-Body-Structure.html)
 - [Application Load Balancer Terraform resource](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lb)
 - [Amazon SQS dead-letter queues](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html)

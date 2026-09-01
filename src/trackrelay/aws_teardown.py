@@ -322,6 +322,25 @@ def inventory_rehost_resources(
         ),
         runner=runner,
     )
+    dashboard_name = f"{name_prefix}-async"
+    dashboard_query = (
+        f"length(DashboardEntries[?DashboardName=='{dashboard_name}'])"
+    )
+    counts["cloudwatch_dashboards"] = count_query(
+        name="cloudwatch_dashboards",
+        command=(
+            *prefix,
+            "cloudwatch",
+            "list-dashboards",
+            "--dashboard-name-prefix",
+            dashboard_name,
+            "--query",
+            dashboard_query,
+            "--output",
+            "text",
+        ),
+        runner=runner,
+    )
     counts["ecr_repositories"] = sum(
         named_resource_exists(
             name=f"ecr_repositories_{role}",

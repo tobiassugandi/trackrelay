@@ -75,7 +75,7 @@ make aws-verify-down \
 
 Replace the documentation-only address with the public IPv4 `/32` of the approved benchmark location. The Makefile's `127.0.0.1/32` default is deliberately safe: a forgotten override produces an unreachable cloud API rather than public ingress.
 
-`aws-plan` saves an immutable plan hash and non-secret session record, including the approved ingress CIDR and deployment mode. `aws-up`, `aws-down`, and `aws-verify-down` reject a mode that differs from that record; older manifests without the field are treated as `rehost`. Planning also resolves PostgreSQL 17 to the exact available minor version and validates that the selected class/storage combination is orderable in the target region. `aws-up` refuses a mismatched session, a changed plan or Git revision, and a cost ceiling above the monthly budget. `aws-down` intentionally has no approval gate so recovery cannot block teardown. `aws-verify-down` supplies the generic state and tag checks plus native checks for every resource type currently introduced by this module, including the load balancer and target group, ECS cluster, pending/running tasks, services and active task definitions, Cloud Map namespace, task log groups and roles, all three ECR repositories, both SQS queues, RDS instances, subnet and parameter groups, snapshots, retained automated backups, and the RDS-managed secret.
+`aws-plan` saves an immutable plan hash and non-secret session record, including the approved ingress CIDR and deployment mode. `aws-up`, `aws-down`, and `aws-verify-down` reject a mode that differs from that record; older manifests without the field are treated as `rehost`. Planning also resolves PostgreSQL 17 to the exact available minor version and validates that the selected class/storage combination is orderable in the target region. `aws-up` refuses a mismatched session, a changed plan or Git revision, and a cost ceiling above the monthly budget. `aws-down` intentionally has no approval gate so recovery cannot block teardown. `aws-verify-down` supplies the generic state and tag checks plus native checks for every resource type currently introduced by this module, including the load balancer and target group, ECS cluster, pending/running tasks, services and active task definitions, Cloud Map namespace, task log groups, the session dashboard and roles, all three ECR repositories, both SQS queues, RDS instances, subnet and parameter groups, snapshots, retained automated backups, and the RDS-managed secret.
 
 After an explicitly approved async foundation apply, the deployment phase is:
 
@@ -103,6 +103,15 @@ images, saves and hashes each subsequent Terraform plan, runs the migration,
 and verifies fixed-service convergence. It destroys and natively verifies the
 session after any normal failure or interrupt, while a successful deployment
 remains running for the integration checkpoint.
+
+Async mode also creates one session-specific CloudWatch dashboard with six
+60-second panels: observed ALB request rate, API p95 target latency, request
+error percentage, running worker tasks, total unfinished source-queue work plus
+DLQ depth, and oldest source-queue message age. The p95 and error panels retain
+the frozen 500 ms and 1% SLO lines. The load driver's schedule remains the
+authoritative offered load and application reconciliation remains the
+authoritative correctness proof; AWS service metrics are aligned operational
+evidence, not replacements for those experiment records.
 
 After an approved `aws-up`, `make aws-rehost-publish` builds and pushes only Linux AMD64 and records its immutable digest. `make aws-rehost-deploy` transfers the runtime through SSM, generates the synthetic database password on the host, starts the stack, and runs a tiny smoke event. Both commands require the same clean Git revision as the applied plan. They are stateful cloud-session commands, not local validation commands, and must not be run merely because their implementation exists.
 

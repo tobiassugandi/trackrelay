@@ -74,6 +74,7 @@ def test_inventory_proves_every_resource_type_absent() -> None:
     assert counts == {
         "active_ecs_task_definitions": 0,
         "application_load_balancers": 0,
+        "cloudwatch_dashboards": 0,
         "cloudwatch_log_groups": 0,
         "ebs_volumes": 0,
         "ec2_instances": 0,
@@ -169,7 +170,11 @@ def test_inventory_counts_remaining_async_platform_resources() -> None:
             return completed(call, stdout="{}\n")
         if "describe-target-groups" in call:
             return completed(call, stdout="{}\n")
-        if "describe-clusters" in call or "describe-log-groups" in call:
+        if (
+            "describe-clusters" in call
+            or "describe-log-groups" in call
+            or "list-dashboards" in call
+        ):
             return completed(call, stdout="1\n")
         if "get-role" in call and call[
             call.index("--role-name") + 1
@@ -187,9 +192,10 @@ def test_inventory_counts_remaining_async_platform_resources() -> None:
     assert counts["application_load_balancers"] == 1
     assert counts["load_balancer_target_groups"] == 1
     assert counts["ecs_clusters"] == 1
+    assert counts["cloudwatch_dashboards"] == 1
     assert counts["cloudwatch_log_groups"] == 1
     assert counts["iam_roles"] == 1
-    assert sum(counts.values()) == 5
+    assert sum(counts.values()) == 6
 
 
 def test_inventory_counts_remaining_async_runtime_resources() -> None:
@@ -314,6 +320,7 @@ def test_inventory_uses_explicit_profile_region_and_session_tags() -> None:
     log_group_call = next(
         call for call in calls if "describe-log-groups" in call
     )
+    dashboard_call = next(call for call in calls if "list-dashboards" in call)
     assert load_balancer_call[load_balancer_call.index("--names") + 1].endswith(
         "-async"
     )
@@ -332,6 +339,11 @@ def test_inventory_uses_explicit_profile_region_and_session_tags() -> None:
     assert log_group_call[
         log_group_call.index("--log-group-name-prefix") + 1
     ].startswith("/trackrelay/")
+    dashboard_name = dashboard_call[
+        dashboard_call.index("--dashboard-name-prefix") + 1
+    ]
+    assert dashboard_name.endswith("-async")
+    assert dashboard_name in dashboard_call[dashboard_call.index("--query") + 1]
 
     secret_call = next(call for call in calls if "list-secrets" in call)
     assert "--include-planned-deletion" in secret_call

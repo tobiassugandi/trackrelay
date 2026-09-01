@@ -209,6 +209,8 @@ A normal failure, `Ctrl-C`, or `SIGTERM` triggers destroy and native
 verification. Successful convergence intentionally leaves the stack running.
 Start the integration command immediately. If the process or machine is lost
 after deployment succeeds but before integration starts, use manual teardown.
+If migration fails, inspect `ecs-migration-result.json` in the session evidence
+for its bounded, non-secret ECS stop code and container exit code.
 
 ## 6. Run integration, evidence collection, and teardown
 

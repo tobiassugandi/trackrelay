@@ -391,7 +391,17 @@ def test_migration_uses_dedicated_network_and_records_no_arn(
         if "run-task" in call:
             return completed(call, stdout=TASK_ARN)
         if "describe-tasks" in call:
-            return completed(call, stdout='["STOPPED", "migration", 0]')
+            return completed(
+                call,
+                stdout=dumps(
+                    {
+                        "container_name": "migration",
+                        "exit_code": 0,
+                        "last_status": "STOPPED",
+                        "stop_code": "EssentialContainerExited",
+                    }
+                ),
+            )
         return completed(call)
 
     completed_at = datetime(2026, 9, 1, 10, 10, tzinfo=UTC)
@@ -420,6 +430,16 @@ def test_migration_uses_dedicated_network_and_records_no_arn(
     }
     assert "123456789012" not in manifest_text
     assert TASK_ARN not in manifest_text
+    assert loads(
+        (session.evidence_dir / "ecs-migration-result.json").read_text(
+            encoding="utf-8"
+        )
+    ) == {
+        "container_name": "migration",
+        "exit_code": 0,
+        "last_status": "STOPPED",
+        "stop_code": "EssentialContainerExited",
+    }
 
 
 def test_migration_rejects_nonzero_exit_before_services(
@@ -446,13 +466,31 @@ def test_migration_rejects_nonzero_exit_before_services(
         if "run-task" in call:
             return completed(call, stdout=TASK_ARN)
         if "describe-tasks" in call:
-            return completed(call, stdout='["STOPPED", "migration", 1]')
+            return completed(
+                call,
+                stdout=dumps(
+                    {
+                        "container_name": "migration",
+                        "exit_code": 1,
+                        "last_status": "STOPPED",
+                        "stop_code": "EssentialContainerExited",
+                    }
+                ),
+            )
         return completed(call)
 
-    with raises(AwsAsyncDeploymentError, match="did not exit successfully"):
+    with raises(
+        AwsAsyncDeploymentError,
+        match=r"did not exit successfully \(exit code 1, stop code ",
+    ):
         run_async_migration(session, runner=runner)
 
     assert load_manifest(session)["status"] == "async_migration_running"
+    assert loads(
+        (session.evidence_dir / "ecs-migration-result.json").read_text(
+            encoding="utf-8"
+        )
+    )["exit_code"] == 1
 
 
 def test_service_waiter_requires_exact_fixed_convergence(

@@ -570,7 +570,11 @@ def run_async_migration(
             "--tasks",
             task_arn,
             "--query",
-            "tasks[0].[lastStatus,containers[0].name,containers[0].exitCode]",
+            (
+                "tasks[0].{last_status:lastStatus,stop_code:stopCode,"
+                "container_name:containers[0].name,"
+                "exit_code:containers[0].exitCode}"
+            ),
             "--output",
             "json",
         ),
@@ -580,8 +584,29 @@ def run_async_migration(
         result = loads(result_text)
     except JSONDecodeError as error:
         raise AwsAsyncDeploymentError("ECS returned an invalid migration result") from error
-    if result != ["STOPPED", "migration", 0]:
-        raise AwsAsyncDeploymentError("ECS migration task did not exit successfully")
+    if (
+        not isinstance(result, dict)
+        or result.get("last_status") != "STOPPED"
+        or result.get("container_name") != "migration"
+        or not isinstance(result.get("stop_code"), str)
+        or not isinstance(result.get("exit_code"), int)
+    ):
+        raise AwsAsyncDeploymentError("ECS returned an invalid migration result")
+    migration_result = {
+        "container_name": result["container_name"],
+        "exit_code": result["exit_code"],
+        "last_status": result["last_status"],
+        "stop_code": result["stop_code"],
+    }
+    (session.evidence_dir / "ecs-migration-result.json").write_text(
+        dumps(migration_result, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    if result["exit_code"] != 0:
+        raise AwsAsyncDeploymentError(
+            "ECS migration task did not exit successfully "
+            f"(exit code {result['exit_code']}, stop code {result['stop_code']})"
+        )
     completed_at = now or datetime.now(UTC)
     manifest.update(
         {

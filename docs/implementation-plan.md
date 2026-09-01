@@ -661,6 +661,14 @@ This result demonstrates rapid cloud hardware flexibility, not automatic elastic
   dashboard plus published ALB, ECS, Container Insights, SQS, and RDS series,
   then unconditionally destroy and natively verify after success, failure, or
   interruption.
+- [x] Exercise the Stage 9.5 deployment failure path in the first cloud-session-3
+  attempt. The migration task received the decomposed RDS configuration but
+  Alembic incorrectly read the complete-URL fallback and tried the local
+  database address. The controller still destroyed the stack, and verification
+  found empty Terraform state plus zero resources in every native inventory.
+  Make Alembic assemble the injected, encoded TLS URL just like the application,
+  retain a non-secret ECS migration stop-code and exit-code artifact before
+  teardown, and cover both boundaries with regression tests.
 
 Use cloud session 3 as a small integration checkpoint:
 

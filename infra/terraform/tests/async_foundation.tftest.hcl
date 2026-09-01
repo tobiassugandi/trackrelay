@@ -509,6 +509,15 @@ run "async_services_are_fixed_and_start_only_when_enabled" {
   command = plan
 
   assert {
+    condition = toset(output.async_service_names) == toset([
+      aws_ecs_service.async_api[0].name,
+      aws_ecs_service.async_simulator[0].name,
+      aws_ecs_service.async_worker[0].name,
+    ])
+    error_message = "The deployment controller must receive exactly the three fixed service names."
+  }
+
+  assert {
     condition = alltrue([
       for service in [
         aws_ecs_service.async_api[0],

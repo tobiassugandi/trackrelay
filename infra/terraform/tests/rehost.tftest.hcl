@@ -199,6 +199,7 @@ run "economical_baseline_is_burstable_and_disposable" {
       && length(aws_sqs_queue.delivery) == 0
       && length(aws_ecr_repository.worker) == 0
       && length(aws_ecr_repository.simulator) == 0
+      && length(output.async_service_names) == 0
     )
     error_message = "Rehost mode must exclude every asynchronous runtime resource."
   }

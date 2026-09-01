@@ -38,6 +38,15 @@ output "async_ecs_cluster_name" {
   value       = try(aws_ecs_cluster.async[0].name, null)
 }
 
+output "async_service_names" {
+  description = "Fixed service names checked for convergence after migration."
+  value = var.async_services_enabled && local.async_runtime_enabled ? [
+    aws_ecs_service.async_api[0].name,
+    aws_ecs_service.async_simulator[0].name,
+    aws_ecs_service.async_worker[0].name,
+  ] : []
+}
+
 output "async_api_url" {
   description = "Temporary HTTP endpoint restricted to the approved benchmark CIDR."
   value       = try("http://${aws_lb.async[0].dns_name}", null)

@@ -80,6 +80,7 @@ def test_inventory_proves_every_resource_type_absent() -> None:
         "ecr_repositories": 0,
         "ecs_clusters": 0,
         "ecs_services": 0,
+        "ecs_tasks": 0,
         "iam_instance_profiles": 0,
         "iam_roles": 0,
         "internet_gateways": 0,
@@ -212,6 +213,25 @@ def test_inventory_counts_remaining_async_runtime_resources() -> None:
     assert counts["ecs_services"] == 1
     assert counts["active_ecs_task_definitions"] == 1
     assert counts["service_discovery_namespaces"] == 1
+    assert sum(counts.values()) == 3
+
+
+def test_inventory_counts_pending_and_running_ecs_tasks() -> None:
+    def runner(arguments: Sequence[str]) -> CompletedProcess[str]:
+        call = tuple(arguments)
+        if "list-tasks" in call:
+            desired_status = call[call.index("--desired-status") + 1]
+            return completed(call, stdout="2\n" if desired_status == "RUNNING" else "1\n")
+        return absent_resource_runner(call)
+
+    counts = inventory_rehost_resources(
+        profile=PROFILE,
+        region=REGION,
+        session_id=SESSION_ID,
+        runner=runner,
+    )
+
+    assert counts["ecs_tasks"] == 3
     assert sum(counts.values()) == 3
 
 

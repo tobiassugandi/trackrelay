@@ -1,6 +1,6 @@
 # TrackRelay AWS infrastructure
 
-This directory is the Terraform root module for TrackRelay's disposable AWS experiment environments. It retains the synchronous host and private RDS data layer first validated in Stages 9.1 and 9.2, the frozen Stage 9.3 hardware tiers, and the growing Stage 9.5 asynchronous stack. `deployment_mode` selects exactly one runtime topology: `rehost` includes the EC2 host and excludes the asynchronous runtime, while `async` includes the SQS/ECS/ALB runtime and excludes the EC2 host. The VPC, private RDS data layer, and API ECR repository are shared foundations. Guarded multi-phase deployment automation follows in the next increment.
+This directory is the Terraform root module for TrackRelay's disposable AWS experiment environments. It retains the synchronous host and private RDS data layer first validated in Stages 9.1 and 9.2, the frozen Stage 9.3 hardware tiers, and the growing Stage 9.5 asynchronous stack. `deployment_mode` selects exactly one runtime topology: `rehost` includes the EC2 host and excludes the asynchronous runtime, while `async` includes the SQS/ECS/ALB runtime and excludes the EC2 host. The VPC, private RDS data layer, and API ECR repository are shared foundations. A guarded controller now owns the asynchronous runtime, migration, and service phases after foundation apply.
 
 Across those mutually exclusive modes, the module contains:
 
@@ -75,16 +75,34 @@ make aws-verify-down \
 
 Replace the documentation-only address with the public IPv4 `/32` of the approved benchmark location. The Makefile's `127.0.0.1/32` default is deliberately safe: a forgotten override produces an unreachable cloud API rather than public ingress.
 
-`aws-plan` saves an immutable plan hash and non-secret session record, including the approved ingress CIDR and deployment mode. `aws-up`, `aws-down`, and `aws-verify-down` reject a mode that differs from that record; older manifests without the field are treated as `rehost`. Planning also resolves PostgreSQL 17 to the exact available minor version and validates that the selected class/storage combination is orderable in the target region. `aws-up` refuses a mismatched session, a changed plan or Git revision, and a cost ceiling above the monthly budget. `aws-down` intentionally has no approval gate so recovery cannot block teardown. `aws-verify-down` supplies the generic state and tag checks plus native checks for every resource type currently introduced by this module, including the load balancer and target group, ECS cluster, services and active task definitions, Cloud Map namespace, task log groups and roles, all three ECR repositories, both SQS queues, RDS instances, subnet and parameter groups, snapshots, retained automated backups, and the RDS-managed secret.
+`aws-plan` saves an immutable plan hash and non-secret session record, including the approved ingress CIDR and deployment mode. `aws-up`, `aws-down`, and `aws-verify-down` reject a mode that differs from that record; older manifests without the field are treated as `rehost`. Planning also resolves PostgreSQL 17 to the exact available minor version and validates that the selected class/storage combination is orderable in the target region. `aws-up` refuses a mismatched session, a changed plan or Git revision, and a cost ceiling above the monthly budget. `aws-down` intentionally has no approval gate so recovery cannot block teardown. `aws-verify-down` supplies the generic state and tag checks plus native checks for every resource type currently introduced by this module, including the load balancer and target group, ECS cluster, pending/running tasks, services and active task definitions, Cloud Map namespace, task log groups and roles, all three ECR repositories, both SQS queues, RDS instances, subnet and parameter groups, snapshots, retained automated backups, and the RDS-managed secret.
+
+After an explicitly approved async foundation apply, the deployment phase is:
+
+```bash
+make aws-async-deploy \
+  SESSION_ID=cloud-session-3-20260901T090000Z \
+  API_INGRESS_CIDR=203.0.113.10/32 \
+  APPROVED_SESSION_ID=cloud-session-3-20260901T090000Z \
+  APPROVED_COST_CEILING_USD=5 \
+  APPROVED_UNCONDITIONAL_TEARDOWN_SESSION_ID=cloud-session-3-20260901T090000Z
+```
+
+This is a cloud-mutating command, not a local validation command. Its repeated
+approval values arm only the already reviewed session-3 proposal; they do not
+replace that required review or authorize a future session.
 
 The three image-digest variables default to empty and
 `async_services_enabled` defaults to false. Supplying one or two digests fails
 planning; supplying all three registers the four immutable task definitions
 and private discovery; enabling services creates one API, worker, and simulator
 task. This separation supports the required migration-before-services order.
-The current `aws-plan`/`aws-up` lifecycle intentionally does not automate the
-multiple approved plans, image publication, standalone migration, or final
-service convergence yet, so do not enable the runtime manually.
+Do not set these inputs manually. After the approved async foundation plan is
+applied, the explicitly armed `make aws-async-deploy` controller publishes the
+images, saves and hashes each subsequent Terraform plan, runs the migration,
+and verifies fixed-service convergence. It destroys and natively verifies the
+session after any normal failure or interrupt, while a successful deployment
+remains running for the integration checkpoint.
 
 After an approved `aws-up`, `make aws-rehost-publish` builds and pushes only Linux AMD64 and records its immutable digest. `make aws-rehost-deploy` transfers the runtime through SSM, generates the synthetic database password on the host, starts the stack, and runs a tiny smoke event. Both commands require the same clean Git revision as the applied plan. They are stateful cloud-session commands, not local validation commands, and must not be run merely because their implementation exists.
 

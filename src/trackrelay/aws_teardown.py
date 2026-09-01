@@ -251,6 +251,27 @@ def inventory_rehost_resources(
         not_found_marker="ClusterNotFoundException",
         runner=runner,
     )
+    counts["ecs_tasks"] = sum(
+        count_query_or_not_found(
+            name=f"ecs_tasks_{desired_status.lower()}",
+            command=(
+                *prefix,
+                "ecs",
+                "list-tasks",
+                "--cluster",
+                f"{name_prefix}-async",
+                "--desired-status",
+                desired_status,
+                "--query",
+                "length(taskArns)",
+                "--output",
+                "text",
+            ),
+            not_found_marker="ClusterNotFoundException",
+            runner=runner,
+        )
+        for desired_status in ("PENDING", "RUNNING")
+    )
     counts["active_ecs_task_definitions"] = count_query(
         name="active_ecs_task_definitions",
         command=(

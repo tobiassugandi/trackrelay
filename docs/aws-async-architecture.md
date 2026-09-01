@@ -2,9 +2,10 @@
 
 Stage 9.5 replaces the single-host runtime with separately deployable API,
 worker, and controlled downstream-simulator roles. This note describes the
-infrastructure boundary currently defined in Terraform. Its guarded multi-phase
-deployment workflow and experiment metrics remain unfinished, so this
-configuration is not yet ready for cloud session 3.
+infrastructure boundary currently defined in Terraform and the guarded
+multi-phase workflow that deploys it. Experiment metrics and the session-3
+integration runner remain unfinished, so this configuration is not yet ready
+to apply.
 
 ```text
 approved benchmark /32
@@ -97,11 +98,17 @@ The required deployment order is deliberate:
 4. enable the three fixed services only after that success.
 
 The lifecycle manifest freezes the selected deployment mode, and plan tests
-prove that the two runtime topologies cannot be created together. The existing
-single-plan cloud-session command does not yet automate the remaining sequence.
-Until guarded multi-phase automation records each immutable plan, digest,
-migration result, and service convergence, the runtime must not be applied to
-AWS.
+prove that the two runtime topologies cannot be created together. After an
+approved foundation apply, `make aws-async-deploy` performs the remaining
+sequence. It publishes all three targets under the approved Git tag, records
+only their immutable digests, saves and hashes the runtime plan, applies that
+exact plan with services disabled, runs and waits for the migration task,
+refuses to continue unless it exits zero, saves and applies a separate service
+plan, and requires one stable running task for every fixed service. A normal
+error, `SIGINT`, or `SIGTERM` after arming first stops any outstanding
+standalone migration task, then triggers Terraform destroy followed by native
+verification. Successful convergence deliberately leaves the stack running
+for the small integration checkpoint.
 
 ## Load balancing, discovery, and observability
 
@@ -125,8 +132,9 @@ SQS depth and age, alarms, and the experiment dashboard remain separate work.
 ## Teardown boundary
 
 Every resource inherits the session tags. Native teardown verification now
-checks the exact Application Load Balancer, target group, ECS cluster and
-services, active task-definition family, private Cloud Map namespace, all ECS
+checks the exact Application Load Balancer, target group, ECS cluster,
+pending/running tasks and services, active task-definition family, private
+Cloud Map namespace, all ECS
 and rehost IAM roles, all service ECR repositories, both SQS queues, every
 session log group, the RDS resources and managed secret, and the underlying EC2
 network resources. Listener deletion is implied by authoritative load-balancer
@@ -137,9 +145,9 @@ are non-runnable control-plane history, so the authoritative safety check is
 that no session family remains `ACTIVE`.
 
 No Stage 9.5 infrastructure has been applied to AWS. Cloud session 3 still
-requires guarded multi-phase deployment automation, experiment metrics, a
-reviewed resource and cost proposal, explicit authorization, and unconditional
-verified teardown.
+requires experiment metrics, its locally tested integration runner, a reviewed
+resource and cost proposal, explicit authorization, and unconditional verified
+teardown.
 
 ## References
 

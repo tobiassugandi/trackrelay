@@ -18,6 +18,7 @@ dependencies = [
 [project.scripts]
 trackrelay-baseline = "trackrelay.experiments.baseline:main"
 trackrelay-aws-check = "trackrelay.aws_preflight:main"
+trackrelay-aws-async-deploy = "trackrelay.aws_async_deployment:main"
 trackrelay-aws-rehost = "trackrelay.aws_rehost:main"
 trackrelay-aws-session = "trackrelay.aws_session:main"
 trackrelay-aws-vertical-scaling = "trackrelay.aws_vertical_scaling:main"

@@ -624,6 +624,12 @@ This result demonstrates rapid cloud hardware flexibility, not automatic elastic
     modes so the asynchronous plan cannot create the historical EC2 host.
     Freeze the selected mode in lifecycle evidence, preserve legacy rehost
     manifests, and reject mismatched apply, destroy, or verification commands.
+  - [x] Add an explicitly armed, failure-safe asynchronous deployment
+    controller. Publish all three approved AMD64 targets, retain only immutable
+    digests, save and hash separate runtime and service plans, keep services off
+    until the one-off migration exits zero, require all three fixed services to
+    converge at one task, and destroy plus natively verify after any failure or
+    interrupt. Leave a successful stack running only for session-3 validation.
 - [ ] Define CloudWatch metrics for offered load, API p95 latency, request errors, running worker tasks, queue depth, and message age or processing lag.
 - [ ] Configure the API at a fixed, documented capacity with enough headroom that worker delivery capacity is the variable under test.
 

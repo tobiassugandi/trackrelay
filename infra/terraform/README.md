@@ -25,9 +25,9 @@ Across those mutually exclusive modes, the module contains:
   role, role-specific SQS policies, and access to only the RDS-managed secret;
 - all-or-none digest-pinned Linux x86_64 Fargate definitions with a non-root,
   read-only filesystem and only `/tmp` writable;
-- one standalone Alembic migration definition plus one-task API, worker, and
-  simulator services that remain absent until explicitly enabled after a
-  successful migration;
+- one standalone Alembic migration definition plus fixed two-task API,
+  one-task worker, and one-task simulator services that remain absent until
+  explicitly enabled after a successful migration;
 - session-private Cloud Map DNS so workers can resolve replaceable simulator
   task IPs without exposing the simulator;
 - an instance role for ECR reads, Systems Manager access, and retrieval of one specific RDS-managed secret;
@@ -95,8 +95,9 @@ replace that required review or authorize a future session.
 The three image-digest variables default to empty and
 `async_services_enabled` defaults to false. Supplying one or two digests fails
 planning; supplying all three registers the four immutable task definitions
-and private discovery; enabling services creates one API, worker, and simulator
-task. This separation supports the required migration-before-services order.
+and private discovery; enabling services creates two API tasks plus one worker
+and simulator task. This separation supports the required
+migration-before-services order.
 Do not set these inputs manually. After the approved async foundation plan is
 applied, the explicitly armed `make aws-async-deploy` controller publishes the
 images, saves and hashes each subsequent Terraform plan, runs the migration,
@@ -104,14 +105,16 @@ and verifies fixed-service convergence. It destroys and natively verifies the
 session after any normal failure or interrupt, while a successful deployment
 remains running for the integration checkpoint.
 
-Async mode also creates one session-specific CloudWatch dashboard with six
+Async mode also creates one session-specific CloudWatch dashboard with seven
 60-second panels: observed ALB request rate, API p95 target latency, request
 error percentage, running worker tasks, total unfinished source-queue work plus
-DLQ depth, and oldest source-queue message age. The p95 and error panels retain
-the frozen 500 ms and 1% SLO lines. The load driver's schedule remains the
-authoritative offered load and application reconciliation remains the
-authoritative correctness proof; AWS service metrics are aligned operational
-evidence, not replacements for those experiment records.
+DLQ depth, oldest source-queue message age, and maximum API and simulator CPU
+and memory utilization. The p95 and error panels retain the frozen 500 ms and
+1% SLO lines; the capacity panel carries the 70% qualification ceiling. The
+load driver's schedule remains the authoritative offered load and application
+reconciliation remains the authoritative correctness proof; AWS service
+metrics are aligned operational evidence, not replacements for those
+experiment records.
 
 After an approved `aws-up`, `make aws-rehost-publish` builds and pushes only Linux AMD64 and records its immutable digest. `make aws-rehost-deploy` transfers the runtime through SSM, generates the synthetic database password on the host, starts the stack, and runs a tiny smoke event. Both commands require the same clean Git revision as the applied plan. They are stateful cloud-session commands, not local validation commands, and must not be run merely because their implementation exists.
 

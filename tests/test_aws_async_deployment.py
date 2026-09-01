@@ -54,6 +54,26 @@ SERVICE_NAMES = [
     "trackrelay-8a7e37db-simulator",
     "trackrelay-8a7e37db-worker",
 ]
+SERVICE_CAPACITY = {
+    "api": {
+        "cpu_units": 1024,
+        "desired_count": 2,
+        "memory_mib": 2048,
+        "service_name": SERVICE_NAMES[0],
+    },
+    "simulator": {
+        "cpu_units": 256,
+        "desired_count": 1,
+        "memory_mib": 512,
+        "service_name": SERVICE_NAMES[1],
+    },
+    "worker": {
+        "cpu_units": 256,
+        "desired_count": 1,
+        "memory_mib": 512,
+        "service_name": SERVICE_NAMES[2],
+    },
+}
 TASK_DEFINITION_ARN = (
     "arn:aws:ecs:ap-southeast-3:123456789012:task-definition/"
     "trackrelay-8a7e37db-migration:1"
@@ -455,13 +475,22 @@ def test_service_waiter_requires_exact_fixed_convergence(
             return completed(call, stdout=CLUSTER_NAME)
         if output_name == "async_service_names":
             return completed(call, stdout=dumps(SERVICE_NAMES))
+        if output_name == "async_service_capacity":
+            return completed(call, stdout=dumps(SERVICE_CAPACITY))
         if "describe-services" in call:
             return completed(
                 call,
                 stdout=dumps(
                     [
-                        [name, "ACTIVE", 1, 1, 0, 1]
-                        for name in reversed(SERVICE_NAMES)
+                        [
+                            capacity["service_name"],
+                            "ACTIVE",
+                            capacity["desired_count"],
+                            capacity["desired_count"],
+                            0,
+                            1,
+                        ]
+                        for capacity in reversed(tuple(SERVICE_CAPACITY.values()))
                     ]
                 ),
             )
@@ -474,11 +503,35 @@ def test_service_waiter_requires_exact_fixed_convergence(
     assert waiter_call[-3:] == tuple(SERVICE_NAMES)
     manifest = load_manifest(session)
     assert manifest["status"] == "async_deployed"
-    assert manifest["async_fixed_services"] == {
-        "api": 1,
-        "simulator": 1,
-        "worker": 1,
-    }
+    assert manifest["async_fixed_services"] == SERVICE_CAPACITY
+
+
+def test_service_waiter_rejects_capacity_drift(tmp_path: Path) -> None:
+    session = ready_session(tmp_path, status="async_services_applied")
+
+    def runner(
+        arguments: Sequence[str],
+        _input_text: str | None,
+    ) -> CompletedProcess[str]:
+        call = tuple(arguments)
+        git = git_result(call)
+        if git is not None:
+            return git
+        output_name = terraform_output_name(call)
+        if output_name == "async_ecs_cluster_name":
+            return completed(call, stdout=CLUSTER_NAME)
+        if output_name == "async_service_names":
+            return completed(call, stdout=dumps(SERVICE_NAMES))
+        if output_name == "async_service_capacity":
+            drifted = {
+                **SERVICE_CAPACITY,
+                "api": {**SERVICE_CAPACITY["api"], "desired_count": 1},
+            }
+            return completed(call, stdout=dumps(drifted))
+        return completed(call)
+
+    with raises(AwsAsyncDeploymentError, match="invalid fixed capacity"):
+        wait_for_async_services(session, runner=runner)
 
 
 def test_cleanup_stops_only_session_migration_tasks(tmp_path: Path) -> None:
@@ -545,6 +598,10 @@ def test_complete_workflow_runs_in_order_and_leaves_successful_stack_on(
     manifest = load_manifest(session)
     assert manifest["status"] == "async_deployed"
     assert manifest["async_deployment"]["unconditional_teardown_armed"]
+    assert manifest["async_deployment"]["fixed_service_capacity"] == {
+        role: {key: value for key, value in capacity.items() if key != "service_name"}
+        for role, capacity in SERVICE_CAPACITY.items()
+    }
 
 
 def test_failure_destroys_and_verifies(tmp_path: Path) -> None:

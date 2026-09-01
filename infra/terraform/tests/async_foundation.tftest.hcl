@@ -403,12 +403,16 @@ run "async_observability_has_one_native_metric_contract" {
         "alb_request_count",
         "alb_target_4xx",
         "alb_target_5xx",
+        "api_cpu_utilization",
+        "api_memory_utilization",
         "api_p95_latency",
         "dead_letter_queue_visible",
         "source_queue_delayed",
         "source_queue_in_flight",
         "source_queue_oldest_age",
         "source_queue_visible",
+        "simulator_cpu_utilization",
+        "simulator_memory_utilization",
         "worker_running_tasks",
       ])
     )
@@ -428,6 +432,30 @@ run "async_observability_has_one_native_metric_contract" {
         metric_name = "RunningTaskCount"
         namespace   = "ECS/ContainerInsights"
         statistic   = "Average"
+      }
+      && local.async_observability_metric_contract.api_cpu_utilization == {
+        dimensions  = ["ClusterName", "ServiceName"]
+        metric_name = "CPUUtilization"
+        namespace   = "AWS/ECS"
+        statistic   = "Maximum"
+      }
+      && local.async_observability_metric_contract.api_memory_utilization == {
+        dimensions  = ["ClusterName", "ServiceName"]
+        metric_name = "MemoryUtilization"
+        namespace   = "AWS/ECS"
+        statistic   = "Maximum"
+      }
+      && local.async_observability_metric_contract.simulator_cpu_utilization == {
+        dimensions  = ["ClusterName", "ServiceName"]
+        metric_name = "CPUUtilization"
+        namespace   = "AWS/ECS"
+        statistic   = "Maximum"
+      }
+      && local.async_observability_metric_contract.simulator_memory_utilization == {
+        dimensions  = ["ClusterName", "ServiceName"]
+        metric_name = "MemoryUtilization"
+        namespace   = "AWS/ECS"
+        statistic   = "Maximum"
       }
       && local.async_observability_metric_contract.source_queue_oldest_age == {
         dimensions  = ["QueueName"]
@@ -457,7 +485,7 @@ run "async_observability_has_one_native_metric_contract" {
       && endswith(aws_cloudwatch_dashboard.async[0].dashboard_name, "-async")
       && jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).start == "-PT1H"
       && jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).periodOverride == "inherit"
-      && length(jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).widgets) == 6
+      && length(jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).widgets) == 7
       && alltrue([
         for widget in jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).widgets : (
           widget.type == "metric"
@@ -466,7 +494,7 @@ run "async_observability_has_one_native_metric_contract" {
         )
       ])
     )
-    error_message = "Async mode must create one compact six-panel dashboard at the contract's native period."
+    error_message = "Async mode must create one compact seven-panel dashboard at the contract's native period."
   }
 
   assert {
@@ -499,8 +527,18 @@ run "async_observability_has_one_native_metric_contract" {
       == local.async_observability_expression_contract.source_queue_work.expression
       && jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).widgets[5].properties.metrics[0][1]
       == "ApproximateAgeOfOldestMessage"
+      && jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).widgets[6].properties.metrics[0][1]
+      == "CPUUtilization"
+      && jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).widgets[6].properties.metrics[1][1]
+      == "MemoryUtilization"
+      && jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).widgets[6].properties.metrics[2][5]
+      == "trackrelay-8a7e37db-simulator"
+      && jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).widgets[6].properties.metrics[3][1]
+      == "MemoryUtilization"
+      && jsondecode(aws_cloudwatch_dashboard.async[0].dashboard_body).widgets[6].properties.annotations.horizontal[0].value
+      == 70
     )
-    error_message = "The processing panels must align worker count, total queue work, DLQ depth, and oldest-message age."
+    error_message = "The processing panels must align worker count, queue state, message age, and fixed API headroom."
   }
 }
 
@@ -560,8 +598,8 @@ run "async_task_definitions_are_digest_pinned_fargate_contracts" {
 
   assert {
     condition = (
-      aws_ecs_task_definition.async_api[0].cpu == "512"
-      && aws_ecs_task_definition.async_api[0].memory == "1024"
+      aws_ecs_task_definition.async_api[0].cpu == "1024"
+      && aws_ecs_task_definition.async_api[0].memory == "2048"
       && alltrue([
         for definition in [
           aws_ecs_task_definition.async_worker[0],
@@ -572,7 +610,7 @@ run "async_task_definitions_are_digest_pinned_fargate_contracts" {
       && jsondecode(aws_ecs_task_definition.async_migration[0].container_definitions)[0].command
       == ["alembic", "upgrade", "head"]
     )
-    error_message = "Task sizes must stay cost-bounded and migration must remain one-shot."
+    error_message = "The API must retain its fixed headroom tier while supporting roles stay cost-bounded and migration remains one-shot."
   }
 }
 
@@ -640,14 +678,46 @@ run "async_services_are_fixed_and_start_only_when_enabled" {
   }
 
   assert {
+    condition = (
+      toset(keys(output.async_service_capacity)) == toset(["api", "simulator", "worker"])
+      && output.async_service_capacity.api.cpu_units == 1024
+      && output.async_service_capacity.api.desired_count == 2
+      && output.async_service_capacity.api.memory_mib == 2048
+      && output.async_service_capacity.api.service_name == aws_ecs_service.async_api[0].name
+      && output.async_service_capacity.simulator.cpu_units == 256
+      && output.async_service_capacity.simulator.desired_count == 1
+      && output.async_service_capacity.simulator.memory_mib == 512
+      && output.async_service_capacity.simulator.service_name == aws_ecs_service.async_simulator[0].name
+      && output.async_service_capacity.worker.cpu_units == 256
+      && output.async_service_capacity.worker.desired_count == 1
+      && output.async_service_capacity.worker.memory_mib == 512
+      && output.async_service_capacity.worker.service_name == aws_ecs_service.async_worker[0].name
+    )
+    error_message = "The controller must receive the exact fixed capacity for every service."
+  }
+
+  assert {
+    condition = (
+      aws_ecs_service.async_api[0].desired_count == 2
+      && aws_ecs_service.async_worker[0].desired_count == 1
+      && aws_ecs_service.async_simulator[0].desired_count == 1
+      && local.async_fixed_service_counts == {
+        api       = 2
+        simulator = 1
+        worker    = 1
+      }
+    )
+    error_message = "API capacity must remain fixed at two replicas while worker and simulator remain at one."
+  }
+
+  assert {
     condition = alltrue([
       for service in [
         aws_ecs_service.async_api[0],
         aws_ecs_service.async_worker[0],
         aws_ecs_service.async_simulator[0],
         ] : (
-        service.desired_count == 1
-        && service.launch_type == "FARGATE"
+        service.launch_type == "FARGATE"
         && service.platform_version == "1.4.0"
         && service.deployment_minimum_healthy_percent == 0
         && service.deployment_maximum_percent == 100
@@ -659,7 +729,7 @@ run "async_services_are_fixed_and_start_only_when_enabled" {
         && one(service.deployment_circuit_breaker).rollback
       )
     ])
-    error_message = "Each service must run one cost-bounded Fargate task with guarded replacement and teardown."
+    error_message = "Each fixed-capacity service must retain guarded Fargate replacement and teardown."
   }
 
   assert {

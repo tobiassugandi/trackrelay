@@ -1,4 +1,29 @@
 locals {
+  async_task_capacity = {
+    api = {
+      cpu_units  = 1024
+      memory_mib = 2048
+    }
+    migration = {
+      cpu_units  = 256
+      memory_mib = 512
+    }
+    simulator = {
+      cpu_units  = 256
+      memory_mib = 512
+    }
+    worker = {
+      cpu_units  = 256
+      memory_mib = 512
+    }
+  }
+
+  async_fixed_service_counts = {
+    api       = 2
+    simulator = 1
+    worker    = 1
+  }
+
   async_database_environment = [
     {
       name  = "TRACKRELAY_DATABASE_HOST"
@@ -145,10 +170,10 @@ resource "aws_ecs_task_definition" "async_api" {
       logConfiguration = local.async_log_configurations["api"]
     }),
   ])
-  cpu                      = "512"
+  cpu                      = tostring(local.async_task_capacity.api.cpu_units)
   execution_role_arn       = aws_iam_role.ecs_execution[0].arn
   family                   = "${local.name_prefix}-api"
-  memory                   = "1024"
+  memory                   = tostring(local.async_task_capacity.api.memory_mib)
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   skip_destroy             = false
@@ -190,10 +215,10 @@ resource "aws_ecs_task_definition" "async_worker" {
       logConfiguration = local.async_log_configurations["worker"]
     }),
   ])
-  cpu                      = "256"
+  cpu                      = tostring(local.async_task_capacity.worker.cpu_units)
   execution_role_arn       = aws_iam_role.ecs_execution[0].arn
   family                   = "${local.name_prefix}-worker"
-  memory                   = "512"
+  memory                   = tostring(local.async_task_capacity.worker.memory_mib)
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   skip_destroy             = false
@@ -239,10 +264,10 @@ resource "aws_ecs_task_definition" "async_simulator" {
       logConfiguration = local.async_log_configurations["simulator"]
     }),
   ])
-  cpu                      = "256"
+  cpu                      = tostring(local.async_task_capacity.simulator.cpu_units)
   execution_role_arn       = aws_iam_role.ecs_execution[0].arn
   family                   = "${local.name_prefix}-simulator"
-  memory                   = "512"
+  memory                   = tostring(local.async_task_capacity.simulator.memory_mib)
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   skip_destroy             = false
@@ -272,10 +297,10 @@ resource "aws_ecs_task_definition" "async_migration" {
       logConfiguration = local.async_log_configurations["migration"]
     }),
   ])
-  cpu                      = "256"
+  cpu                      = tostring(local.async_task_capacity.migration.cpu_units)
   execution_role_arn       = aws_iam_role.ecs_execution[0].arn
   family                   = "${local.name_prefix}-migration"
-  memory                   = "512"
+  memory                   = tostring(local.async_task_capacity.migration.memory_mib)
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   skip_destroy             = false
@@ -298,7 +323,7 @@ resource "aws_ecs_service" "async_simulator" {
   cluster                            = aws_ecs_cluster.async[0].id
   deployment_maximum_percent         = 100
   deployment_minimum_healthy_percent = 0
-  desired_count                      = 1
+  desired_count                      = local.async_fixed_service_counts.simulator
   enable_ecs_managed_tags            = true
   enable_execute_command             = false
   force_delete                       = true
@@ -336,7 +361,7 @@ resource "aws_ecs_service" "async_worker" {
   cluster                            = aws_ecs_cluster.async[0].id
   deployment_maximum_percent         = 100
   deployment_minimum_healthy_percent = 0
-  desired_count                      = 1
+  desired_count                      = local.async_fixed_service_counts.worker
   enable_ecs_managed_tags            = true
   enable_execute_command             = false
   force_delete                       = true
@@ -372,7 +397,7 @@ resource "aws_ecs_service" "async_api" {
   cluster                            = aws_ecs_cluster.async[0].id
   deployment_maximum_percent         = 100
   deployment_minimum_healthy_percent = 0
-  desired_count                      = 1
+  desired_count                      = local.async_fixed_service_counts.api
   enable_ecs_managed_tags            = true
   enable_execute_command             = false
   force_delete                       = true

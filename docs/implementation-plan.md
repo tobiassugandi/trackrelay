@@ -616,7 +616,7 @@ This result demonstrates rapid cloud hardware flexibility, not automatic elastic
     task ENIs are acceptable only for this synthetic bounded experiment.
   - [x] Add all-or-none digest-pinned x86_64 Fargate task definitions, a
     standalone one-off migration task, private simulator service discovery,
-    and separately gated one-task API, worker, and simulator services. Keep
+    and separately gated fixed API, worker, and simulator services. Keep
     services disabled until the migration has succeeded, inject only the RDS
     password as a secret, require TLS, preserve the non-root read-only runtime,
     and natively verify service discovery plus active ECS runtime artifacts.
@@ -627,18 +627,31 @@ This result demonstrates rapid cloud hardware flexibility, not automatic elastic
   - [x] Add an explicitly armed, failure-safe asynchronous deployment
     controller. Publish all three approved AMD64 targets, retain only immutable
     digests, save and hash separate runtime and service plans, keep services off
-    until the one-off migration exits zero, require all three fixed services to
-    converge at one task, and destroy plus natively verify after any failure or
-    interrupt. Leave a successful stack running only for session-3 validation.
+    until the one-off migration exits zero, require every service to converge
+    to its exact approved capacity, record that capacity in lifecycle evidence,
+    and destroy plus natively verify after any failure or interrupt. Leave a
+    successful stack running only for session-3 validation.
 - [x] Define CloudWatch metrics for offered load, API p95 latency, request
   errors, running worker tasks, queue depth, and message age or processing lag.
   Use one 60-second native contract: ALB request and HTTP-code sums,
   `TargetResponseTime` p95, Container Insights `RunningTaskCount`, and SQS
   maximum visible, in-flight, delayed, oldest-age, and DLQ-visible values.
-  Provision a compact six-panel session dashboard with the frozen 500 ms and
-  1% SLO lines, keep the workload driver's schedule authoritative for offered
-  load, and natively prove the exact dashboard is absent after teardown.
-- [ ] Configure the API at a fixed, documented capacity with enough headroom that worker delivery capacity is the variable under test.
+  Provision a compact seven-panel session dashboard with the frozen 500 ms and
+  1% SLO lines plus fixed API and simulator CPU and memory utilization, keep
+  the workload driver's schedule authoritative for offered load, and natively
+  prove the exact dashboard is absent after teardown.
+- [x] Configure the API at a fixed, documented capacity with enough headroom
+  that worker delivery capacity is the variable under test. Freeze two API
+  tasks at 1 vCPU and 2 GiB each, with no API scaling policy, while the minimum
+  worker remains one 0.25-vCPU, 0.5-GiB task. Record the exact task counts and
+  sizes in deployment evidence and fail convergence on drift. Treat this as an
+  evidence-informed candidate rather than measured headroom: before freezing
+  the Stage 9.6 control, require the selected peak workload to preserve every
+  ingestion guardrail with both API tasks running, maximum API and simulator
+  CPU and memory below 70%, and RDS plus database-pool evidence retaining
+  headroom. If no workload can exceed one-worker delivery capacity while
+  passing that gate, revise and re-freeze the non-worker capacities before
+  either fixed or elastic treatment; never resize them between treatments.
 
 Use cloud session 3 as a small integration checkpoint:
 

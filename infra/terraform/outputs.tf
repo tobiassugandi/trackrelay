@@ -47,6 +47,30 @@ output "async_service_names" {
   ] : []
 }
 
+output "async_service_capacity" {
+  description = "Fixed non-secret service capacity recorded after convergence."
+  value = var.async_services_enabled && local.async_runtime_enabled ? {
+    api = {
+      cpu_units     = local.async_task_capacity.api.cpu_units
+      desired_count = aws_ecs_service.async_api[0].desired_count
+      memory_mib    = local.async_task_capacity.api.memory_mib
+      service_name  = aws_ecs_service.async_api[0].name
+    }
+    simulator = {
+      cpu_units     = local.async_task_capacity.simulator.cpu_units
+      desired_count = aws_ecs_service.async_simulator[0].desired_count
+      memory_mib    = local.async_task_capacity.simulator.memory_mib
+      service_name  = aws_ecs_service.async_simulator[0].name
+    }
+    worker = {
+      cpu_units     = local.async_task_capacity.worker.cpu_units
+      desired_count = aws_ecs_service.async_worker[0].desired_count
+      memory_mib    = local.async_task_capacity.worker.memory_mib
+      service_name  = aws_ecs_service.async_worker[0].name
+    }
+  } : {}
+}
+
 output "async_api_url" {
   description = "Temporary HTTP endpoint restricted to the approved benchmark CIDR."
   value       = try("http://${aws_lb.async[0].dns_name}", null)

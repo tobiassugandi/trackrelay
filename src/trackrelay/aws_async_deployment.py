@@ -53,6 +53,11 @@ TASK_ARN_PATTERN = compile_pattern(
 SERVICE_NAME_PATTERN = compile_pattern(
     r"^trackrelay-[0-9a-f]{8}-(api|simulator|worker)$"
 )
+FIXED_SERVICE_CAPACITY = {
+    "api": {"cpu_units": 1024, "desired_count": 2, "memory_mib": 2048},
+    "simulator": {"cpu_units": 256, "desired_count": 1, "memory_mib": 512},
+    "worker": {"cpu_units": 256, "desired_count": 1, "memory_mib": 512},
+}
 
 
 class AwsAsyncDeploymentError(RuntimeError):
@@ -597,7 +602,7 @@ def wait_for_async_services(
     runner: ProcessRunner = run_process,
     now: datetime | None = None,
 ) -> None:
-    """Require one stable running task for every fixed service."""
+    """Require every service to converge to its exact fixed capacity."""
     manifest, _revision = require_clean_approved_revision(session, runner=runner)
     if manifest.get("status") != "async_services_applied":
         raise AwsAsyncDeploymentError("service convergence requires services apply")
@@ -609,6 +614,12 @@ def wait_for_async_services(
     service_names = terraform_output(
         session,
         "async_service_names",
+        runner=runner,
+        json_output=True,
+    )
+    service_capacity = terraform_output(
+        session,
+        "async_service_capacity",
         runner=runner,
         json_output=True,
     )
@@ -625,6 +636,41 @@ def wait_for_async_services(
         or len(set(service_names)) != 3
     ):
         raise AwsAsyncDeploymentError("Terraform returned invalid service identities")
+    if not isinstance(service_capacity, dict) or set(service_capacity) != set(
+        FIXED_SERVICE_CAPACITY
+    ):
+        raise AwsAsyncDeploymentError("Terraform returned invalid fixed capacity")
+    normalized_capacity: dict[str, dict[str, int | str]] = {}
+    for role, expected_capacity in FIXED_SERVICE_CAPACITY.items():
+        observed = service_capacity.get(role)
+        if not isinstance(observed, dict) or set(observed) != {
+            "cpu_units",
+            "desired_count",
+            "memory_mib",
+            "service_name",
+        }:
+            raise AwsAsyncDeploymentError("Terraform returned invalid fixed capacity")
+        service_name = observed.get("service_name")
+        numeric_capacity = {
+            key: observed.get(key)
+            for key in ("cpu_units", "desired_count", "memory_mib")
+        }
+        if (
+            not isinstance(service_name, str)
+            or SERVICE_NAME_PATTERN.fullmatch(service_name) is None
+            or not service_name.endswith(f"-{role}")
+            or any(type(value) is not int for value in numeric_capacity.values())
+            or numeric_capacity != expected_capacity
+        ):
+            raise AwsAsyncDeploymentError("Terraform returned invalid fixed capacity")
+        normalized_capacity[role] = {
+            **expected_capacity,
+            "service_name": service_name,
+        }
+    if {item["service_name"] for item in normalized_capacity.values()} != set(
+        service_names
+    ):
+        raise AwsAsyncDeploymentError("Terraform returned inconsistent fixed services")
     invoke(
         runner,
         (
@@ -660,7 +706,19 @@ def wait_for_async_services(
         descriptions = loads(description_text)
     except JSONDecodeError as error:
         raise AwsAsyncDeploymentError("ECS returned invalid service status") from error
-    expected = sorted([[name, "ACTIVE", 1, 1, 0, 1] for name in service_names])
+    expected = sorted(
+        [
+            [
+                capacity["service_name"],
+                "ACTIVE",
+                capacity["desired_count"],
+                capacity["desired_count"],
+                0,
+                1,
+            ]
+            for capacity in normalized_capacity.values()
+        ]
+    )
     valid_descriptions = isinstance(descriptions, list) and all(
         isinstance(description, list)
         and len(description) == 6
@@ -668,15 +726,13 @@ def wait_for_async_services(
         for description in descriptions
     )
     if not valid_descriptions or sorted(descriptions) != expected:
-        raise AwsAsyncDeploymentError("fixed services did not converge to one task each")
+        raise AwsAsyncDeploymentError(
+            "fixed services did not converge to their approved capacity"
+        )
     converged_at = now or datetime.now(UTC)
     manifest.update(
         {
-            "async_fixed_services": {
-                "api": 1,
-                "simulator": 1,
-                "worker": 1,
-            },
+            "async_fixed_services": normalized_capacity,
             "async_services_converged_at": converged_at.isoformat(),
             "status": "async_deployed",
         }
@@ -781,11 +837,7 @@ def _arm_async_deployment(
                     "enable-fixed-services",
                     "verify-convergence",
                 ],
-                "fixed_service_tasks": {
-                    "api": 1,
-                    "simulator": 1,
-                    "worker": 1,
-                },
+                "fixed_service_capacity": FIXED_SERVICE_CAPACITY,
                 "unconditional_teardown_armed": True,
             },
             "status": "async_deployment_armed",

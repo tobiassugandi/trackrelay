@@ -76,15 +76,30 @@ API, worker, simulator, and migration task definitions require all three image
 digests together and reference ECR only as `repository@sha256:...`. All run as
 Linux x86_64 Fargate tasks under UID/GID `10001`, with a read-only root
 filesystem, an init process, only `/tmp` writable, a 30-second stop timeout,
-and the role-specific one-day `awslogs` group. The API receives `0.5` vCPU and
-1 GiB; worker, simulator, and migration each receive `0.25` vCPU and 0.5 GiB.
+and the role-specific one-day `awslogs` group. Each API task receives 1 vCPU
+and 2 GiB; worker, simulator, and migration each receive 0.25 vCPU and 0.5 GiB.
 
 The migration definition runs only `alembic upgrade head`; it is not an ECS
 service. The API, worker, and simulator service resources are independently
-gated by `async_services_enabled` and each maintains exactly one task on
-Fargate platform `1.4.0`. Their zero-to-100-percent replacement configuration
-prevents temporary task-count doubling at the cost of acceptable pre-experiment
-downtime. Deployment circuit breakers roll back failed task replacements.
+gated by `async_services_enabled`. The API maintains exactly two tasks while
+worker and simulator each maintain one on Fargate platform `1.4.0`. No API
+Application Auto Scaling target or policy exists. Their zero-to-100-percent
+replacement configuration prevents temporary task-count increases at the cost
+of acceptable pre-experiment downtime. Deployment circuit breakers roll back
+failed task replacements.
+
+The API reservation is intentionally fixed at an aggregate 2 vCPU and 4 GiB,
+eight times the CPU and memory assigned to the minimum worker. Two replicas
+also allow ECS to balance ingestion replicas across the two Fargate
+Availability Zones instead of relying on one oversized process. This is a
+capacity candidate, not a cloud measurement. Before the Stage 9.6 control is
+frozen, the selected peak workload must keep both API tasks running, preserve
+the 500 ms p95, 1% error, request-completeness, and correctness guardrails, and
+keep maximum API and simulator CPU and memory below 70%. RDS CPU, connections,
+memory, I/O, and application pool evidence must also retain headroom. The
+workload must exceed one-worker delivery capacity. Failure means re-freezing
+the limiting non-worker tier before either causal treatment, never resizing it
+between fixed and elastic runs.
 
 The required deployment order is deliberate:
 
@@ -104,11 +119,13 @@ sequence. It publishes all three targets under the approved Git tag, records
 only their immutable digests, saves and hashes the runtime plan, applies that
 exact plan with services disabled, runs and waits for the migration task,
 refuses to continue unless it exits zero, saves and applies a separate service
-plan, and requires one stable running task for every fixed service. A normal
-error, `SIGINT`, or `SIGTERM` after arming first stops any outstanding
-standalone migration task, then triggers Terraform destroy followed by native
-verification. Successful convergence deliberately leaves the stack running
-for the small integration checkpoint.
+plan, and requires two stable API tasks plus one stable worker and simulator
+task. The controller cross-checks Terraform's non-secret capacity output
+against its frozen contract and records names, desired counts, CPU, and memory
+in lifecycle evidence. A normal error, `SIGINT`, or `SIGTERM` after arming
+first stops any outstanding standalone migration task, then triggers Terraform
+destroy followed by native verification. Successful convergence deliberately
+leaves the stack running for the small integration checkpoint.
 
 ## Load balancing, discovery, and observability
 
@@ -138,8 +155,9 @@ period:
 - ECS Container Insights `RunningTaskCount` for the exact worker service;
 - conservative unfinished source-queue work, calculated from the maximum
   visible, in-flight, and delayed SQS counts, alongside visible DLQ messages;
-  and
-- the maximum age of the oldest source-queue message in seconds.
+- the maximum age of the oldest source-queue message in seconds; and
+- maximum API and simulator service CPU and memory utilization with the 70%
+  headroom qualification ceiling.
 
 These service metrics are operational approximations. ALB metrics exclude
 health checks, are sparse without traffic, and `RequestCount` includes only
@@ -176,6 +194,8 @@ teardown.
 
 - [Amazon ECS outbound networking](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/networking-outbound.html)
 - [Amazon ECS Fargate task networking](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-task-networking.html)
+- [Amazon ECS Fargate task CPU and memory combinations](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-cpu-memory-error.html)
+- [Amazon ECS service utilization metrics](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service_utilization.html)
 - [Amazon ECS standalone tasks](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/standalone-tasks.html)
 - [Amazon ECS private DNS service discovery](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-discovery.html)
 - [Inject a Secrets Manager JSON key into an ECS task](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/secrets-envvar-secrets-manager.html)

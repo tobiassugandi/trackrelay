@@ -38,6 +38,18 @@ locals {
       statistic   = "p95"
       dimensions  = ["LoadBalancer"]
     }
+    api_cpu_utilization = {
+      namespace   = "AWS/ECS"
+      metric_name = "CPUUtilization"
+      statistic   = "Maximum"
+      dimensions  = ["ClusterName", "ServiceName"]
+    }
+    api_memory_utilization = {
+      namespace   = "AWS/ECS"
+      metric_name = "MemoryUtilization"
+      statistic   = "Maximum"
+      dimensions  = ["ClusterName", "ServiceName"]
+    }
     worker_running_tasks = {
       namespace   = "ECS/ContainerInsights"
       metric_name = "RunningTaskCount"
@@ -68,6 +80,18 @@ locals {
       statistic   = "Maximum"
       dimensions  = ["QueueName"]
     }
+    simulator_cpu_utilization = {
+      namespace   = "AWS/ECS"
+      metric_name = "CPUUtilization"
+      statistic   = "Maximum"
+      dimensions  = ["ClusterName", "ServiceName"]
+    }
+    simulator_memory_utilization = {
+      namespace   = "AWS/ECS"
+      metric_name = "MemoryUtilization"
+      statistic   = "Maximum"
+      dimensions  = ["ClusterName", "ServiceName"]
+    }
     dead_letter_queue_visible = {
       namespace   = "AWS/SQS"
       metric_name = "ApproximateNumberOfMessagesVisible"
@@ -91,10 +115,12 @@ locals {
     }
   }
 
-  async_cluster_name        = "${local.name_prefix}-async"
-  async_worker_service_name = "${local.name_prefix}-worker"
-  delivery_queue_name       = "${local.name_prefix}-delivery"
-  delivery_dead_letter_name = "${local.name_prefix}-delivery-dlq"
+  async_cluster_name           = "${local.name_prefix}-async"
+  async_api_service_name       = "${local.name_prefix}-api"
+  async_simulator_service_name = "${local.name_prefix}-simulator"
+  async_worker_service_name    = "${local.name_prefix}-worker"
+  delivery_queue_name          = "${local.name_prefix}-delivery"
+  delivery_dead_letter_name    = "${local.name_prefix}-delivery-dlq"
 }
 
 resource "aws_cloudwatch_dashboard" "async" {
@@ -240,6 +266,32 @@ resource "aws_cloudwatch_dashboard" "async" {
           }
           metrics = [
             ["AWS/SQS", "ApproximateAgeOfOldestMessage", "QueueName", local.delivery_queue_name, { id = "m_oldest_age", label = "Oldest message (seconds)", stat = "Maximum" }],
+          ]
+        }
+      },
+      {
+        type   = "metric"
+        x      = 0
+        y      = 12
+        width  = 24
+        height = 6
+        properties = {
+          title   = "Fixed non-worker capacity utilization"
+          view    = "timeSeries"
+          stacked = false
+          region  = var.aws_region
+          period  = local.async_metric_period_seconds
+          yAxis = {
+            left = { min = 0, max = 100 }
+          }
+          annotations = {
+            horizontal = [{ label = "70% headroom qualification ceiling", value = 70 }]
+          }
+          metrics = [
+            ["AWS/ECS", "CPUUtilization", "ClusterName", local.async_cluster_name, "ServiceName", local.async_api_service_name, { id = "m_api_cpu", label = "Maximum API CPU (%)", stat = "Maximum" }],
+            ["AWS/ECS", "MemoryUtilization", "ClusterName", local.async_cluster_name, "ServiceName", local.async_api_service_name, { id = "m_api_memory", label = "Maximum API memory (%)", stat = "Maximum" }],
+            ["AWS/ECS", "CPUUtilization", "ClusterName", local.async_cluster_name, "ServiceName", local.async_simulator_service_name, { id = "m_simulator_cpu", label = "Maximum simulator CPU (%)", stat = "Maximum" }],
+            ["AWS/ECS", "MemoryUtilization", "ClusterName", local.async_cluster_name, "ServiceName", local.async_simulator_service_name, { id = "m_simulator_memory", label = "Maximum simulator memory (%)", stat = "Maximum" }],
           ]
         }
       },

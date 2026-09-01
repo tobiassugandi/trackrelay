@@ -28,6 +28,7 @@ trackrelay-aws-vertical-scaling-session = "trackrelay.aws_vertical_scaling_sessi
 trackrelay-aws-vertical-scaling-canary = "trackrelay.aws_vertical_scaling_canary:main"
 trackrelay-generate = "trackrelay.experiments.generator:main"
 trackrelay-load-experiment = "trackrelay.experiments.performance:experiment_main"
+trackrelay-prepare-elasticity = "trackrelay.experiments.elasticity:main"
 trackrelay-prepare-load = "trackrelay.experiments.performance:main"
 trackrelay-reconcile = "trackrelay.experiments.reconciliation:main"
 trackrelay-scenario = "trackrelay.experiments.scenarios:main"

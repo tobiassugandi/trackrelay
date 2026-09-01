@@ -27,6 +27,8 @@ K6_RAMP_OUTPUT ?= results/k6/ramp-summary.json
 LOAD_RATE ?= 5
 LOAD_DURATION_SECONDS ?= 5
 PERFORMANCE_OUTPUT ?= results/performance
+ELASTICITY_TREATMENT ?= fixed
+ELASTICITY_OUTPUT ?= results/elasticity-workload
 BASELINE_RATES ?= 10,25,50,100,250,500
 BASELINE_TIER_DURATION_SECONDS ?= 10
 BASELINE_OUTPUT ?= results/legacy-baseline
@@ -48,7 +50,7 @@ APPROVED_TARGET_INSTANCE_TYPE ?=
 APPROVED_TIER_ORDER ?=
 APPROVED_UNCONDITIONAL_TEARDOWN_SESSION_ID ?=
 
-.PHONY: sync test test-integration lint run run-worker run-downstream image-api image-api-smoke image-worker image-worker-smoke image-simulator image-simulator-smoke images images-smoke rehost-config rehost-smoke generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp load-slow load-outage load-baseline aws-check aws-plan aws-up aws-async-deploy aws-async-integration aws-rehost-publish aws-rehost-deploy aws-rehost-workload aws-rds-deploy aws-rds-deploy-canary aws-rds-correctness aws-scaling-prepare aws-scaling-run-tier aws-scaling-transition aws-scaling-report aws-scaling-canary aws-scaling-session aws-down aws-verify-down infra-init infra-check db-up db-status db-check db-down migrate migration-status
+.PHONY: sync test test-integration lint run run-worker run-downstream image-api image-api-smoke image-worker image-worker-smoke image-simulator image-simulator-smoke images images-smoke rehost-config rehost-smoke generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp load-slow load-outage load-baseline elasticity-prepare elasticity-driver-check aws-check aws-plan aws-up aws-async-deploy aws-async-integration aws-rehost-publish aws-rehost-deploy aws-rehost-workload aws-rds-deploy aws-rds-deploy-canary aws-rds-correctness aws-scaling-prepare aws-scaling-run-tier aws-scaling-transition aws-scaling-report aws-scaling-canary aws-scaling-session aws-down aws-verify-down infra-init infra-check db-up db-status db-check db-down migrate migration-status
 
 sync:
 	$(UV) sync --locked --python 3.12
@@ -174,6 +176,15 @@ load-baseline:
 		--k6-image $(K6_IMAGE) \
 		--output-root $(BASELINE_OUTPUT) \
 		--raw-output-root $(BASELINE_RAW_OUTPUT)
+
+elasticity-prepare:
+	$(UV) run --locked trackrelay-prepare-elasticity \
+		--treatment "$(ELASTICITY_TREATMENT)" \
+		--output-directory "$(ELASTICITY_OUTPUT)"
+
+elasticity-driver-check:
+	UV="$(UV)" DOCKER="$(DOCKER)" K6_IMAGE="$(K6_IMAGE)" \
+		./scripts/check-elasticity-driver.sh
 
 aws-check:
 	$(UV) run --locked trackrelay-aws-check \

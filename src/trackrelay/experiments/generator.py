@@ -41,6 +41,8 @@ ScenarioName = Literal[
     "healthy-baseline",
     "slow-under-load",
     "outage-under-load",
+    "elasticity-fixed-control",
+    "elasticity-elastic-treatment",
 ]
 
 

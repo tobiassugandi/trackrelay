@@ -672,14 +672,30 @@ This result demonstrates rapid cloud hardware flexibility, not automatic elastic
 
 Use cloud session 3 as a small integration checkpoint:
 
-- [ ] **You:** Explicitly authorize cloud session 3 after reviewing its resource list, region, estimated duration, cost guardrail, and teardown command.
-- [ ] Provision the complete asynchronous stack and deploy the locally tested artifacts.
-- [ ] Exercise 1-, 10-, and 100-event total batches—not events/s—before attempting a performance experiment.
-- [ ] Verify the full path through the load balancer, API, RDS, SQS, worker, simulator, dead-letter queue, and CloudWatch.
-- [ ] Reconcile every accepted event and confirm that the new processing and drain guardrails work.
-- [ ] Collect integration evidence, destroy the complete session-3 stack, and verify the teardown.
+- [x] **You:** Explicitly authorize cloud session 3 after reviewing its resource list, region, estimated duration, cost guardrail, and teardown command.
+- [x] Provision the complete asynchronous stack and deploy the locally tested artifacts.
+- [x] Exercise 1-, 10-, and 100-event total batches—not events/s—before attempting a performance experiment.
+- [x] Verify the full path through the load balancer, API, RDS, SQS, worker, simulator, dead-letter queue, and CloudWatch.
+- [x] Reconcile every accepted event and confirm that the new processing and drain guardrails work.
+- [x] Collect integration evidence, destroy the complete session-3 stack, and verify the teardown.
+
+Cloud session `cloud-session-3-20260901T110554Z` completed at revision
+`8ac8f0ec358bf820e8b242eb5aaa18eb04bd6b5f`. All three cases had zero request
+errors, p95 ingestion latency of 258, 201, and 50 ms respectively, and reached
+drained state after about 11, 11, and 33 seconds. Each then passed the required
+180-second continuously empty window and full reconciliation. All six required
+CloudWatch series were published; final Terraform state was empty and every
+native AWS inventory count was zero.
 
 ### Stage 9.6 — Establish the fixed-capacity modernized control
+
+- [x] Define the first versioned, manifest-backed qualification waveform and a
+  replayable k6 driver. Use `1 -> 5 -> 10 -> 25 -> 10 -> 5 -> 1` events/s,
+  align every step to the native 60-second metric period, retain five minutes
+  at the recovery rate, preallocate bounded VUs, tag every step, and fail on
+  missing requests or ingestion SLO violations. Treat these rates as a
+  candidate until fixed-run evidence proves that the peak exceeds one-worker
+  delivery capacity while non-worker tiers retain headroom.
 
 - [ ] Make provision, fixed experiment, application-state reset, elastic experiment, result collection, and teardown reproducible through `make aws-up`, `make experiment-fixed`, `make experiment-reset`, `make experiment-elastic`, `make collect-results`, and `make aws-down` (or clearly documented equivalents).
 - [ ] Test the workload driver, reset procedure, metrics collection, reconciliation, and plot generation locally before starting cloud session 4.

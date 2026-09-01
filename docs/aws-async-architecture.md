@@ -214,6 +214,7 @@ their collected evidence plus verified teardown.
 ## References
 
 - [Stage 9.5 operator runbook](aws-async-integration-runbook.md)
+- [Stage 9.6/9.7 elasticity experiment](aws-elasticity-experiment.md)
 
 - [Amazon ECS outbound networking](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/networking-outbound.html)
 - [Amazon ECS Fargate task networking](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-task-networking.html)

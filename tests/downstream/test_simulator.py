@@ -53,6 +53,15 @@ def test_runtime_metrics_describe_the_downstream_process_only(
     assert body["database_pool"] is None
 
 
+def test_control_event_count_does_not_transfer_receipt_payloads(
+    client: TestClient,
+) -> None:
+    response = client.get("/control/events/count")
+
+    assert response.status_code == 200
+    assert response.json() == {"event_count": 0}
+
+
 def test_simulator_accepts_and_exposes_a_normalized_event(
     client: TestClient,
 ) -> None:
@@ -130,9 +139,7 @@ def test_simulator_filters_receipts_by_test_run_id(client: TestClient) -> None:
     )
 
     assert response.status_code == 200
-    assert [event["test_run_id"] for event in response.json()] == [
-        str(selected_run_id)
-    ]
+    assert [event["test_run_id"] for event in response.json()] == [str(selected_run_id)]
 
 
 def test_private_control_clears_and_counts_all_receipts(

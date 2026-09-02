@@ -711,6 +711,12 @@ native AWS inventory count was zero.
   evidence for every step, and apply the pre-data headroom limits. Retain and
   tear down a rejected candidate; only `fixed_control_qualified` may proceed to
   reset and the elastic replay.
+- [x] Add the guarded between-treatment reset without recreating
+  infrastructure. Require the exact qualified fixed run, clear every synthetic
+  database/outbox row and simulator receipt while preserving partners, purge
+  both queues, wait through SQS propagation, prove 30 seconds of empty state
+  with one fixed worker and no autoscaling target, and destroy and verify the
+  session on any reset failure or interrupt.
 
 - [ ] Make provision, fixed experiment, application-state reset, elastic experiment, result collection, and teardown reproducible through `make aws-up`, `make experiment-fixed`, `make experiment-reset`, `make experiment-elastic`, `make collect-results`, and `make aws-down` (or clearly documented equivalents).
 - [ ] Test the workload driver, reset procedure, metrics collection, reconciliation, and plot generation locally before starting cloud session 4.
@@ -724,7 +730,7 @@ native AWS inventory count was zero.
 
 ### Stage 9.7 — Enable and measure worker elasticity
 
-- [ ] Reset application data, queues, simulator state, and measurements without recreating or resizing the infrastructure.
+- [x] Reset application data, queues, simulator state, and measurements without recreating or resizing the infrastructure.
 - [ ] Enable a documented worker scaling policy with the same minimum task count and a bounded maximum; use queue backlog or backlog per task as the demand signal.
 - [ ] Replay the fixed-control workload without changing the application, task definition, API capacity, database, simulator, benchmark driver, SLO, or guardrails.
 - [ ] Verify that workers scale from A to B as load rises, backlog remains bounded and drains, and workers return to A after demand falls.

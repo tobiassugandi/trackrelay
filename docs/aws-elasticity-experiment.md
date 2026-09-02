@@ -162,16 +162,57 @@ its evidence, then destroys and verifies the session; it cannot proceed to the
 elastic treatment. An unexpected workflow error or interrupt likewise stops
 the local k6 process and reaches unconditional teardown.
 
+## Between-treatment reset controller
+
+Only a manifest in `fixed_control_qualified` state can enter the reset. The
+controller revalidates the approved clean revision, all fixed ECS capacities,
+the API and queue endpoints, a stable one-of-one worker service, and the
+absence of an ECS scalable target. It also requires the live application state
+to describe exactly the qualified fixed run: one test-run row, all 3,660
+events, shipments, durable outbox entries, at least one delivery attempt per
+event, 3,660 simulator receipts, a healthy simulator, and empty source and
+dead-letter queues.
+
+For an authorized live session, run:
+
+```shell
+make aws-experiment-reset \
+  SESSION_ID="$TRACKRELAY_RUN_SESSION_ID" \
+  API_INGRESS_CIDR="$TRACKRELAY_RUN_API_CIDR" \
+  APPROVED_SESSION_ID="$TRACKRELAY_RUN_SESSION_ID" \
+  APPROVED_COST_CEILING_USD="$TRACKRELAY_RUN_COST_CEILING_USD" \
+  APPROVED_UNCONDITIONAL_TEARDOWN_SESSION_ID="$TRACKRELAY_RUN_SESSION_ID"
+```
+
+The application clears only the sole exact synthetic run from `test_runs`,
+`shipments`, `events`, `delivery_attempts`, and `delivery_outbox`; reusable
+partner configuration remains. It clears simulator receipts, purges both SQS
+queues, waits the mandatory 60 seconds for SQS purge propagation, then requires
+application state, both queues, and the fixed worker service to remain empty
+and stable for 30 seconds. Autoscaling must still be absent after verification.
+The controller writes:
+
+```text
+elasticity/reset/pre-reset-observation.json
+elasticity/reset/application-reset.json
+elasticity/reset/observations.json
+elasticity/reset/result.json
+```
+
+Success changes the session status to `experiment_reset_verified` and leaves
+the unchanged stack running for the elastic treatment. Any refusal, HTTP/AWS
+failure, timeout, or interrupt after the reset workflow begins triggers full
+session teardown and native teardown verification. Do not retry a failed reset
+against a partially changed stack.
+
 ## Still required before cloud session 4
 
-- A reset controller that proves database experiment rows, outbox entries,
-  queues, DLQ, and simulator receipts are empty without recreating the stack.
 - A bounded worker autoscaling policy and an exact apply/verification boundary
   between the fixed and elastic treatments.
 - A compact result model and plot generator that evaluate sustainable
   end-to-end load and render the aligned causal comparison.
-- Local failure-path tests for reset, plotting, and the complete session
-  teardown sequence.
+- Local failure-path tests for plotting and the complete session teardown
+  sequence.
 
 No cloud-session-4 plan should be proposed until these pieces are locally
 complete and the resource/cost effect of the maximum worker count is reviewed.

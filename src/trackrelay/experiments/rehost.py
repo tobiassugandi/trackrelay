@@ -36,7 +36,13 @@ from trackrelay.experiments.scenarios import (
     complete_database_run,
     prepare_database_for_run,
 )
-from trackrelay.models import DeliveryAttempt, Event, Shipment, TestRun
+from trackrelay.models import (
+    DeliveryAttempt,
+    DeliveryOutboxEntry,
+    Event,
+    Shipment,
+    TestRun,
+)
 from trackrelay.runtime_metrics import RuntimeMetricsSnapshot
 
 PositiveInteger = Annotated[int, Field(gt=0)]
@@ -346,12 +352,18 @@ def reset_rehost_experiment_state(
         if session.get_bind().dialect.name == "postgresql":
             session.execute(
                 text(
-                    "TRUNCATE TABLE delivery_attempts, events, shipments, "
-                    "test_runs"
+                    "TRUNCATE TABLE delivery_outbox, delivery_attempts, events, "
+                    "shipments, test_runs"
                 )
             )
         else:
-            for model in (DeliveryAttempt, Event, Shipment, TestRun):
+            for model in (
+                DeliveryOutboxEntry,
+                DeliveryAttempt,
+                Event,
+                Shipment,
+                TestRun,
+            ):
                 session.execute(delete(model))
         after = _experiment_table_counts(session)
 

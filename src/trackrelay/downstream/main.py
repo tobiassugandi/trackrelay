@@ -42,6 +42,12 @@ class SimulatorResetResponse(BaseModel):
     cleared_event_count: int
 
 
+class SimulatorEventCountResponse(BaseModel):
+    """Compact private receipt count used to prove treatment isolation."""
+
+    event_count: int
+
+
 def simulator_status(mode: SimulatorMode) -> SimulatorStatusResponse:
     """Describe one mode including its deterministic delay."""
     return SimulatorStatusResponse(
@@ -85,6 +91,12 @@ def clear_simulator_events() -> SimulatorResetResponse:
     return SimulatorResetResponse(
         cleared_event_count=event_store.clear(),
     )
+
+
+@app.get("/control/events/count", response_model=SimulatorEventCountResponse)
+def count_simulator_events() -> SimulatorEventCountResponse:
+    """Return receipt count without transferring synthetic event payloads."""
+    return SimulatorEventCountResponse(event_count=len(event_store.all()))
 
 
 @app.post("/events", status_code=status.HTTP_202_ACCEPTED)

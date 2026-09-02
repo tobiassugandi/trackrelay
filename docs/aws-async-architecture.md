@@ -199,6 +199,17 @@ worker running tasks, SQS sends, and RDS CPU. A normal failure, success,
 `SIGINT`, or `SIGTERM` reaches unconditional destroy and native absence
 verification.
 
+The Stage 9.6/9.7 comparison keeps this stack intact between treatments. After
+a qualified fixed run, the API exposes compact experiment-state counts and an
+exact reset operation for the sole named test run. The guarded reset preserves
+partner configuration while clearing test runs, shipments, events, delivery
+attempts, durable outbox entries, and private simulator receipts. Its local
+controller purges both queues, observes the mandatory SQS propagation wait,
+requires 30 seconds of empty application and queue state with exactly one
+worker, and verifies that worker autoscaling remains absent. Only that proof
+may advance the session to the elastic-policy boundary; any reset failure
+destroys and verifies the complete stack.
+
 ## Teardown boundary
 
 Every taggable resource inherits the session tags; the globally scoped

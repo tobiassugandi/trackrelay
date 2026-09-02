@@ -50,6 +50,13 @@ from trackrelay.services import (
     persist_normalized_event,
     publish_delivery_outbox_entry,
 )
+from trackrelay.services.experiment_reset import (
+    ExperimentResetError,
+    ExperimentResetEvidence,
+    ExperimentStateSnapshot,
+    inspect_experiment_state,
+    reset_experiment_state,
+)
 from trackrelay.sqs_delivery import SqsDownstreamDeliveryQueue, create_sqs_client
 
 settings = Settings()
@@ -191,6 +198,15 @@ class TestRunLifecycleResponse(BaseModel):
     status: Literal["registered", "completed"]
 
 
+class ExperimentResetRequest(BaseModel):
+    """Exact qualified run the controller authorizes for destructive reset."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    test_run_id: UUID
+    expected_event_count: Annotated[int, Field(gt=0)]
+
+
 def get_event_persister() -> EventPersister:
     """Provide the application service used to persist normalized events."""
     return persist_normalized_event
@@ -254,6 +270,64 @@ def readiness(
 def get_runtime_metrics() -> RuntimeMetricsSnapshot:
     """Expose one read-only API-process sample for local experiments."""
     return capture_runtime_metrics()
+
+
+@app.get(
+    "/api/v1/experiments/state",
+    response_model=ExperimentStateSnapshot,
+    tags=["experiments"],
+)
+def get_experiment_state(
+    session: Annotated[Session, Depends(get_session)],
+) -> ExperimentStateSnapshot:
+    """Expose only compact counts needed to prove treatment isolation."""
+    try:
+        with httpx.Client(
+            base_url=settings.downstream_url,
+            timeout=settings.downstream_timeout_seconds,
+        ) as downstream_client:
+            return inspect_experiment_state(
+                session=session,
+                downstream_client=downstream_client,
+            )
+    except (httpx.HTTPError, ExperimentResetError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Experiment state evidence is unavailable",
+        ) from error
+
+
+@app.post(
+    "/api/v1/experiments/reset",
+    response_model=ExperimentResetEvidence,
+    tags=["experiments"],
+)
+def reset_experiment(
+    request: ExperimentResetRequest,
+    session: Annotated[Session, Depends(get_session)],
+) -> ExperimentResetEvidence:
+    """Clear only the sole exact synthetic run between approved treatments."""
+    try:
+        with httpx.Client(
+            base_url=settings.downstream_url,
+            timeout=settings.downstream_timeout_seconds,
+        ) as downstream_client:
+            return reset_experiment_state(
+                session=session,
+                downstream_client=downstream_client,
+                test_run_id=request.test_run_id,
+                expected_event_count=request.expected_event_count,
+            )
+    except ExperimentResetError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(error),
+        ) from error
+    except httpx.HTTPError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Simulator reset is unavailable",
+        ) from error
 
 
 @app.get(
@@ -602,10 +676,7 @@ def ingest_partner_event(
     try:
         validated_payload = adapter.payload_model.model_validate(payload)
     except ValidationError as error:
-        errors = [
-            {**item, "loc": ("body", *item["loc"])}
-            for item in error.errors()
-        ]
+        errors = [{**item, "loc": ("body", *item["loc"])} for item in error.errors()]
         raise RequestValidationError(errors) from error
 
     normalized_event = adapter.normalize(

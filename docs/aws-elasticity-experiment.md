@@ -31,9 +31,9 @@ below 1%, complete request scheduling, every accepted event, zero duplicate
 business effects, correct final shipment states, an empty DLQ, and the frozen
 drain contract. API latency alone cannot establish sustainable end-to-end load.
 
-## Candidate workload v1
+## Candidate workload v2
 
-`aws-elasticity-candidate-v1` is now defined in code and consumed from a saved
+`aws-elasticity-candidate-v2` is now defined in code and consumed from a saved
 JSON definition by `load/elasticity-steps.js`:
 
 | Step | Offered rate | Duration | Scheduled events |
@@ -51,6 +51,14 @@ Every plateau aligns to CloudWatch's 60-second native metric period. The final
 five-minute low-rate window exists to observe backlog recovery and, in the
 elastic treatment, return to the minimum worker count.
 
+The controller waits until the next UTC minute boundary when necessary and
+launches within a one-second tolerance. With the driver image prevalidated and
+already present, this minimizes edge-bucket ambiguity and keeps the 60-second
+transitions consistently offset from native boundaries.
+The saved definition remains authoritative for offered load; CloudWatch points
+retain their actual UTC bucket timestamps rather than being relabelled as
+single-step measurements.
+
 These rates are a **qualification candidate**, not a frozen capacity result.
 Cloud session 3 showed that a 100-event finite batch required about 33 seconds
 to reach drained state with one worker, so 5–25 events/s is a reasonable small
@@ -60,6 +68,18 @@ simulator CPU and memory stay below 70%, and RDS plus database-pool evidence
 retains headroom. If those conditions do not isolate the worker, revise and
 re-freeze the candidate before enabling autoscaling; never tune the workload
 after seeing the elastic result.
+
+Candidate v2 preserves v1's exact waveform and deterministic events. It adds
+the fixed, machine-evaluated native and database-pool qualification limits
+rather than silently changing the meaning of the earlier saved definition.
+
+The non-worker qualification limits are frozen before session 4: maximum API,
+simulator, RDS CPU, API memory, simulator memory, and API database-pool use must
+remain below 70%; RDS connections must remain below 50; minimum RDS freeable
+memory must remain above 128 MiB; and average RDS read and write latency must
+remain below 20 ms in every native window. RDS IOPS and worker CPU are retained
+as explanatory evidence rather than capped—the fixed worker is intentionally
+the tier expected to become busy.
 
 ## Local preparation and driver validation
 
@@ -112,10 +132,13 @@ make aws-fixed-control \
 
 The controller registers the exact manifest, launches the shell-free pinned k6
 command, and samples the application database/outbox summary, source queue,
-DLQ, fixed ECS worker counts, and optional API database-pool snapshot every ten
-seconds. It records observation gaps without losing the rest of the timeline,
-requires a 180-second continuously drained window, completes reconciliation,
-and writes these files beneath the session directory:
+DLQ, fixed ECS worker counts, and API database-pool snapshot every ten seconds.
+It records observation gaps without losing the rest of the timeline, requires
+a 180-second continuously drained window, completes reconciliation, then waits
+boundedly for every overlapping native CloudWatch minute bucket. Sparse ALB
+error and SQS zero values are filled explicitly; utilization, latency, task,
+and RDS series must be genuinely published. It writes these files beneath the
+session directory:
 
 ```text
 elasticity/fixed/workload-definition.json
@@ -125,27 +148,30 @@ elasticity/fixed/k6.log
 elasticity/fixed/observations.json
 elasticity/fixed/observation-failures.json
 elasticity/fixed/result.json
+elasticity/fixed/cloudwatch.json
+elasticity/fixed/summary.json
 ```
 
-Successful execution changes the session status to `fixed_control_recorded`
-and deliberately leaves the stack running for the reset and elastic replay. An
-unexpected workflow error or interrupt stops the local k6 process, invokes the
-unconditional destroy path, and verifies teardown. A recorded result does not
-yet qualify the workload: native CloudWatch headroom evidence is still needed.
+The qualification decision requires complete measurement and native evidence,
+worker pressure during the unique 25 events/s peak, one worker throughout,
+complete native request scheduling, the ingestion SLOs, an empty DLQ, one API
+pool observation for every workload step, and every frozen non-worker headroom
+limit. A passing run changes the status to `fixed_control_qualified` and leaves
+the stack running for reset and elastic replay. A rejected candidate retains
+its evidence, then destroys and verifies the session; it cannot proceed to the
+elastic treatment. An unexpected workflow error or interrupt likewise stops
+the local k6 process and reaches unconditional teardown.
 
 ## Still required before cloud session 4
 
-- A native 60-second CloudWatch collector for ALB request/latency, API and
-  simulator CPU/memory, worker CPU/count, SQS backlog, and RDS headroom, plus a
-  qualification evaluator that aligns those series with the fixed timeline.
 - A reset controller that proves database experiment rows, outbox entries,
   queues, DLQ, and simulator receipts are empty without recreating the stack.
 - A bounded worker autoscaling policy and an exact apply/verification boundary
   between the fixed and elastic treatments.
 - A compact result model and plot generator that evaluate sustainable
   end-to-end load and render the aligned causal comparison.
-- Local failure-path tests for reset, native metric collection, qualification,
-  plotting, and the complete session teardown sequence.
+- Local failure-path tests for reset, plotting, and the complete session
+  teardown sequence.
 
 No cloud-session-4 plan should be proposed until these pieces are locally
 complete and the resource/cost effect of the maximum worker count is reviewed.

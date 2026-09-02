@@ -82,6 +82,7 @@ output "async_observability_dimensions" {
     api_service_name        = aws_ecs_service.async_api[0].name
     cluster_name            = aws_ecs_cluster.async[0].name
     dashboard_name          = aws_cloudwatch_dashboard.async[0].dashboard_name
+    dead_letter_queue_name  = aws_sqs_queue.delivery_dead_letter[0].name
     delivery_queue_name     = aws_sqs_queue.delivery[0].name
     load_balancer_dimension = aws_lb.async[0].arn_suffix
     rds_identifier          = aws_db_instance.postgres.identifier

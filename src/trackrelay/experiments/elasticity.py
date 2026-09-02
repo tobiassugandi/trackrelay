@@ -94,14 +94,21 @@ class ElasticityWorkloadDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[1] = 1
-    name: Literal["aws-elasticity-candidate-v1"] = "aws-elasticity-candidate-v1"
+    name: Literal["aws-elasticity-candidate-v2"] = "aws-elasticity-candidate-v2"
     steps: tuple[ElasticityWorkloadStep, ...] = DEFAULT_ELASTICITY_STEPS
     random_seed: int = 20260901
     partner_id: str = "elasticity-alpha"
     metric_period_seconds: Literal[60] = 60
+    metric_start_alignment_tolerance_seconds: Literal[1.0] = 1.0
     ingestion_p95_limit_ms: Literal[500] = 500
     ingestion_error_limit_percent: Literal[1.0] = 1.0
     maximum_non_worker_utilization_percent: Literal[70.0] = 70.0
+    maximum_database_pool_utilization_percent: Literal[70.0] = 70.0
+    maximum_rds_cpu_utilization_percent: Literal[70.0] = 70.0
+    maximum_rds_connections: Literal[50] = 50
+    minimum_rds_freeable_memory_bytes: Literal[134217728] = 134217728
+    maximum_rds_read_latency_seconds: Literal[0.02] = 0.02
+    maximum_rds_write_latency_seconds: Literal[0.02] = 0.02
     minimum_worker_count: Literal[1] = 1
     k6_image: str = "grafana/k6:2.1.0"
     trackrelay_api_url_for_container: str = "http://host.docker.internal:8000"
@@ -139,8 +146,7 @@ class ElasticityWorkloadDefinition(BaseModel):
         if len(set(names)) != len(names):
             raise ValueError("elasticity workload step names must be unique")
         if any(
-            step.duration_seconds % self.metric_period_seconds
-            for step in self.steps
+            step.duration_seconds % self.metric_period_seconds for step in self.steps
         ):
             raise ValueError(
                 "every elasticity step must align to the 60-second metric period"
@@ -153,14 +159,10 @@ class ElasticityWorkloadDefinition(BaseModel):
         if peak_index == 0 or peak_index == len(rates) - 1:
             raise ValueError("elasticity peak must have rising and falling steps")
         if any(
-            later <= earlier
-            for earlier, later in pairwise(rates[: peak_index + 1])
+            later <= earlier for earlier, later in pairwise(rates[: peak_index + 1])
         ):
             raise ValueError("elasticity rates must rise strictly to the peak")
-        if any(
-            later >= earlier
-            for earlier, later in pairwise(rates[peak_index:])
-        ):
+        if any(later >= earlier for earlier, later in pairwise(rates[peak_index:])):
             raise ValueError("elasticity rates must fall strictly after the peak")
         if rates[0] != rates[-1]:
             raise ValueError("elasticity workload must return to its starting rate")
@@ -214,8 +216,7 @@ def build_elasticity_manifest(
         expected_unique_events=len(created_events),
         expected_events=created_events,
         expected_final_shipments={
-            event.tracking_number: ShipmentStatus.CREATED
-            for event in created_events
+            event.tracking_number: ShipmentStatus.CREATED for event in created_events
         },
     )
 

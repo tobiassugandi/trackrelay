@@ -42,6 +42,13 @@ def test_candidate_is_one_metric_aligned_rise_and_fall() -> None:
     assert definition.peak_rate_per_second == 25
     assert definition.minimum_worker_count == 1
     assert definition.maximum_non_worker_utilization_percent == 70
+    assert definition.metric_start_alignment_tolerance_seconds == 1
+    assert definition.maximum_database_pool_utilization_percent == 70
+    assert definition.maximum_rds_cpu_utilization_percent == 70
+    assert definition.maximum_rds_connections == 50
+    assert definition.minimum_rds_freeable_memory_bytes == 128 * 1024 * 1024
+    assert definition.maximum_rds_read_latency_seconds == 0.02
+    assert definition.maximum_rds_write_latency_seconds == 0.02
 
 
 def test_definition_rejects_an_unaligned_or_non_recovering_wave() -> None:
@@ -201,7 +208,7 @@ def test_prepare_writes_self_describing_replay_inputs(tmp_path: Path) -> None:
     command = loads(
         (output_directory / "k6-command.json").read_text(encoding="utf-8")
     )
-    assert definition["name"] == "aws-elasticity-candidate-v1"
+    assert definition["name"] == "aws-elasticity-candidate-v2"
     assert definition["expected_request_count"] == 3660
     assert manifest["scenario_name"] == "elasticity-fixed-control"
     assert manifest["events_generated"] == 3660

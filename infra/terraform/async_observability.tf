@@ -56,6 +56,12 @@ locals {
       statistic   = "Average"
       dimensions  = ["ClusterName", "ServiceName"]
     }
+    worker_cpu_utilization = {
+      namespace   = "AWS/ECS"
+      metric_name = "CPUUtilization"
+      statistic   = "Maximum"
+      dimensions  = ["ClusterName", "ServiceName"]
+    }
     source_queue_visible = {
       namespace   = "AWS/SQS"
       metric_name = "ApproximateNumberOfMessagesVisible"
@@ -212,7 +218,7 @@ resource "aws_cloudwatch_dashboard" "async" {
         width  = 8
         height = 6
         properties = {
-          title   = "Running worker tasks"
+          title   = "Fixed worker tasks and CPU"
           view    = "timeSeries"
           stacked = false
           region  = var.aws_region
@@ -222,6 +228,7 @@ resource "aws_cloudwatch_dashboard" "async" {
           }
           metrics = [
             ["ECS/ContainerInsights", "RunningTaskCount", "ClusterName", local.async_cluster_name, "ServiceName", local.async_worker_service_name, { id = "m_worker_tasks", label = "Running workers", stat = "Average" }],
+            ["AWS/ECS", "CPUUtilization", "ClusterName", local.async_cluster_name, "ServiceName", local.async_worker_service_name, { id = "m_worker_cpu", label = "Maximum worker CPU (%)", stat = "Maximum", yAxis = "right" }],
           ]
         }
       },

@@ -402,6 +402,7 @@ run "async_observability_has_one_native_metric_contract" {
         "api_service_name",
         "cluster_name",
         "dashboard_name",
+        "dead_letter_queue_name",
         "delivery_queue_name",
         "load_balancer_dimension",
         "rds_identifier",
@@ -411,6 +412,7 @@ run "async_observability_has_one_native_metric_contract" {
       && output.async_observability_dimensions.api_service_name == "trackrelay-8a7e37db-api"
       && output.async_observability_dimensions.cluster_name == "trackrelay-8a7e37db-async"
       && output.async_observability_dimensions.dashboard_name == "trackrelay-8a7e37db-async"
+      && output.async_observability_dimensions.dead_letter_queue_name == "trackrelay-8a7e37db-delivery-dlq"
       && output.async_observability_dimensions.delivery_queue_name == "trackrelay-8a7e37db-delivery"
       && output.async_observability_dimensions.load_balancer_dimension == "app/trackrelay-test-async/0123456789abcdef"
       && output.async_observability_dimensions.rds_identifier == "trackrelay-8a7e37db-postgres"
@@ -439,6 +441,7 @@ run "async_observability_has_one_native_metric_contract" {
         "source_queue_visible",
         "simulator_cpu_utilization",
         "simulator_memory_utilization",
+        "worker_cpu_utilization",
         "worker_running_tasks",
       ])
     )
@@ -458,6 +461,12 @@ run "async_observability_has_one_native_metric_contract" {
         metric_name = "RunningTaskCount"
         namespace   = "ECS/ContainerInsights"
         statistic   = "Average"
+      }
+      && local.async_observability_metric_contract.worker_cpu_utilization == {
+        dimensions  = ["ClusterName", "ServiceName"]
+        metric_name = "CPUUtilization"
+        namespace   = "AWS/ECS"
+        statistic   = "Maximum"
       }
       && local.async_observability_metric_contract.api_cpu_utilization == {
         dimensions  = ["ClusterName", "ServiceName"]

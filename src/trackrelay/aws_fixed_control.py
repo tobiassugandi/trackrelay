@@ -37,6 +37,11 @@ from trackrelay.aws_async_deployment import (
     terraform_output,
 )
 from trackrelay.aws_async_integration import AsyncRunSummary
+from trackrelay.aws_elasticity_cloudwatch import (
+    AwsElasticityCloudWatchError,
+    ElasticityCloudWatchEvidence,
+    collect_elasticity_cloudwatch_evidence,
+)
 from trackrelay.aws_session import (
     AwsSession,
     AwsSessionError,
@@ -65,6 +70,7 @@ Sleeper = Callable[[float], None]
 Now = Callable[[], datetime]
 SessionAction = Callable[..., object]
 TreatmentRunner = Callable[..., "FixedControlResult"]
+MetricCollector = Callable[..., ElasticityCloudWatchEvidence]
 
 
 class AwsFixedControlError(RuntimeError):
@@ -84,6 +90,10 @@ class AwsFixedControlCleanupError(RuntimeError):
         super().__init__(message)
         self.workflow_error = workflow_error
         self.cleanup_errors = tuple(cleanup_errors)
+
+
+class AwsFixedControlQualificationError(AwsFixedControlError):
+    """The measured candidate cannot proceed to an elastic replay."""
 
 
 class FixedControlObservationFailure(BaseModel):
@@ -235,12 +245,10 @@ class FixedControlResult(BaseModel):
         peak_names = {
             step.name
             for step in self.definition.steps
-            if step.offered_rate_per_second
-            == self.definition.peak_rate_per_second
+            if step.offered_rate_per_second == self.definition.peak_rate_per_second
         }
         return any(
-            observation.step_name in peak_names
-            and observation.source_queue_work > 0
+            observation.step_name in peak_names and observation.source_queue_work > 0
             for observation in self.observations
         )
 
@@ -278,6 +286,216 @@ class FixedControlResult(BaseModel):
             and self.drain_stability_confirmed
             and not self.observation_failures
         )
+
+
+class FixedControlQualification(BaseModel):
+    """Fail-closed decision that the candidate isolates the worker tier."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    test_run_id: UUID
+    native_request_count: NonNegativeFloat
+    native_request_error_percent: Annotated[float, Field(ge=0, le=100)]
+    maximum_native_p95_latency_ms: NonNegativeFloat
+    maximum_api_cpu_percent: NonNegativeFloat
+    maximum_api_memory_percent: NonNegativeFloat
+    maximum_simulator_cpu_percent: NonNegativeFloat
+    maximum_simulator_memory_percent: NonNegativeFloat
+    minimum_worker_running_tasks: NonNegativeFloat
+    maximum_worker_running_tasks: NonNegativeFloat
+    maximum_worker_cpu_percent: NonNegativeFloat
+    maximum_dead_letter_queue_messages: NonNegativeFloat
+    maximum_rds_cpu_percent: NonNegativeFloat
+    maximum_rds_connections: NonNegativeFloat
+    minimum_rds_freeable_memory_bytes: NonNegativeFloat
+    maximum_rds_read_latency_seconds: NonNegativeFloat
+    maximum_rds_write_latency_seconds: NonNegativeFloat
+    maximum_rds_read_iops: NonNegativeFloat
+    maximum_rds_write_iops: NonNegativeFloat
+    maximum_database_pool_utilization_percent: NonNegativeFloat | None
+    database_pool_steps_observed: tuple[str, ...]
+    rejection_reasons: tuple[str, ...]
+    qualified: bool
+
+    @model_validator(mode="after")
+    def require_consistent_decision(self) -> "FixedControlQualification":
+        if self.qualified is bool(self.rejection_reasons):
+            raise ValueError("fixed-control qualification disagrees with reasons")
+        return self
+
+
+class FixedControlSummary(BaseModel):
+    """Measurement, native evidence, and the resulting candidate decision."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    measurement: FixedControlResult
+    cloudwatch: ElasticityCloudWatchEvidence
+    qualification: FixedControlQualification
+
+    @model_validator(mode="after")
+    def require_one_treatment_run(self) -> "FixedControlSummary":
+        run_ids = {
+            self.measurement.test_run_id,
+            self.cloudwatch.test_run_id,
+            self.qualification.test_run_id,
+        }
+        if len(run_ids) != 1:
+            raise ValueError("fixed-control evidence uses different run IDs")
+        if (
+            self.cloudwatch.window_started_at != self.measurement.load_started_at
+            or self.cloudwatch.window_ended_at != self.measurement.load_ended_at
+        ):
+            raise ValueError("fixed-control CloudWatch window is misaligned")
+        return self
+
+
+def _series_values(
+    evidence: ElasticityCloudWatchEvidence,
+    query_id: str,
+) -> tuple[float, ...]:
+    return tuple(point.value for point in evidence.series_by_id()[query_id].datapoints)
+
+
+def _database_pool_evidence(
+    result: FixedControlResult,
+) -> tuple[float | None, tuple[str, ...]]:
+    utilizations: list[float] = []
+    observed_steps: set[str] = set()
+    expected_steps = {step.name for step in result.definition.steps}
+    for observation in result.observations:
+        if (
+            observation.step_name not in expected_steps
+            or observation.api_runtime is None
+        ):
+            continue
+        pool = observation.api_runtime.database_pool
+        if (
+            pool is None
+            or pool.checked_out is None
+            or pool.pool_size is None
+            or pool.max_overflow is None
+            or pool.pool_size + pool.max_overflow <= 0
+        ):
+            continue
+        observed_steps.add(observation.step_name)
+        utilizations.append(
+            100 * pool.checked_out / (pool.pool_size + pool.max_overflow)
+        )
+    return (
+        max(utilizations) if utilizations else None,
+        tuple(
+            step.name for step in result.definition.steps if step.name in observed_steps
+        ),
+    )
+
+
+def evaluate_fixed_control_qualification(
+    result: FixedControlResult,
+    cloudwatch: ElasticityCloudWatchEvidence,
+) -> FixedControlQualification:
+    """Require worker pressure while every frozen non-worker guardrail passes."""
+    if result.test_run_id != cloudwatch.test_run_id:
+        raise ValueError("fixed-control and CloudWatch evidence use different runs")
+    values = {
+        query_id: _series_values(cloudwatch, query_id)
+        for query_id in cloudwatch.series_by_id()
+    }
+    load_balancer_error_count = sum(values["alb_elb_4xx"]) + sum(values["alb_elb_5xx"])
+    native_request_count = sum(values["alb_requests"]) + load_balancer_error_count
+    native_error_count = (
+        sum(values["alb_target_4xx"])
+        + sum(values["alb_target_5xx"])
+        + load_balancer_error_count
+    )
+    native_error_percent = (
+        100 * native_error_count / native_request_count if native_request_count else 100
+    )
+    maximum_pool_percent, pool_steps = _database_pool_evidence(result)
+    definition = result.definition
+    reasons: list[str] = []
+    if not result.measurement_complete:
+        reasons.append("measurement_incomplete")
+    if not result.worker_pressure_observed:
+        reasons.append("worker_pressure_not_observed")
+    worker_values = values["worker_running_tasks"]
+    if any(
+        abs(value - definition.minimum_worker_count) > 0.01 for value in worker_values
+    ):
+        reasons.append("fixed_worker_metric_drift")
+    if native_request_count < definition.expected_request_count:
+        reasons.append("native_request_count_incomplete")
+    maximum_p95_ms = 1000 * max(values["alb_p95_latency"])
+    if maximum_p95_ms >= definition.ingestion_p95_limit_ms:
+        reasons.append("native_ingestion_latency_failed")
+    if native_error_percent >= definition.ingestion_error_limit_percent:
+        reasons.append("native_ingestion_errors_failed")
+    headroom_ceiling = definition.maximum_non_worker_utilization_percent
+    maximum_api_cpu = max(values["api_cpu"])
+    maximum_api_memory = max(values["api_memory"])
+    maximum_simulator_cpu = max(values["simulator_cpu"])
+    maximum_simulator_memory = max(values["simulator_memory"])
+    if maximum_api_cpu >= headroom_ceiling:
+        reasons.append("api_cpu_headroom_failed")
+    if maximum_api_memory >= headroom_ceiling:
+        reasons.append("api_memory_headroom_failed")
+    if maximum_simulator_cpu >= headroom_ceiling:
+        reasons.append("simulator_cpu_headroom_failed")
+    if maximum_simulator_memory >= headroom_ceiling:
+        reasons.append("simulator_memory_headroom_failed")
+    expected_pool_steps = tuple(step.name for step in definition.steps)
+    if pool_steps != expected_pool_steps:
+        reasons.append("database_pool_evidence_incomplete")
+    elif (
+        maximum_pool_percent is None
+        or maximum_pool_percent >= definition.maximum_database_pool_utilization_percent
+    ):
+        reasons.append("database_pool_headroom_failed")
+    maximum_rds_cpu = max(values["rds_cpu"])
+    maximum_rds_connections = max(values["rds_connections"])
+    minimum_rds_memory = min(values["rds_freeable_memory"])
+    maximum_rds_read_latency = max(values["rds_read_latency"])
+    maximum_rds_write_latency = max(values["rds_write_latency"])
+    if maximum_rds_cpu >= definition.maximum_rds_cpu_utilization_percent:
+        reasons.append("rds_cpu_headroom_failed")
+    if maximum_rds_connections >= definition.maximum_rds_connections:
+        reasons.append("rds_connection_headroom_failed")
+    if minimum_rds_memory <= definition.minimum_rds_freeable_memory_bytes:
+        reasons.append("rds_memory_headroom_failed")
+    if maximum_rds_read_latency >= definition.maximum_rds_read_latency_seconds:
+        reasons.append("rds_read_latency_headroom_failed")
+    if maximum_rds_write_latency >= definition.maximum_rds_write_latency_seconds:
+        reasons.append("rds_write_latency_headroom_failed")
+    maximum_dlq = max(values["dead_letter_queue_visible"])
+    if maximum_dlq > 0:
+        reasons.append("native_dead_letter_queue_not_empty")
+    return FixedControlQualification(
+        test_run_id=result.test_run_id,
+        native_request_count=native_request_count,
+        native_request_error_percent=native_error_percent,
+        maximum_native_p95_latency_ms=maximum_p95_ms,
+        maximum_api_cpu_percent=maximum_api_cpu,
+        maximum_api_memory_percent=maximum_api_memory,
+        maximum_simulator_cpu_percent=maximum_simulator_cpu,
+        maximum_simulator_memory_percent=maximum_simulator_memory,
+        minimum_worker_running_tasks=min(worker_values),
+        maximum_worker_running_tasks=max(worker_values),
+        maximum_worker_cpu_percent=max(values["worker_cpu"]),
+        maximum_dead_letter_queue_messages=maximum_dlq,
+        maximum_rds_cpu_percent=maximum_rds_cpu,
+        maximum_rds_connections=maximum_rds_connections,
+        minimum_rds_freeable_memory_bytes=minimum_rds_memory,
+        maximum_rds_read_latency_seconds=maximum_rds_read_latency,
+        maximum_rds_write_latency_seconds=maximum_rds_write_latency,
+        maximum_rds_read_iops=max(values["rds_read_iops"]),
+        maximum_rds_write_iops=max(values["rds_write_iops"]),
+        maximum_database_pool_utilization_percent=maximum_pool_percent,
+        database_pool_steps_observed=pool_steps,
+        rejection_reasons=tuple(reasons),
+        qualified=not reasons,
+    )
 
 
 def validate_fixed_control_approval(
@@ -411,7 +629,9 @@ def _queue_attributes(
         attributes = loads(result.stdout)
         parsed = {name: int(attributes[name]) for name in names}
     except (JSONDecodeError, KeyError, TypeError, ValueError) as error:
-        raise AwsFixedControlError("SQS returned invalid fixed-control state") from error
+        raise AwsFixedControlError(
+            "SQS returned invalid fixed-control state"
+        ) from error
     if any(value < 0 for value in parsed.values()):
         raise AwsFixedControlError("SQS returned negative fixed-control state")
     return parsed
@@ -521,15 +741,9 @@ def collect_fixed_control_observation(
         durable_outbox_entries=summary.database_outbox.durable,
         pending_outbox_entries=summary.database_outbox.pending_publication,
         source_queue_visible_messages=source["ApproximateNumberOfMessages"],
-        source_queue_in_flight_messages=source[
-            "ApproximateNumberOfMessagesNotVisible"
-        ],
-        source_queue_delayed_messages=source[
-            "ApproximateNumberOfMessagesDelayed"
-        ],
-        dead_letter_queue_messages=dead_letter[
-            "ApproximateNumberOfMessages"
-        ],
+        source_queue_in_flight_messages=source["ApproximateNumberOfMessagesNotVisible"],
+        source_queue_delayed_messages=source["ApproximateNumberOfMessagesDelayed"],
+        dead_letter_queue_messages=dead_letter["ApproximateNumberOfMessages"],
         worker_desired_count=desired,
         worker_running_count=running,
         worker_pending_count=pending,
@@ -543,13 +757,11 @@ def _write_timeline(
     failures: Sequence[FixedControlObservationFailure],
 ) -> None:
     (evidence_root / "observations.json").write_text(
-        dumps([item.model_dump(mode="json") for item in observations], indent=2)
-        + "\n",
+        dumps([item.model_dump(mode="json") for item in observations], indent=2) + "\n",
         encoding="utf-8",
     )
     (evidence_root / "observation-failures.json").write_text(
-        dumps([item.model_dump(mode="json") for item in failures], indent=2)
-        + "\n",
+        dumps([item.model_dump(mode="json") for item in failures], indent=2) + "\n",
         encoding="utf-8",
     )
 
@@ -599,6 +811,32 @@ def _attempt_observation(
     observations.append(observation)
     _write_timeline(evidence_root, observations, failures)
     return observation
+
+
+def _aligned_metric_load_start(
+    definition: ElasticityWorkloadDefinition,
+    *,
+    now: Now,
+    sleeper: Sleeper,
+) -> datetime:
+    """Start near a UTC minute boundary so partial edge buckets publish."""
+    candidate = now()
+    if candidate.utcoffset() is None:
+        raise AwsFixedControlError("fixed-control clock must be timezone-aware")
+    seconds_into_period = candidate.astimezone(UTC).timestamp() % (
+        definition.metric_period_seconds
+    )
+    if seconds_into_period > definition.metric_start_alignment_tolerance_seconds:
+        sleeper(definition.metric_period_seconds - seconds_into_period)
+        candidate = now()
+        seconds_into_period = candidate.astimezone(UTC).timestamp() % (
+            definition.metric_period_seconds
+        )
+    if seconds_into_period > definition.metric_start_alignment_tolerance_seconds:
+        raise AwsFixedControlError(
+            "fixed-control load did not align to the native metric boundary"
+        )
+    return candidate
 
 
 def execute_fixed_control(
@@ -666,7 +904,11 @@ def execute_fixed_control(
             runner=runner,
             **times,
         )
-        load_started_at = now()
+        load_started_at = _aligned_metric_load_start(
+            definition,
+            now=now,
+            sleeper=sleeper,
+        )
         with (evidence_root / "k6.log").open("w", encoding="utf-8") as log_file:
             process = Popen(
                 command,
@@ -702,9 +944,7 @@ def execute_fixed_control(
                         process.kill()
                         process.wait()
         load_ended_at = now()
-        completion = client.post(
-            f"/api/v1/test-runs/{manifest.test_run_id}/complete"
-        )
+        completion = client.post(f"/api/v1/test-runs/{manifest.test_run_id}/complete")
         completion.raise_for_status()
 
         stable_since: datetime | None = None
@@ -724,7 +964,9 @@ def execute_fixed_control(
                 stable_since = None
             elif stable_since is None:
                 stable_since = observed_at
-            elif (observed_at - stable_since).total_seconds() >= empty_stability_seconds:
+            elif (
+                observed_at - stable_since
+            ).total_seconds() >= empty_stability_seconds:
                 drain_stability_confirmed = True
                 break
             sleeper(observation_interval_seconds)
@@ -855,6 +1097,7 @@ def _prepare_fixed_control(
             "api_service_name",
             "cluster_name",
             "dashboard_name",
+            "dead_letter_queue_name",
             "delivery_queue_name",
             "load_balancer_dimension",
             "rds_identifier",
@@ -863,8 +1106,7 @@ def _prepare_fixed_control(
         }
         or not all(isinstance(value, str) and value for value in dimensions.values())
         or CLUSTER_NAME_PATTERN.fullmatch(dimensions["cluster_name"]) is None
-        or SERVICE_NAME_PATTERN.fullmatch(dimensions["worker_service_name"])
-        is None
+        or SERVICE_NAME_PATTERN.fullmatch(dimensions["worker_service_name"]) is None
         or not dimensions["worker_service_name"].endswith("-worker")
         or not isinstance(capacity, dict)
         or set(capacity) != set(FIXED_SERVICE_CAPACITY)
@@ -896,8 +1138,7 @@ def _prepare_fixed_control(
     if (
         capacity["worker"]["desired_count"] != definition.minimum_worker_count
         or capacity["api"]["service_name"] != dimensions["api_service_name"]
-        or capacity["simulator"]["service_name"]
-        != dimensions["simulator_service_name"]
+        or capacity["simulator"]["service_name"] != dimensions["simulator_service_name"]
         or capacity["worker"]["service_name"] != dimensions["worker_service_name"]
     ):
         raise AwsFixedControlError("Terraform returned inconsistent fixed control")
@@ -932,11 +1173,12 @@ def run_fixed_control_session(
     approved_unconditional_teardown_session_id: str,
     definition: ElasticityWorkloadDefinition = ELASTICITY_WORKLOAD_DEFINITION,
     treatment_runner: TreatmentRunner = execute_fixed_control,
+    metric_collector: MetricCollector = collect_elasticity_cloudwatch_evidence,
     runner: ProcessRunner = run_process,
     destroyer: SessionAction = destroy_session,
     teardown_verifier: SessionAction = verify_destroyed,
-) -> FixedControlResult:
-    """Record the fixed control; destroy only after an unexpected workflow error."""
+) -> FixedControlSummary:
+    """Measure and qualify the fixed control before retaining the stack."""
     manifest = validate_fixed_control_approval(
         session,
         approved_session_id=approved_session_id,
@@ -970,16 +1212,49 @@ def run_fixed_control_session(
             definition=definition,
             runner=runner,
         )
+        cloudwatch = metric_collector(
+            session,
+            test_run_id=result.test_run_id,
+            window_started_at=result.load_started_at,
+            window_ended_at=result.load_ended_at,
+            runner=runner,
+        )
+        qualification = evaluate_fixed_control_qualification(result, cloudwatch)
+        summary = FixedControlSummary(
+            measurement=result,
+            cloudwatch=cloudwatch,
+            qualification=qualification,
+        )
+        (evidence_root / "cloudwatch.json").write_text(
+            cloudwatch.model_dump_json(indent=2) + "\n",
+            encoding="utf-8",
+        )
+        (evidence_root / "summary.json").write_text(
+            summary.model_dump_json(indent=2) + "\n",
+            encoding="utf-8",
+        )
         manifest = load_manifest(session)
         manifest["fixed_control"] = {
             **manifest["fixed_control"],
+            "cloudwatch": "elasticity/fixed/cloudwatch.json",
             "measurement_complete": result.measurement_complete,
+            "qualified": qualification.qualified,
             "result": "elasticity/fixed/result.json",
+            "summary": "elasticity/fixed/summary.json",
             "worker_pressure_observed": result.worker_pressure_observed,
         }
-        manifest["status"] = "fixed_control_recorded"
+        manifest["status"] = (
+            "fixed_control_qualified"
+            if qualification.qualified
+            else "fixed_control_rejected"
+        )
         write_manifest(session, manifest)
-        return result
+        if not qualification.qualified:
+            raise AwsFixedControlQualificationError(
+                "fixed-control candidate was rejected: "
+                + ", ".join(qualification.rejection_reasons)
+            )
+        return summary
     except BaseException as workflow_error:
         cleanup_errors = []
         try:
@@ -1037,6 +1312,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (
         AwsFixedControlCleanupError,
         AwsFixedControlError,
+        AwsAsyncDeploymentError,
+        AwsElasticityCloudWatchError,
         AwsSessionError,
         KeyboardInterrupt,
         httpx.HTTPError,

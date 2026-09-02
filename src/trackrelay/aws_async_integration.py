@@ -672,6 +672,7 @@ def collect_async_cloudwatch_evidence(
         "api_service_name",
         "cluster_name",
         "dashboard_name",
+        "dead_letter_queue_name",
         "delivery_queue_name",
         "load_balancer_dimension",
         "rds_identifier",

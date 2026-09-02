@@ -702,8 +702,15 @@ native AWS inventory count was zero.
   database/outbox, SQS, ECS-worker, and API-pool observations plus sanitized
   gaps, require the 180-second stable drain and reconciliation, and leave a
   successful stack intact for reset. Stop k6 and destroy and verify the session
-  on an unexpected workflow failure or interrupt. Native CloudWatch headroom
-  collection and workload qualification remain pending.
+  on an unexpected workflow failure or interrupt.
+- [x] Add strict native fixed-run collection and candidate qualification.
+  Require every overlapping 60-second bucket for ALB request, latency, and
+  error evidence; API, worker, and simulator utilization; fixed worker count;
+  SQS and DLQ state; and RDS CPU, connections, memory, latency, and IOPS. Fill
+  only metrics whose missing publication means zero, require database-pool
+  evidence for every step, and apply the pre-data headroom limits. Retain and
+  tear down a rejected candidate; only `fixed_control_qualified` may proceed to
+  reset and the elastic replay.
 
 - [ ] Make provision, fixed experiment, application-state reset, elastic experiment, result collection, and teardown reproducible through `make aws-up`, `make experiment-fixed`, `make experiment-reset`, `make experiment-elastic`, `make collect-results`, and `make aws-down` (or clearly documented equivalents).
 - [ ] Test the workload driver, reset procedure, metrics collection, reconciliation, and plot generation locally before starting cloud session 4.

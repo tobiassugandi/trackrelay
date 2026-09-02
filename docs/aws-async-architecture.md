@@ -156,12 +156,21 @@ period:
 - ALB target-response p95 in seconds with the frozen 500 ms SLO line;
 - target and load-balancer 4xx/5xx responses as a percentage of observed ALB
   requests, with the frozen 1% SLO line;
-- ECS Container Insights `RunningTaskCount` for the exact worker service;
+- ECS Container Insights `RunningTaskCount` and maximum ECS CPU utilization for
+  the exact worker service;
 - conservative unfinished source-queue work, calculated from the maximum
   visible, in-flight, and delayed SQS counts, alongside visible DLQ messages;
 - the maximum age of the oldest source-queue message in seconds; and
 - maximum API and simulator service CPU and memory utilization with the 70%
   headroom qualification ceiling.
+
+The fixed-control collector additionally freezes complete native ALB error
+counts and RDS CPU, connection, freeable-memory, read/write latency, and IOPS
+series for every overlapping UTC minute. Candidate qualification requires RDS
+CPU below 70%, connections below 50, freeable memory above 128 MiB, read and
+write latency below 20 ms, and an API database-pool observation below 70% for
+every workload step. These limits are fixed before cloud-session-4 data is
+observed.
 
 These service metrics are operational approximations. ALB metrics exclude
 health checks, are sparse without traffic, and `RequestCount` includes only

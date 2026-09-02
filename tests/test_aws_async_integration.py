@@ -339,6 +339,7 @@ def test_cloudwatch_collector_requires_dashboard_and_published_native_series(
         "api_service_name": "trackrelay-12345678-api",
         "cluster_name": "trackrelay-12345678-async",
         "dashboard_name": "trackrelay-12345678-async",
+        "dead_letter_queue_name": "trackrelay-12345678-delivery-dlq",
         "delivery_queue_name": "trackrelay-12345678-delivery",
         "load_balancer_dimension": "app/trackrelay/1234567890abcdef",
         "rds_identifier": "trackrelay-12345678-postgres",

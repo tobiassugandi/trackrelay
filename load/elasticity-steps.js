@@ -49,6 +49,9 @@ for (const [index, step] of workload.steps.entries()) {
   thresholds[`http_req_duration{step:${step.name}}`] = [
     `p(95)<${workload.ingestion_p95_limit_ms}`,
   ];
+  thresholds[`http_reqs{step:${step.name}}`] = [
+    `count==${step.expected_request_count}`,
+  ];
   thresholds[`http_req_failed{step:${step.name}}`] = [
     `rate<${workload.ingestion_error_limit_percent / 100}`,
   ];

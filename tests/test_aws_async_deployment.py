@@ -97,11 +97,12 @@ def ready_session(
     tmp_path: Path,
     *,
     status: str = "applied",
+    session_id: str = SESSION_ID,
 ) -> AwsSession:
     terraform_dir = tmp_path / "terraform"
     terraform_dir.mkdir()
     session = AwsSession(
-        session_id=SESSION_ID,
+        session_id=session_id,
         profile=PROFILE,
         region=REGION,
         api_ingress_cidr="203.0.113.10/32",
@@ -151,7 +152,7 @@ def git_result(arguments: Sequence[str]) -> CompletedProcess[str] | None:
     return None
 
 
-def test_approval_requires_async_session_3_and_exact_cost(
+def test_approval_requires_an_async_session_and_exact_cost(
     tmp_path: Path,
 ) -> None:
     session = ready_session(tmp_path)
@@ -170,6 +171,22 @@ def test_approval_requires_async_session_3_and_exact_cost(
                 "approved_cost_ceiling_usd": "4.26",
             },
         )
+
+
+def test_approval_also_accepts_the_async_cloud_session_4_foundation(
+    tmp_path: Path,
+) -> None:
+    session = ready_session(
+        tmp_path,
+        session_id="cloud-session-4-20260902T090000Z",
+    )
+
+    manifest = validate_async_deployment_approval(
+        session,
+        **approval_arguments(session),
+    )
+
+    assert manifest["session_id"] == session.session_id
 
 
 def test_publish_builds_all_targets_and_records_only_digests(

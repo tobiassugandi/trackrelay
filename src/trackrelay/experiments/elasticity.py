@@ -226,6 +226,7 @@ def build_elasticity_k6_command(
     manifest_path: Path,
     definition_path: Path,
     result_directory: Path,
+    api_url_for_container: str | None = None,
 ) -> tuple[str, ...]:
     """Build the pinned, shell-free k6 invocation for the stepped waveform."""
     repository_root = Path(__file__).resolve().parents[3]
@@ -236,7 +237,10 @@ def build_elasticity_k6_command(
         "--add-host",
         "host.docker.internal:host-gateway",
         "--env",
-        f"TRACKRELAY_API_URL={definition.trackrelay_api_url_for_container}",
+        (
+            "TRACKRELAY_API_URL="
+            f"{api_url_for_container or definition.trackrelay_api_url_for_container}"
+        ),
         "--env",
         "K6_MANIFEST_PATH=/input-manifest.json",
         "--env",

@@ -132,11 +132,13 @@ def validate_async_deployment_approval(
     approved_cost_ceiling_usd: str,
     approved_unconditional_teardown_session_id: str,
 ) -> dict[str, object]:
-    """Require the exact session-3 approval before any workflow side effect."""
-    if not session.session_id.startswith("cloud-session-3-"):
-        raise AwsSessionError("Stage 9.5 deployment must use cloud session 3")
+    """Require an exact async-session approval before any workflow side effect."""
+    if not session.session_id.startswith(("cloud-session-3-", "cloud-session-4-")):
+        raise AwsSessionError(
+            "asynchronous deployment must use cloud session 3 or 4"
+        )
     if session.deployment_mode != "async":
-        raise AwsSessionError("Stage 9.5 deployment requires async mode")
+        raise AwsSessionError("asynchronous deployment requires async mode")
     if approved_session_id != session.session_id:
         raise AwsSessionError("approved session ID does not match")
     if approved_unconditional_teardown_session_id != session.session_id:
@@ -148,7 +150,7 @@ def validate_async_deployment_approval(
     manifest = load_manifest(session)
     if manifest.get("status") != "applied":
         raise AwsSessionError(
-            "Stage 9.5 deployment must start immediately after foundation apply"
+            "asynchronous deployment must start immediately after foundation apply"
         )
     if approved_ceiling != _recorded_cost_ceiling(manifest):
         raise AwsSessionError("approved cost ceiling differs from Terraform apply")
@@ -935,7 +937,7 @@ def deploy_async_stack(
     if cleanup_errors:
         cleanup_errors = [*preparation_errors, *cleanup_errors]
         message = (
-            "Stage 9.5 deployment failed with "
+            "asynchronous deployment failed with "
             f"{type(workflow_error).__name__}: {workflow_error}; cleanup failed: "
             + "; ".join(
                 f"{type(error).__name__}: {error}" for error in cleanup_errors
@@ -976,7 +978,7 @@ def run_from_arguments(arguments: Namespace) -> None:
 
 def _terminate_after_cleanup(_signum: int, _frame: object) -> NoReturn:
     """Translate SIGTERM into an exception so the cleanup path executes."""
-    raise KeyboardInterrupt("received SIGTERM during Stage 9.5 deployment")
+    raise KeyboardInterrupt("received SIGTERM during asynchronous deployment")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -994,7 +996,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit(f"AWS async deployment failed: {error}") from error
     finally:
         signal(SIGTERM, previous_sigterm_handler)
-    print("deployed the fixed asynchronous stack for session-3 integration")
+    print("deployed the fixed asynchronous stack")
     return 0
 
 

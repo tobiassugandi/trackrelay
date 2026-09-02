@@ -696,6 +696,14 @@ native AWS inventory count was zero.
   missing requests or ingestion SLO violations. Treat these rates as a
   candidate until fixed-run evidence proves that the peak exceeds one-worker
   delivery capacity while non-worker tiers retain headroom.
+- [x] Add the guarded fixed-control controller. Accept only an explicitly
+  approved session-4 asynchronous deployment, revalidate the clean revision and
+  exact fixed service capacities, execute the saved waveform, retain aligned
+  database/outbox, SQS, ECS-worker, and API-pool observations plus sanitized
+  gaps, require the 180-second stable drain and reconciliation, and leave a
+  successful stack intact for reset. Stop k6 and destroy and verify the session
+  on an unexpected workflow failure or interrupt. Native CloudWatch headroom
+  collection and workload qualification remain pending.
 
 - [ ] Make provision, fixed experiment, application-state reset, elastic experiment, result collection, and teardown reproducible through `make aws-up`, `make experiment-fixed`, `make experiment-reset`, `make experiment-elastic`, `make collect-results`, and `make aws-down` (or clearly documented equivalents).
 - [ ] Test the workload driver, reset procedure, metrics collection, reconciliation, and plot generation locally before starting cloud session 4.

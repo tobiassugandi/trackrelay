@@ -77,7 +77,7 @@ output "async_api_url" {
 }
 
 output "async_observability_dimensions" {
-  description = "Non-secret dimensions used to collect session-3 CloudWatch evidence."
+  description = "Non-secret dimensions used to collect asynchronous experiment evidence."
   value = var.async_services_enabled && local.async_runtime_enabled ? {
     api_service_name        = aws_ecs_service.async_api[0].name
     cluster_name            = aws_ecs_cluster.async[0].name

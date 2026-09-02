@@ -93,19 +93,59 @@ slice, tags metrics with the step and authoritative offered rate, applies the
 The fixed and elastic treatments use different run IDs but the same definition,
 event shape, random seed, schedule, and thresholds.
 
+## Fixed-control controller
+
+The guarded fixed controller now joins the deployed session-4 stack to the
+candidate driver. It accepts only an approved `cloud-session-4-*` manifest in
+`async_deployed` state, revalidates the clean approved revision, exact fixed
+capacity for all three ECS services, API endpoint, and both queue endpoints,
+then runs:
+
+```shell
+make aws-fixed-control \
+  SESSION_ID="$TRACKRELAY_RUN_SESSION_ID" \
+  API_INGRESS_CIDR="$TRACKRELAY_RUN_API_CIDR" \
+  APPROVED_SESSION_ID="$TRACKRELAY_RUN_SESSION_ID" \
+  APPROVED_COST_CEILING_USD="$TRACKRELAY_RUN_COST_CEILING_USD" \
+  APPROVED_UNCONDITIONAL_TEARDOWN_SESSION_ID="$TRACKRELAY_RUN_SESSION_ID"
+```
+
+The controller registers the exact manifest, launches the shell-free pinned k6
+command, and samples the application database/outbox summary, source queue,
+DLQ, fixed ECS worker counts, and optional API database-pool snapshot every ten
+seconds. It records observation gaps without losing the rest of the timeline,
+requires a 180-second continuously drained window, completes reconciliation,
+and writes these files beneath the session directory:
+
+```text
+elasticity/fixed/workload-definition.json
+elasticity/fixed/input-manifest.json
+elasticity/fixed/k6-summary.json
+elasticity/fixed/k6.log
+elasticity/fixed/observations.json
+elasticity/fixed/observation-failures.json
+elasticity/fixed/result.json
+```
+
+Successful execution changes the session status to `fixed_control_recorded`
+and deliberately leaves the stack running for the reset and elastic replay. An
+unexpected workflow error or interrupt stops the local k6 process, invokes the
+unconditional destroy path, and verifies teardown. A recorded result does not
+yet qualify the workload: native CloudWatch headroom evidence is still needed.
+
 ## Still required before cloud session 4
 
-- A treatment runner that registers the manifest, executes k6, samples aligned
-  database, queue, ECS, ALB, simulator, and RDS evidence, reconciles the run,
-  and retains partial evidence on failure.
+- A native 60-second CloudWatch collector for ALB request/latency, API and
+  simulator CPU/memory, worker CPU/count, SQS backlog, and RDS headroom, plus a
+  qualification evaluator that aligns those series with the fixed timeline.
 - A reset controller that proves database experiment rows, outbox entries,
   queues, DLQ, and simulator receipts are empty without recreating the stack.
 - A bounded worker autoscaling policy and an exact apply/verification boundary
   between the fixed and elastic treatments.
 - A compact result model and plot generator that evaluate sustainable
   end-to-end load and render the aligned causal comparison.
-- Local failure-path tests for the runner, reset, metric collection,
-  reconciliation, plotting, and unconditional session teardown.
+- Local failure-path tests for reset, native metric collection, qualification,
+  plotting, and the complete session teardown sequence.
 
 No cloud-session-4 plan should be proposed until these pieces are locally
 complete and the resource/cost effect of the maximum worker count is reviewed.

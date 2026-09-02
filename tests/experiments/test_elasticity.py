@@ -177,6 +177,15 @@ def test_k6_command_mounts_the_definition_manifest_and_results() -> None:
     assert f"{result_directory.resolve()}:/results" in command
     assert command[-2:] == ("run", "/scripts/elasticity-steps.js")
 
+    cloud_command = build_elasticity_k6_command(
+        ELASTICITY_WORKLOAD_DEFINITION,
+        manifest_path=manifest_path,
+        definition_path=definition_path,
+        result_directory=result_directory,
+        api_url_for_container="http://trackrelay.example.com",
+    )
+    assert "TRACKRELAY_API_URL=http://trackrelay.example.com" in cloud_command
+
 
 def test_prepare_writes_self_describing_replay_inputs(tmp_path: Path) -> None:
     output_directory = tmp_path / "fixed"

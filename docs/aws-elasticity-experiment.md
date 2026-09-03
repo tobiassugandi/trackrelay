@@ -408,12 +408,26 @@ uv run --locked pytest tests/test_aws_elasticity_report.py
 No synthetic test result is a cloud measurement. The real README headline remains
 unpublished until the approved session has produced qualifying evidence.
 
+## Full-session orchestration and local rehearsal
+
+The [session-4 operator runbook](aws-elasticity-runbook.md) documents local
+preflight, the full staged resource envelope, explicit approval, execution,
+negative results, and recovery. `make aws-elasticity-session` starts from the
+fresh reviewed foundation plan and owns apply, deployment, fixed control,
+reset, scaling transition, elastic replay, teardown verification, and offline
+reporting. Do not run `aws-up` before this combined command.
+
+`make elasticity-session-check` rehearses real controllers and their on-disk
+handoffs with simulated external work. It verifies phase ordering, failure and
+interrupt cleanup, qualification rejection, independent destroy/verification
+failures, and offline report retries. The final journal is written before the
+report hashes its inputs. These tests do not provision AWS or establish an
+elasticity result.
+
 ## Still required before cloud session 4
 
-- A full operator runbook and local end-to-end rehearsal across provision,
-  fixed control, reset, transition, elastic replay, final teardown, and reporting.
-- Local failure-path tests for that complete session sequence; individual
-  controllers and plotting already have offline failure coverage.
-
-No cloud-session-4 plan should be proposed until these pieces are locally
-complete and the resource/cost effect of the maximum worker count is reviewed.
+Review current regional pricing and monthly-budget headroom against the full
+resource list, including eight workers and provisioning/teardown time. Agree
+the expected operating window and ceiling, then obtain explicit session-4
+approval. Local workflow readiness is not authorization to spend or a completed
+Stage 9.6/9.7 cloud measurement.

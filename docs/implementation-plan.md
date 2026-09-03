@@ -725,8 +725,27 @@ native AWS inventory count was zero.
   empty one-worker state after apply; include all five resources in teardown
   inventory and destroy and verify the session on any transition failure.
 
-- [ ] Make provision, fixed experiment, application-state reset, elastic experiment, result collection, and teardown reproducible through `make aws-up`, `make experiment-fixed`, `make experiment-reset`, `make experiment-elastic`, `make collect-results`, and `make aws-down` (or clearly documented equivalents).
-- [ ] Test the workload driver, reset procedure, metrics collection, reconciliation, and plot generation locally before starting cloud session 4.
+- [x] Make the complete workflow reproducible through the documented
+  `make aws-plan` / explicit approval / `make aws-elasticity-session` sequence.
+  The combined controller owns foundation apply, deployment, fixed qualification,
+  reset, worker-only transition, elastic replay, one shared destroy/verification
+  attempt, and offline reporting. Retain individual phase commands and manual
+  recovery instructions in `docs/aws-elasticity-runbook.md`; reject partial-run
+  resumes and preserve report source hashes by finalizing the journal first.
+- [x] Test the workload driver, reset procedure, metrics collection,
+  reconciliation, and plot generation locally before starting cloud session 4.
+  Validate the pinned k6 driver and all three container images; pass the Python
+  and mocked-provider Terraform suites. Add a full-session offline rehearsal
+  using real controllers and serialized handoffs with simulated external work,
+  covering phase failure/interrupts, qualification rejection, journal failure,
+  independent cleanup errors, and report retries. This is local validation,
+  not execution against AWS.
+
+The remaining checkboxes describe authorization and actual cloud execution.
+The eight-worker resource envelope is documented; regional pricing, budget
+headroom, expected operating window, and the explicit session-4 approval still
+need review. Cloud session 4 has not been provisioned or measured.
+
 - [ ] **You:** Explicitly authorize cloud session 4 after reviewing its resource list, region, expected experiment duration, cost ceiling, and teardown command.
 - [ ] Provision the final experiment environment once and record its immutable application and infrastructure versions.
 - [ ] Disable worker autoscaling and fix the worker tier at its documented minimum task count.

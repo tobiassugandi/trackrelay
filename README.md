@@ -119,6 +119,12 @@ make aws-check \
 
 AWS credentials remain in the developer's standard private AWS CLI configuration and must never be added to this repository.
 
+For the fixed-versus-elastic experiment, use the
+[cloud-session-4 operator runbook](docs/aws-elasticity-runbook.md). It covers
+local rehearsal, approval of the full staged resource envelope, the single
+`make aws-elasticity-session` command, verified teardown, and offline reporting.
+Local readiness does not mean session 4 has been authorized or measured.
+
 ### Application container images
 
 The multi-stage Dockerfile builds three production-style OCI images from the

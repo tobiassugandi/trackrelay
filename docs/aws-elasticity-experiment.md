@@ -259,12 +259,82 @@ verification timeout, HTTP/AWS failure, or interrupt destroys and natively
 verifies the complete session. Native teardown includes the target, policies,
 and alarms even if Terraform state is unexpectedly incomplete.
 
+## Elastic-treatment controller and final teardown
+
+The locally tested elastic controller accepts only `worker_autoscaling_verified`.
+It reads and re-evaluates the saved fixed qualification, verifies that the reset
+and transition reference that exact fixed run, and reuses its unchanged workload
+definition. The shared engine registers a new run ID, uses the same driver and
+ten-second observations, and applies the same 1,200-second post-load drain
+deadline, 180-second stable-empty window, and reconciliation. A driver that
+exceeds the scheduled duration by 120 seconds is stopped and triggers cleanup
+in either treatment.
+
+Before sending traffic, the controller requires empty application and queue
+state at one worker, unchanged approved Git revision and image digests, stable
+API/simulator capacities, and the exact native autoscaling policy. A read-only
+Terraform plan must report no changes; the controller never applies that plan.
+It repeats the configuration, non-worker capacity, and policy checks after
+collection. Any mismatch invalidates the run and triggers cleanup.
+
+For an explicitly authorized future session, after the transition succeeds:
+
+```shell
+make aws-elastic-treatment \
+  SESSION_ID="$TRACKRELAY_RUN_SESSION_ID" \
+  API_INGRESS_CIDR="$TRACKRELAY_RUN_API_CIDR" \
+  APPROVED_SESSION_ID="$TRACKRELAY_RUN_SESSION_ID" \
+  APPROVED_COST_CEILING_USD="$TRACKRELAY_RUN_COST_CEILING_USD" \
+  APPROVED_UNCONDITIONAL_TEARDOWN_SESSION_ID="$TRACKRELAY_RUN_SESSION_ID"
+```
+
+The pre-data elastic contract adds these explicit qualification bounds:
+
+- Outstanding accepted events, sampled queue work, and the conservative sum of
+  native visible/in-flight/delayed maxima may not exceed 1,500. This is one
+  minute of offered peak traffic, not a capacity inferred from measured data.
+- Native oldest-message age may not exceed 180 seconds. This bounds time spent
+  waiting in SQS; final reconciliation and the unchanged drain deadline still
+  cover completion outside SQS, including unpublished outbox work.
+- Desired and running workers must remain within 1–8. Both live samples and
+  native metrics must show expansion before recovery; a desired count of eight
+  without actual running workers does not pass.
+- During the five-minute low-rate recovery, the sampled one-worker suffix must
+  last at least 60 seconds and reach within 30 seconds of the waveform's end.
+  The last complete native recovery minute must also show one running worker.
+  Returning to one only after traffic stops does not pass.
+- Observation gaps above 30 seconds, missing API-pool coverage, any observed
+  DLQ messages, incomplete scheduling, correctness failures, or any shared
+  ingestion/non-worker headroom violation reject the treatment.
+
+These are experiment acceptance criteria, not measured production limits. They
+are saved before traffic in `elasticity/elastic/contract.json`; they do not
+change the workload, ingestion SLOs, or drain rules between treatments.
+
+The controller retains the same workload, manifest, driver log, observations,
+result, native metrics, and summary filenames as the fixed controller beneath
+`elasticity/elastic/`. It also saves `pre-load.json`, before/after read-only
+plans and hashes, plan logs, and native policy verification. `summary.json`
+contains the contract, policy, exact fixed-run link, shared guardrail decision,
+and elastic qualification. Machine-loaded result/summary JSON excludes computed
+fields and recomputes them on read; the driver definition still includes its
+required computed counts.
+
+**This command tears the stack down even on success.** It secures the fixed and
+elastic evidence first, records `elastic_treatment_qualified` or
+`elastic_treatment_rejected`, then destroys the session and natively verifies
+teardown. Final lifecycle status is `teardown_verified`; treatment outcome
+remains in `elastic_treatment.qualified` and the retained summary. Failure or
+interrupt also attempts both destroy and verification, preserving cleanup errors
+alongside the original failure. No cloud experiment has yet been executed.
+
 ## Still required before cloud session 4
 
 - A compact result model and plot generator that evaluate sustainable
   end-to-end load and render the aligned causal comparison.
-- Local failure-path tests for plotting and the complete session teardown
-  sequence.
+- A full operator runbook and local end-to-end rehearsal across provision,
+  fixed control, reset, transition, elastic replay, and final teardown.
+- Local failure-path tests for plotting and that complete session sequence.
 
 No cloud-session-4 plan should be proposed until these pieces are locally
 complete and the resource/cost effect of the maximum worker count is reviewed.

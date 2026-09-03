@@ -280,6 +280,21 @@ aws-experiment-reset:
 		--approved-cost-ceiling-usd "$(APPROVED_COST_CEILING_USD)" \
 		--approved-unconditional-teardown-session-id "$(APPROVED_UNCONDITIONAL_TEARDOWN_SESSION_ID)"
 
+.PHONY: aws-elastic-treatment
+aws-elastic-treatment:
+	$(UV) run --locked trackrelay-aws-elastic-treatment \
+		--session-id "$(SESSION_ID)" \
+		--profile "$(TRACKRELAY_AWS_PROFILE)" \
+		--region "$(TRACKRELAY_AWS_REGION)" \
+		--api-ingress-cidr "$(API_INGRESS_CIDR)" \
+		--deployment-mode async \
+		--rehost-instance-type "$(REHOST_INSTANCE_TYPE)" \
+		--terraform-dir "$(TERRAFORM_DIR)" \
+		--evidence-root "$(AWS_SESSION_RESULTS)" \
+		--approved-session-id "$(APPROVED_SESSION_ID)" \
+		--approved-cost-ceiling-usd "$(APPROVED_COST_CEILING_USD)" \
+		--approved-unconditional-teardown-session-id "$(APPROVED_UNCONDITIONAL_TEARDOWN_SESSION_ID)"
+
 aws-elasticity-transition:
 	$(UV) run --locked trackrelay-aws-elasticity-transition \
 		--session-id "$(SESSION_ID)" \

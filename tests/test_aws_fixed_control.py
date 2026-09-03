@@ -8,7 +8,7 @@ from subprocess import CompletedProcess
 from uuid import UUID
 
 import httpx
-from pytest import MonkeyPatch, raises
+from pytest import MonkeyPatch, mark, raises
 
 from trackrelay.aws_elasticity_cloudwatch import (
     ElasticityCloudWatchDatapoint,
@@ -25,6 +25,7 @@ from trackrelay.aws_fixed_control import (
     collect_fixed_control_observation,
     derive_ingestion_steps,
     evaluate_fixed_control_qualification,
+    execute_elasticity_workload,
     execute_fixed_control,
     run_fixed_control_session,
     validate_fixed_control_approval,
@@ -35,7 +36,10 @@ from trackrelay.aws_session import (
     load_manifest,
     write_manifest,
 )
-from trackrelay.experiments.elasticity import ELASTICITY_WORKLOAD_DEFINITION
+from trackrelay.experiments.elasticity import (
+    ELASTICITY_WORKLOAD_DEFINITION,
+    ElasticityTreatment,
+)
 from trackrelay.experiments.reconciliation import ReconciliationReport
 from trackrelay.runtime_metrics import DatabasePoolMetrics, RuntimeMetricsSnapshot
 
@@ -439,9 +443,11 @@ def test_live_observation_aligns_database_queue_and_fixed_worker(
     assert not observed.processing_drained
 
 
+@mark.parametrize("treatment", tuple(ElasticityTreatment))
 def test_execution_uses_definition_and_confirms_stable_drain(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
+    treatment: ElasticityTreatment,
 ) -> None:
     session = ready_session(tmp_path)
     definition = ELASTICITY_WORKLOAD_DEFINITION
@@ -546,8 +552,17 @@ def test_execution_uses_definition_and_confirms_stable_drain(
         base_url=API_URL,
         transport=httpx.MockTransport(handler),
     ) as client:
-        result = execute_fixed_control(
+        execute = (
+            execute_fixed_control
+            if treatment is ElasticityTreatment.FIXED
+            else execute_elasticity_workload
+        )
+        treatment_arguments = (
+            {} if treatment is ElasticityTreatment.FIXED else {"treatment": treatment}
+        )
+        result = execute(
             session,
+            **treatment_arguments,
             api_url=API_URL,
             source_queue_url=SOURCE_QUEUE_URL,
             dead_letter_queue_url=DLQ_URL,
@@ -561,6 +576,11 @@ def test_execution_uses_definition_and_confirms_stable_drain(
         )
 
     assert registered[0]["events_generated"] == count
+    assert registered[0]["scenario_name"] == (
+        "elasticity-fixed-control"
+        if treatment is ElasticityTreatment.FIXED
+        else "elasticity-elastic-treatment"
+    )
     assert result.drain_stability_confirmed is True
     assert result.measurement_complete is True
     assert result.worker_pressure_observed is False

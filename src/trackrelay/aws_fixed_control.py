@@ -177,8 +177,8 @@ class FixedControlIngestionStepResult(BaseModel):
         )
 
 
-class FixedControlResult(BaseModel):
-    """Compact fixed-worker result without claiming autoscaling evidence."""
+class ElasticityResult(BaseModel):
+    """Shared measurement contract for both causal treatments."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -196,7 +196,7 @@ class FixedControlResult(BaseModel):
     reconciliation: ReconciliationReport
 
     @model_validator(mode="after")
-    def require_consistent_fixed_control(self) -> "FixedControlResult":
+    def require_consistent_fixed_control(self) -> "ElasticityResult":
         if self.load_ended_at <= self.load_started_at:
             raise ValueError("fixed-control load window must be positive")
         if tuple(item.step_name for item in self.ingestion_steps) != tuple(
@@ -280,7 +280,6 @@ class FixedControlResult(BaseModel):
     def measurement_complete(self) -> bool:
         return (
             self.ingestion_guardrails_passed
-            and self.fixed_worker_contract_preserved
             and self.correctness_guardrails_passed
             and self.processing_drained
             and self.drain_stability_confirmed
@@ -288,8 +287,17 @@ class FixedControlResult(BaseModel):
         )
 
 
-class FixedControlQualification(BaseModel):
-    """Fail-closed decision that the candidate isolates the worker tier."""
+class FixedControlResult(ElasticityResult):
+    """The shared measurement additionally requires a fixed one-worker tier."""
+
+    @computed_field
+    @property
+    def measurement_complete(self) -> bool:
+        return super().measurement_complete and self.fixed_worker_contract_preserved
+
+
+class ElasticityGuardrailQualification(BaseModel):
+    """Shared ingestion, correctness, evidence, and non-worker headroom gates."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -319,10 +327,14 @@ class FixedControlQualification(BaseModel):
     qualified: bool
 
     @model_validator(mode="after")
-    def require_consistent_decision(self) -> "FixedControlQualification":
+    def require_consistent_decision(self) -> "ElasticityGuardrailQualification":
         if self.qualified is bool(self.rejection_reasons):
             raise ValueError("fixed-control qualification disagrees with reasons")
         return self
+
+
+class FixedControlQualification(ElasticityGuardrailQualification):
+    """The candidate additionally requires fixed capacity and worker pressure."""
 
 
 class FixedControlSummary(BaseModel):
@@ -360,7 +372,7 @@ def _series_values(
 
 
 def _database_pool_evidence(
-    result: FixedControlResult,
+    result: ElasticityResult,
 ) -> tuple[float | None, tuple[str, ...]]:
     utilizations: list[float] = []
     observed_steps: set[str] = set()
@@ -392,13 +404,18 @@ def _database_pool_evidence(
     )
 
 
-def evaluate_fixed_control_qualification(
-    result: FixedControlResult,
+def evaluate_treatment_guardrails(
+    result: ElasticityResult,
     cloudwatch: ElasticityCloudWatchEvidence,
-) -> FixedControlQualification:
-    """Require worker pressure while every frozen non-worker guardrail passes."""
+) -> ElasticityGuardrailQualification:
+    """Apply the identical non-treatment-specific qualification to both runs."""
     if result.test_run_id != cloudwatch.test_run_id:
         raise ValueError("fixed-control and CloudWatch evidence use different runs")
+    if (
+        result.load_started_at != cloudwatch.window_started_at
+        or result.load_ended_at != cloudwatch.window_ended_at
+    ):
+        raise ValueError("treatment CloudWatch window is misaligned")
     values = {
         query_id: _series_values(cloudwatch, query_id)
         for query_id in cloudwatch.series_by_id()
@@ -418,13 +435,7 @@ def evaluate_fixed_control_qualification(
     reasons: list[str] = []
     if not result.measurement_complete:
         reasons.append("measurement_incomplete")
-    if not result.worker_pressure_observed:
-        reasons.append("worker_pressure_not_observed")
     worker_values = values["worker_running_tasks"]
-    if any(
-        abs(value - definition.minimum_worker_count) > 0.01 for value in worker_values
-    ):
-        reasons.append("fixed_worker_metric_drift")
     if native_request_count < definition.expected_request_count:
         reasons.append("native_request_count_incomplete")
     maximum_p95_ms = 1000 * max(values["alb_p95_latency"])
@@ -471,7 +482,7 @@ def evaluate_fixed_control_qualification(
     maximum_dlq = max(values["dead_letter_queue_visible"])
     if maximum_dlq > 0:
         reasons.append("native_dead_letter_queue_not_empty")
-    return FixedControlQualification(
+    return ElasticityGuardrailQualification(
         test_run_id=result.test_run_id,
         native_request_count=native_request_count,
         native_request_error_percent=native_error_percent,
@@ -495,6 +506,29 @@ def evaluate_fixed_control_qualification(
         database_pool_steps_observed=pool_steps,
         rejection_reasons=tuple(reasons),
         qualified=not reasons,
+    )
+
+
+def evaluate_fixed_control_qualification(
+    result: FixedControlResult,
+    cloudwatch: ElasticityCloudWatchEvidence,
+) -> FixedControlQualification:
+    """Require worker pressure while every frozen non-worker guardrail passes."""
+    common = evaluate_treatment_guardrails(result, cloudwatch)
+    reasons = list(common.rejection_reasons)
+    if not result.worker_pressure_observed:
+        reasons.append("worker_pressure_not_observed")
+    if any(
+        abs(value - result.definition.minimum_worker_count) > 0.01
+        for value in _series_values(cloudwatch, "worker_running_tasks")
+    ):
+        reasons.append("fixed_worker_metric_drift")
+    return FixedControlQualification(
+        **{
+            **common.model_dump(),
+            "rejection_reasons": tuple(reasons),
+            "qualified": not reasons,
+        }
     )
 
 
@@ -839,9 +873,10 @@ def _aligned_metric_load_start(
     return candidate
 
 
-def execute_fixed_control(
+def execute_elasticity_workload(
     session: AwsSession,
     *,
+    treatment: ElasticityTreatment,
     api_url: str,
     source_queue_url: str,
     dead_letter_queue_url: str,
@@ -856,10 +891,10 @@ def execute_fixed_control(
     post_load_timeout_seconds: float = 1200,
     empty_stability_seconds: float = 180,
     api_client: httpx.Client | None = None,
-) -> FixedControlResult:
-    """Run k6, sample continuously, reconcile, and retain the measured control."""
+) -> ElasticityResult:
+    """Replay either treatment with identical sampling and drain semantics."""
     manifest = build_elasticity_manifest(
-        ElasticityTreatment.FIXED,
+        treatment,
         definition=definition,
     )
     definition_path = evidence_root / "workload-definition.json"
@@ -919,12 +954,19 @@ def execute_fixed_control(
             )
             try:
                 while True:
+                    observed_at = now()
+                    if (observed_at - load_started_at).total_seconds() > (
+                        definition.duration_seconds + 120
+                    ):
+                        raise AwsFixedControlError(
+                            "elasticity workload driver timed out"
+                        )
                     _attempt_observation(
                         collector,
                         evidence_root=evidence_root,
                         observations=observations,
                         failures=failures,
-                        observed_at=now(),
+                        observed_at=observed_at,
                         load_started_at=load_started_at,
                         load_ended_at=None,
                     )
@@ -993,7 +1035,12 @@ def execute_fixed_control(
         if "dropped_iterations" in k6_summary.get("metrics", {})
         else 0
     )
-    result = FixedControlResult(
+    result_type = (
+        FixedControlResult
+        if treatment is ElasticityTreatment.FIXED
+        else ElasticityResult
+    )
+    result = result_type(
         test_run_id=manifest.test_run_id,
         definition=definition,
         load_started_at=load_started_at,
@@ -1007,9 +1054,18 @@ def execute_fixed_control(
         reconciliation=reconciliation,
     )
     (evidence_root / "result.json").write_text(
-        result.model_dump_json(indent=2) + "\n",
+        result.model_dump_json(indent=2, round_trip=True) + "\n",
         encoding="utf-8",
     )
+    return result
+
+
+def execute_fixed_control(session: AwsSession, **kwargs: object) -> FixedControlResult:
+    """Run the fixed treatment through the shared measurement engine."""
+    result = execute_elasticity_workload(
+        session, treatment=ElasticityTreatment.FIXED, **kwargs
+    )
+    assert isinstance(result, FixedControlResult)
     return result
 
 
@@ -1056,6 +1112,7 @@ def _prepare_fixed_control(
     manifest: dict[str, object],
     definition: ElasticityWorkloadDefinition,
     runner: ProcessRunner,
+    treatment: ElasticityTreatment = ElasticityTreatment.FIXED,
 ) -> tuple[str, str, str, str, str, Path]:
     """Validate fixed capacity, resolve endpoints, and arm the control."""
     _current, revision = require_clean_approved_revision(session, runner=runner)
@@ -1142,16 +1199,24 @@ def _prepare_fixed_control(
         or capacity["worker"]["service_name"] != dimensions["worker_service_name"]
     ):
         raise AwsFixedControlError("Terraform returned inconsistent fixed control")
-    evidence_root = session.evidence_dir / "elasticity" / "fixed"
+    evidence_root = session.evidence_dir / "elasticity" / treatment.value
     evidence_root.mkdir(parents=True, exist_ok=False)
     manifest.update(
         {
-            "fixed_control": {
+            (
+                "fixed_control"
+                if treatment is ElasticityTreatment.FIXED
+                else "elastic_treatment"
+            ): {
                 "definition": definition.model_dump(mode="json"),
                 "git_revision": revision,
                 "unconditional_teardown_armed": True,
             },
-            "status": "fixed_control_armed",
+            "status": (
+                "fixed_control_armed"
+                if treatment is ElasticityTreatment.FIXED
+                else "elastic_treatment_armed"
+            ),
         }
     )
     write_manifest(session, manifest)
@@ -1230,7 +1295,7 @@ def run_fixed_control_session(
             encoding="utf-8",
         )
         (evidence_root / "summary.json").write_text(
-            summary.model_dump_json(indent=2) + "\n",
+            summary.model_dump_json(indent=2, round_trip=True) + "\n",
             encoding="utf-8",
         )
         manifest = load_manifest(session)

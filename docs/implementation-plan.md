@@ -737,7 +737,21 @@ native AWS inventory count was zero.
 
 ### Stage 9.7 — Enable and measure worker elasticity
 
-- [x] Reset application data, queues, simulator state, and measurements without recreating or resizing the infrastructure.
+- [x] Implement and locally test the application/queue/simulator reset without
+  recreating or resizing infrastructure; live execution remains part of session 4.
+- [x] Implement the guarded elastic replay and qualification controller. Require
+  the qualified fixed summary and matching verified policy transition, reuse the
+  exact workload/sampling/drain/reconciliation engine, verify unchanged Terraform
+  configuration and native policy before and after replay, and retain both
+  treatments before unconditional teardown and native verification. Require
+  sampled and native scale-out before recovery, at least 60 seconds back at one
+  worker during recovery, complete observations, bounded backlog/age, and all
+  shared correctness, ingestion, and non-worker headroom gates. Locally test
+  rejection, drift, interruption, serialization handoff, and cleanup failures.
+
+The remaining checkboxes below describe actual cloud execution, not local code
+readiness. Cloud session 4 has not been authorized, provisioned, or run.
+
 - [ ] Enable a documented worker scaling policy with the same minimum task count and a bounded maximum; use queue backlog or backlog per task as the demand signal.
 - [ ] Replay the fixed-control workload without changing the application, task definition, API capacity, database, simulator, benchmark driver, SLO, or guardrails.
 - [ ] Verify that workers scale from A to B as load rises, backlog remains bounded and drains, and workers return to A after demand falls.

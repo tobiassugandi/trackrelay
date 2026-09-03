@@ -174,6 +174,52 @@ def test_collector_retries_until_full_window_is_published(tmp_path: Path) -> Non
     assert observed_return_ids == {
         definition.query_id for definition in metric_definitions()
     }
+    root = next((aws_session.evidence_dir / "diagnostics").rglob("request.json")).parent
+    assert (root / "attempt-01.json").read_text() == metric_response(
+        omit_last_bucket_for="rds_cpu"
+    )
+    assert (root / "attempt-02.json").read_text() == metric_response()
+    assert loads((root / "collection-status.json").read_text())["complete"]
+
+
+def test_permanent_simulator_metric_gap_is_preserved_and_not_filled(tmp_path):
+    aws_session = session(tmp_path)
+    raw = loads(metric_response())
+    for series in raw["MetricDataResults"]:
+        if series["Id"] in {"simulator_cpu", "simulator_memory"}:
+            series["Timestamps"].pop(1)
+            series["Values"].pop(1)
+
+    def runner(arguments, _input):
+        if arguments[-1] == "async_observability_dimensions":
+            return completed(arguments, stdout=dumps(DIMENSIONS))
+        if "get-dashboard" in arguments:
+            return completed(
+                arguments,
+                stdout=dumps(
+                    {
+                        "DashboardName": DIMENSIONS["dashboard_name"],
+                        "DashboardBody": dumps({"widgets": [{"type": "metric"}] * 7}),
+                    }
+                ),
+            )
+        return completed(arguments, stdout=dumps(raw))
+
+    waits = []
+    with raises(AwsElasticityCloudWatchError, match="simulator_cpu.*unpublished"):
+        collect_elasticity_cloudwatch_evidence(
+            aws_session,
+            test_run_id=TEST_RUN_ID,
+            window_started_at=STARTED_AT,
+            window_ended_at=ENDED_AT,
+            runner=runner,
+            sleeper=waits.append,
+            maximum_attempts=2,
+        )
+    root = next((aws_session.evidence_dir / "diagnostics").rglob("request.json")).parent
+    assert loads((root / "attempt-02.json").read_text()) == raw
+    assert not loads((root / "collection-status.json").read_text())["complete"]
+    assert waits == [15]
 
 
 def test_query_builder_rejects_missing_dimensions() -> None:

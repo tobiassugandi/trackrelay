@@ -641,6 +641,29 @@ def test_fixed_control_qualification_rejects_non_worker_saturation() -> None:
     assert qualification.rejection_reasons == ("api_cpu_headroom_failed",)
 
 
+def test_simulator_receipt_loss_cannot_pass_despite_ingestion_and_stable_drain():
+    result = passing_result()
+    count = result.reconciliation.generated
+    result = result.model_copy(
+        update={
+            "reconciliation": result.reconciliation.model_copy(
+                update={
+                    "unaccounted": 357,
+                    "simulator_receipts": count - 357,
+                    "simulator_unique_events": count - 357,
+                    "invariants_passed": False,
+                }
+            )
+        }
+    )
+    assert result.ingestion_guardrails_passed
+    assert result.processing_drained and result.drain_stability_confirmed
+    assert not result.correctness_guardrails_passed
+    qualification = evaluate_fixed_control_qualification(result, cloudwatch_evidence())
+    assert not qualification.qualified
+    assert "measurement_incomplete" in qualification.rejection_reasons
+
+
 def test_rejected_candidate_saves_evidence_then_destroys(tmp_path: Path) -> None:
     aws_session = ready_session(tmp_path)
     expected = passing_result()

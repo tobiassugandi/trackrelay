@@ -57,7 +57,7 @@ def simulator_status(mode: SimulatorMode) -> SimulatorStatusResponse:
 
 
 @app.get("/health/live", tags=["health"])
-def liveness() -> dict[str, str]:
+async def liveness() -> dict[str, str]:
     """Report that the downstream simulator process is running."""
     return {"status": "ok"}
 

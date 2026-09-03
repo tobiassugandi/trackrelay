@@ -4,6 +4,7 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from json import JSONDecodeError, dumps, loads
 from math import ceil, floor, isfinite
+from pathlib import Path
 from tempfile import NamedTemporaryFile
 from time import sleep
 from typing import Annotated, Literal, NamedTuple
@@ -486,6 +487,7 @@ def collect_elasticity_cloudwatch_evidence(
     sleeper: Sleeper = sleep,
     maximum_attempts: int = 8,
     retry_interval_seconds: float = 15,
+    evidence_root: Path | None = None,
 ) -> ElasticityCloudWatchEvidence:
     """Retry boundedly until the dashboard and full native window are published."""
     raw_dimensions = terraform_output(
@@ -533,6 +535,30 @@ def collect_elasticity_cloudwatch_evidence(
 
     query_started_at = _floor_minute(window_started_at)
     query_ended_at = _ceil_minute(window_ended_at)
+    # Keep the actual partial responses, not just a summary written on success.
+    # They cannot satisfy the typed complete-window contract or promote a run.
+    evidence_root = evidence_root or (
+        session.evidence_dir
+        / "diagnostics"
+        / "cloudwatch"
+        / str(test_run_id)
+        / datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    )
+    evidence_root.mkdir(parents=True, exist_ok=True)
+    (evidence_root / "request.json").write_text(
+        dumps(
+            {
+                "test_run_id": str(test_run_id),
+                "dimensions": dimensions,
+                "start_time": query_started_at.isoformat(),
+                "end_time": query_ended_at.isoformat(),
+                "queries": query_document,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     last_error: IncompleteElasticityCloudWatchError | None = None
     for attempt in range(1, maximum_attempts + 1):
         with NamedTemporaryFile(
@@ -562,15 +588,37 @@ def collect_elasticity_cloudwatch_evidence(
                 action="CloudWatch elasticity metric collection",
             )
         try:
-            return parse_elasticity_metric_response(
+            # Metric responses contain numbers/timestamps, never event payloads.
+            (evidence_root / f"attempt-{attempt:02d}.json").write_text(
+                result.stdout, encoding="utf-8"
+            )
+            evidence = parse_elasticity_metric_response(
                 result.stdout,
                 test_run_id=test_run_id,
                 window_started_at=window_started_at,
                 window_ended_at=window_ended_at,
                 collected_at=now(),
             )
+            (evidence_root / "collection-status.json").write_text(
+                dumps({"complete": True, "attempt": attempt}) + "\n", encoding="utf-8"
+            )
+            return evidence
         except IncompleteElasticityCloudWatchError as error:
             last_error = error
+            (evidence_root / "collection-status.json").write_text(
+                dumps(
+                    {
+                        "attempt": attempt,
+                        "complete": False,
+                        "collected_at": now().isoformat(),
+                        "type": type(error).__name__,
+                        "message": str(error),
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             if attempt < maximum_attempts:
                 sleeper(retry_interval_seconds)
     raise AwsElasticityCloudWatchError(

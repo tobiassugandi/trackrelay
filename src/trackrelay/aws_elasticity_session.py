@@ -7,6 +7,7 @@ from signal import SIGTERM, getsignal, signal
 from typing import NoReturn
 
 from trackrelay.aws_async_deployment import deploy_async_stack
+from trackrelay.aws_diagnostics import capture_ecs_diagnostics, error_evidence
 from trackrelay.aws_elastic_treatment import run_elastic_treatment_session
 from trackrelay.aws_elasticity_report import (
     ElasticityComparisonReport,
@@ -47,7 +48,10 @@ class ElasticitySessionError(RuntimeError):
     ) -> None:
         super().__init__(
             "session 4 did not complete; inspect the retained phase journal and "
-            "verify teardown before retrying any offline report"
+            "verify teardown before retrying any offline report. "
+            f"Workflow: {error_evidence(workflow_error)}; "
+            f"cleanup: {[error_evidence(error) for error in cleanup_errors]}; "
+            f"report: {error_evidence(report_error)}"
         )
         self.workflow_error = workflow_error
         self.cleanup_errors = tuple(cleanup_errors)
@@ -58,7 +62,12 @@ class _CleanupOwner:
     """Share one destroy/verify attempt across outer and nested controllers."""
 
     def __init__(
-        self, session: AwsSession, destroyer: SessionAction, verifier: SessionAction
+        self,
+        session: AwsSession,
+        destroyer: SessionAction,
+        verifier: SessionAction,
+        diagnostic_collector: SessionAction,
+        runner: CommandRunner,
     ):
         self.session = session
         self.destroyer = destroyer
@@ -66,6 +75,9 @@ class _CleanupOwner:
         self.destroy_attempted = False
         self.verify_attempted = False
         self.errors: list[BaseException] = []
+        self.diagnostic_errors: list[BaseException] = []
+        self.diagnostic_collector = diagnostic_collector
+        self.runner = runner
 
     def destroy(self, session: AwsSession) -> None:
         if self.destroy_attempted:
@@ -74,6 +86,10 @@ class _CleanupOwner:
         try:
             if session != self.session:
                 raise AwsSessionError("cleanup session identity changed")
+            try:
+                self.diagnostic_collector(session, runner=self.runner)
+            except BaseException as error:  # noqa: BLE001 - even failed diagnostics must not block teardown
+                self.diagnostic_errors.append(error)
             self.destroyer(session)
         except BaseException as error:
             self.errors.append(error)
@@ -145,6 +161,9 @@ def _journal(
     phase: str,
     completed: list[str],
     error: BaseException | None = None,
+    cleanup_errors: Sequence[BaseException] = (),
+    failed_phase: str | None = None,
+    diagnostic_errors: Sequence[BaseException] = (),
 ) -> None:
     manifest = load_manifest(session)
     manifest["elasticity_session"] = {
@@ -152,6 +171,10 @@ def _journal(
         "completed_phases": list(completed),
         "updated_at": datetime.now(UTC).isoformat(),
         "workflow_error_type": type(error).__name__ if error else None,
+        "workflow_error": error_evidence(error),
+        "cleanup_errors": [error_evidence(item) for item in cleanup_errors],
+        "failed_phase": failed_phase,
+        "diagnostic_errors": [error_evidence(item) for item in diagnostic_errors],
         "unconditional_teardown_armed": True,
     }
     write_manifest(session, manifest)
@@ -174,6 +197,7 @@ def run_elasticity_session(
     reporter: Callable[..., ElasticityComparisonReport] = generate_elasticity_report,
     destroyer: SessionAction = destroy_session,
     teardown_verifier: SessionAction = verify_destroyed,
+    diagnostic_collector: SessionAction = capture_ecs_diagnostics,
 ) -> ElasticityComparisonReport:
     """Run once, clean up once, and render only after AWS absence is established."""
     approval = {
@@ -184,9 +208,12 @@ def run_elasticity_session(
     validate_elasticity_session_approval(
         session, **approval, monthly_budget_usd=monthly_budget_usd, runner=runner
     )
-    cleanup = _CleanupOwner(session, destroyer, teardown_verifier)
+    cleanup = _CleanupOwner(
+        session, destroyer, teardown_verifier, diagnostic_collector, runner
+    )
     completed: list[str] = []
     workflow_error: BaseException | None = None
+    active_phase = "foundation"
     try:
         _journal(session, "foundation", completed)
         foundation_applier(
@@ -208,6 +235,7 @@ def run_elasticity_session(
             ("transition", transition_runner, "worker_autoscaling_verified"),
             ("elastic", elastic_runner, "teardown_verified"),
         ):
+            active_phase = name
             _journal(session, name, completed)
             action(
                 session,
@@ -222,21 +250,26 @@ def run_elasticity_session(
         workflow_error = error
     finally:
         cleanup.finish()
+    # Finalize the journal before reporting: the report hashes session.json.
+    # Cleanup failures must not skip this write and hide the initiating failure.
+    try:
+        _journal(
+            session,
+            "cloud_failed" if workflow_error or cleanup.errors else "cloud_complete",
+            completed,
+            workflow_error,
+            cleanup_errors=cleanup.errors,
+            failed_phase=active_phase if workflow_error else None,
+            diagnostic_errors=cleanup.diagnostic_errors,
+        )
+    except BaseException as error:
+        raise ElasticitySessionError(
+            workflow_error=workflow_error or error, cleanup_errors=cleanup.errors
+        ) from error
     if cleanup.errors:
         raise ElasticitySessionError(
             workflow_error=workflow_error, cleanup_errors=cleanup.errors
         ) from workflow_error
-
-    # Finalize the journal before reporting: the report hashes session.json.
-    try:
-        _journal(
-            session,
-            "cloud_failed" if workflow_error else "cloud_complete",
-            completed,
-            workflow_error,
-        )
-    except BaseException as error:
-        raise ElasticitySessionError(workflow_error=workflow_error or error) from error
     report = None
     report_error = None
     elastic_evidence = load_manifest(session).get("elastic_treatment")

@@ -171,13 +171,14 @@ resource "aws_ecs_task_definition" "async_api" {
         command = [
           "CMD",
           "python",
-          "-c",
-          "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health/live', timeout=1).read()",
+          "-m",
+          "trackrelay.healthcheck",
+          "8000",
         ]
         interval    = 10
         retries     = 3
-        startPeriod = 5
-        timeout     = 2
+        startPeriod = 30
+        timeout     = 5
       }
       logConfiguration = local.async_log_configurations["api"]
     }),
@@ -256,13 +257,14 @@ resource "aws_ecs_task_definition" "async_simulator" {
         command = [
           "CMD",
           "python",
-          "-c",
-          "from urllib.request import urlopen; urlopen('http://127.0.0.1:8001/health/live', timeout=1).read()",
+          "-m",
+          "trackrelay.healthcheck",
+          "8001",
         ]
         interval    = 10
         retries     = 3
-        startPeriod = 5
-        timeout     = 2
+        startPeriod = 30
+        timeout     = 5
       }
       logConfiguration = local.async_log_configurations["simulator"]
     }),

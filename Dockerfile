@@ -52,8 +52,8 @@ FROM runtime-base AS simulator
 
 EXPOSE 8001
 
-HEALTHCHECK --interval=10s --timeout=2s --start-period=5s --retries=3 \
-    CMD ["python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8001/health/live', timeout=1).read()"]
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
+    CMD ["python", "-m", "trackrelay.healthcheck", "8001"]
 
 CMD ["uvicorn", "trackrelay.downstream.main:app", "--host", "0.0.0.0", "--port", "8001", "--no-access-log"]
 
@@ -61,7 +61,7 @@ FROM runtime-base AS api
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=10s --timeout=2s --start-period=5s --retries=3 \
-    CMD ["python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health/live', timeout=1).read()"]
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
+    CMD ["python", "-m", "trackrelay.healthcheck", "8000"]
 
 CMD ["uvicorn", "trackrelay.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]

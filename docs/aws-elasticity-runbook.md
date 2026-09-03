@@ -310,6 +310,44 @@ approved experiment, not fabricated repair data or live reporting queries.
 
 ## Individual phase commands
 
+### Diagnosing a failed combined session
+
+The combined runner records `elasticity_session.failed_phase`, safe nested
+`workflow_error` details, and `cleanup_errors` even if teardown verification
+fails. `diagnostics/ecs-*.json` captures task stop reasons before destruction;
+`diagnostics/cloudwatch/<run-id>/<collection-time>/` retains each metric response
+and collection status, including incomplete windows. These diagnostics do not
+replace the qualified fixed/elastic summaries.
+
+`aws-down` includes a bounded cleanup for late Container Insights recreation:
+only after Terraform state is empty and native checks find no other resources
+may it remove the exact session performance group. It requires five absent
+samples 15 seconds apart, with at most 13 checks. `aws-verify-down` is still
+read-only. Never interpret successful Terraform destruction alone as verified
+AWS absence, and do not disable the inventory gate when cleanup fails.
+
+A simulator replacement loses its in-memory receipt evidence and invalidates
+the treatment. Do not fill missing CPU/memory buckets, reconstruct receipts,
+or generate a success report from a partial run. See the
+[first session-4 incident](aws-elasticity-session-4-incident.md).
+
+Before a new approved attempt, exercise the simulator at its frozen resource
+limit (use a fresh output filename each time):
+
+```sh
+make image-simulator
+uv run --locked python scripts/check-simulator-health.py \
+  --image trackrelay-simulator:local \
+  --duration-seconds 180 --rate 10 \
+  --output results/simulator-health-soak.json
+```
+
+This uses disposable local Docker containers, not AWS. It is a probe/receipt
+check, not a cloud SLO result; record the image architecture when comparing
+native local runs with emulated x86_64 images.
+
+### Manual phase sequence
+
 The combined command is recommended. The lower-level equivalents remain for an
 explicitly supervised manual workflow; they must not run alongside it:
 

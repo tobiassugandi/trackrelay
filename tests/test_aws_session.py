@@ -170,10 +170,7 @@ def test_plan_records_each_explicit_nondefault_hardware_tier(
 
     calls = create_saved_plan(session)
 
-    assert (
-        f"-var=rehost_instance_type={instance_type}"
-        in calls[0]
-    )
+    assert f"-var=rehost_instance_type={instance_type}" in calls[0]
     manifest = load_manifest(session)
     assert manifest["rehost_instance_type"] == instance_type
 
@@ -470,10 +467,7 @@ def test_generic_verification_records_tag_tombstones_without_identifiers(
             return completed(call)
         return completed(
             call,
-            stdout=(
-                '{"ResourceTagMappingList": '
-                '[{"ResourceARN": "not-persisted"}]}'
-            ),
+            stdout=('{"ResourceTagMappingList": [{"ResourceARN": "not-persisted"}]}'),
         )
 
     verify_destroyed(
@@ -488,9 +482,7 @@ def test_generic_verification_records_tag_tombstones_without_identifiers(
         )
     )
     assert inventory["returned_record_count"] == 1
-    assert inventory["get_resources_semantics"] == (
-        "tagged-or-previously-tagged"
-    )
+    assert inventory["get_resources_semantics"] == ("tagged-or-previously-tagged")
     assert "ResourceARN" not in inventory
 
 
@@ -538,3 +530,58 @@ def test_real_native_verification_cannot_certify_leftover_insights_logs(tmp_path
     )
     assert inventory["container_insights_log_groups"] == 1
     assert inventory["cloudwatch_log_groups"] == 0
+
+
+@mark.parametrize("state", ["", "aws_ecs_cluster.async[0]\n"])
+def test_async_destroy_requires_empty_state_before_late_telemetry_cleanup(
+    tmp_path, state
+):
+    session = make_session(tmp_path)
+    session = AwsSession(**{**session.__dict__, "deployment_mode": "async"})
+    create_saved_plan(session)
+    calls = []
+
+    def runner(arguments):
+        return completed(arguments, stdout=state if "state" in arguments else "")
+
+    def cleaner(**kwargs):
+        assert load_manifest(session)["status"] == "destroyed_pending_verification"
+        assert kwargs["session_id"] == session.session_id
+        calls.append("telemetry-cleanup")
+
+    if state:
+        with raises(AwsSessionError, match="managed resources"):
+            destroy_session(session, runner=runner, telemetry_cleaner=cleaner)
+        assert not calls
+    else:
+        destroy_session(session, runner=runner, telemetry_cleaner=cleaner)
+        assert calls == ["telemetry-cleanup"]
+        assert load_manifest(session)["status"] == "destroyed_pending_verification"
+
+
+@mark.parametrize(
+    "stderr,allowed", [("No state file was found!", True), ("Access denied", False)]
+)
+def test_async_cleanup_accepts_only_authoritative_no_state_error(
+    tmp_path, stderr, allowed
+):
+    session = make_session(tmp_path)
+    session = AwsSession(**{**session.__dict__, "deployment_mode": "async"})
+    create_saved_plan(session)
+    calls = []
+
+    def runner(arguments):
+        if "state" in arguments:
+            return CompletedProcess(arguments, 1, "", stderr)
+        return completed(arguments)
+
+    def cleaner(**kwargs):
+        calls.append("clean")
+
+    if allowed:
+        destroy_session(session, runner=runner, telemetry_cleaner=cleaner)
+        assert calls == ["clean"]
+    else:
+        with raises(AwsSessionError, match="state check"):
+            destroy_session(session, runner=runner, telemetry_cleaner=cleaner)
+        assert not calls

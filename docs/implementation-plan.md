@@ -744,9 +744,12 @@ native AWS inventory count was zero.
 The remaining checkboxes describe authorization and actual cloud execution.
 The eight-worker resource envelope, current regional prices, and proposed
 60–90-minute operating window are documented in the cost review. The proposed
-ceiling is $5 against the $25 monthly budget; a fresh saved plan and explicit
-session-4 approval are still required. Cloud session 4 has not been provisioned
-or measured.
+ceiling is $5 against the $25 monthly budget. The first approved session-4 attempt
+(`cloud-session-4-20260903T113739Z`) ran the fixed workload but did not qualify:
+simulator replacement lost 357 in-memory receipts and left a missing metric
+minute. Stage 9.7 did not start. Recovery verified teardown after removing a
+late-recreated telemetry group. See `docs/aws-elasticity-session-4-incident.md`.
+A fresh saved plan and explicit approval are required for any new attempt.
 
 - [x] Close the Container Insights performance-log lifecycle/inventory gap
   found during the 2026-09-03 read-only preflight. Terraform now owns the
@@ -757,10 +760,14 @@ or measured.
   and verify all 30 native categories zero for both sessions without changing
   historical measurements. See `docs/aws-elasticity-cost-review.md`.
 
-- [ ] **You:** Explicitly authorize cloud session 4 after reviewing its resource list, region, expected experiment duration, cost ceiling, and teardown command.
-- [ ] Provision the final experiment environment once and record its immutable application and infrastructure versions.
-- [ ] Disable worker autoscaling and fix the worker tier at its documented minimum task count.
-- [ ] Run a stepped workload that rises beyond fixed worker capacity and later returns to the starting rate.
+- [x] **You:** Explicitly authorize the first cloud-session-4 attempt with a $5 ceiling and unconditional teardown; this does not authorize a retry.
+- [x] Provision the first attempt's experiment environment and record its immutable application and infrastructure versions.
+- [x] Disable worker autoscaling and fix the worker tier at its documented minimum task count for the attempted control.
+- [x] Run the stepped workload beyond fixed worker capacity and back to the starting rate; retain the invalid result rather than promote it.
+- [x] Recover from the failed control: preserve diagnostics, verify all 30 native
+  resource categories absent, retain nested errors and partial CloudWatch data,
+  handle late log recreation, and harden/test the HTTP health probe without
+  relaxing experiment acceptance criteria.
 - [ ] Define a sustainable end-to-end load using ingestion SLOs plus bounded backlog, completion, drain-deadline, and correctness guardrails; API latency alone is insufficient.
 - [ ] Freeze the fixed-control configuration and aligned time series in `results/aws-fixed-control/`.
 - [ ] Leave the deployment unchanged and continue directly into Stage 9.7; do not tear it down or redeploy it between treatments.

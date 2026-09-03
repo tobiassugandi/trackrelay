@@ -260,7 +260,12 @@ class Rehearsal:
                 environment_verifier=self.environment,
                 runner=controller_runner,
             ),
-            "destroyer": partial(destroy_session, runner=self.command_runner),
+            "destroyer": partial(
+                destroy_session,
+                runner=self.command_runner,
+                telemetry_cleaner=lambda **kwargs: None,
+            ),
+            "diagnostic_collector": lambda *args, **kwargs: None,
             "teardown_verifier": self.verify,
             "reporter": self.report,
         }
@@ -449,6 +454,29 @@ def test_workflow_and_both_cleanup_failures_are_preserved(tmp_path):
     assert rehearsal.actions.count("verify") == 1
     assert "reset" not in rehearsal.actions
     assert "report" not in rehearsal.actions
+    journal = load_manifest(rehearsal.session)["elasticity_session"]
+    assert journal["phase"] == "cloud_failed"
+    assert journal["failed_phase"] == "fixed"
+    assert journal["workflow_error"]["cause"]["type"] == "RuntimeError"
+    assert len(journal["cleanup_errors"]) == 2
+
+
+def test_failed_diagnostics_do_not_block_unconditional_teardown(tmp_path):
+    rehearsal = Rehearsal(tmp_path, failure="fixed-metrics")
+
+    def broken_diagnostics(*args, **kwargs):
+        rehearsal.actions.append("diagnostics")
+        raise OSError("disk full")
+
+    with raises(ElasticitySessionError):
+        rehearsal.run(diagnostic_collector=broken_diagnostics)
+    assert rehearsal.actions[-4:] == [
+        "diagnostics",
+        "destroy-plan",
+        "destroy",
+        "verify",
+    ]
+    assert load_manifest(rehearsal.session)["status"] == "teardown_verified"
 
 
 def test_verifier_must_record_absence_before_reporting(tmp_path):

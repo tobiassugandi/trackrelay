@@ -593,6 +593,18 @@ run "async_task_definitions_are_digest_pinned_fargate_contracts" {
 
   assert {
     condition = alltrue([
+      for definition in [aws_ecs_task_definition.async_api[0], aws_ecs_task_definition.async_simulator[0]] : (
+        jsondecode(definition.container_definitions)[0].healthCheck.timeout == 5
+        && jsondecode(definition.container_definitions)[0].healthCheck.startPeriod == 30
+        && jsondecode(definition.container_definitions)[0].healthCheck.retries == 3
+        && jsondecode(definition.container_definitions)[0].healthCheck.command[3] == "trackrelay.healthcheck"
+      )
+    ])
+    error_message = "HTTP probes need startup/CPU margin and must match the image probe contract."
+  }
+
+  assert {
+    condition = alltrue([
       for definition in [
         aws_ecs_task_definition.async_api[0],
         aws_ecs_task_definition.async_worker[0],

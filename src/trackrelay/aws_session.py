@@ -15,6 +15,7 @@ from typing import Literal
 
 from trackrelay.aws_teardown import (
     AwsTeardownCheckError,
+    cleanup_container_insights,
     inventory_rehost_resources,
 )
 from trackrelay.experiments.vertical_scaling import (
@@ -22,9 +23,7 @@ from trackrelay.experiments.vertical_scaling import (
     ECONOMICAL_BASELINE_INSTANCE_TYPE,
 )
 
-SESSION_ID_PATTERN = compile_pattern(
-    r"^cloud-session-[1234]-[0-9]{8}T[0-9]{6}Z$"
-)
+SESSION_ID_PATTERN = compile_pattern(r"^cloud-session-[1234]-[0-9]{8}T[0-9]{6}Z$")
 CommandRunner = Callable[[Sequence[str]], CompletedProcess[str]]
 NativeInventory = Callable[..., dict[str, int]]
 DeploymentMode = Literal["rehost", "async"]
@@ -50,8 +49,7 @@ class AwsSession:
     def __post_init__(self) -> None:
         if SESSION_ID_PATTERN.fullmatch(self.session_id) is None:
             raise AwsSessionError(
-                "session ID must look like "
-                "cloud-session-1-20260822T090000Z"
+                "session ID must look like cloud-session-1-20260822T090000Z"
             )
         if not self.profile.strip():
             raise AwsSessionError("AWS profile must not be empty")
@@ -63,9 +61,7 @@ class AwsSession:
                 f"hardware tiers: {ALLOWED_INSTANCE_TYPES}"
             )
         if self.deployment_mode not in ("rehost", "async"):
-            raise AwsSessionError(
-                "deployment mode must be either rehost or async"
-            )
+            raise AwsSessionError("deployment mode must be either rehost or async")
         try:
             ingress_network = IPv4Network(self.api_ingress_cidr, strict=True)
         except ValueError as error:
@@ -73,9 +69,7 @@ class AwsSession:
                 "API ingress must be one explicit IPv4 /32 CIDR"
             ) from error
         if ingress_network.prefixlen != 32:
-            raise AwsSessionError(
-                "API ingress must be one explicit IPv4 /32 CIDR"
-            )
+            raise AwsSessionError("API ingress must be one explicit IPv4 /32 CIDR")
 
     @property
     def evidence_dir(self) -> Path:
@@ -267,9 +261,7 @@ def apply_session(
 ) -> None:
     """Apply only the exact saved plan after mechanical approval checks."""
     if approved_session_id != session.session_id:
-        raise AwsSessionError(
-            "APPROVED_SESSION_ID must exactly match SESSION_ID"
-        )
+        raise AwsSessionError("APPROVED_SESSION_ID must exactly match SESSION_ID")
     ceiling = parse_positive_money(
         approved_cost_ceiling_usd,
         field_name="approved cost ceiling",
@@ -279,9 +271,7 @@ def apply_session(
         field_name="monthly budget",
     )
     if ceiling > monthly_budget:
-        raise AwsSessionError(
-            "approved cost ceiling exceeds the monthly AWS budget"
-        )
+        raise AwsSessionError("approved cost ceiling exceeds the monthly AWS budget")
 
     manifest = load_manifest(session)
     if not session.plan_path.is_file():
@@ -318,11 +308,10 @@ def destroy_session(
     session: AwsSession,
     *,
     runner: CommandRunner = run_command,
+    telemetry_cleaner: Callable[..., None] = cleanup_container_insights,
 ) -> None:
     """Destroy without an approval gate and retain both command logs."""
-    manifest = (
-        load_manifest(session) if session.manifest_path.exists() else None
-    )
+    manifest = load_manifest(session) if session.manifest_path.exists() else None
     session.evidence_dir.mkdir(parents=True, exist_ok=True)
     destroy_plan = session.evidence_dir / "terraform-destroy.tfplan"
     plan_result = runner(
@@ -361,6 +350,35 @@ def destroy_session(
         )
         write_manifest(session, manifest)
 
+    if session.deployment_mode == "async":
+        state_result = runner(session.terraform_command("state", "list"))
+        state_log = (
+            session.evidence_dir / "terraform-state-before-telemetry-cleanup.log"
+        )
+        if (
+            state_result.returncode
+            and "No state file was found!" in state_result.stderr
+        ):
+            write_command_log(state_log, state_result)
+        else:
+            require_success(
+                result=state_result,
+                action="Terraform state check before telemetry cleanup",
+                log_path=state_log,
+            )
+        if state_result.stdout.strip():
+            raise AwsSessionError("refusing telemetry cleanup with managed resources")
+        try:
+            telemetry_cleaner(
+                profile=session.profile,
+                region=session.region,
+                session_id=session.session_id,
+                runner=runner,
+                evidence_path=session.evidence_dir / "container-insights-cleanup.json",
+            )
+        except AwsTeardownCheckError as error:
+            raise AwsSessionError(str(error)) from error
+
 
 def verify_destroyed(
     session: AwsSession,
@@ -369,14 +387,10 @@ def verify_destroyed(
     native_inventory: NativeInventory = inventory_rehost_resources,
 ) -> None:
     """Verify empty state plus generic and native AWS inventories."""
-    manifest = (
-        load_manifest(session) if session.manifest_path.exists() else None
-    )
+    manifest = load_manifest(session) if session.manifest_path.exists() else None
     session.evidence_dir.mkdir(parents=True, exist_ok=True)
     state_result = runner(session.terraform_command("state", "list"))
-    state_log_path = (
-        session.evidence_dir / "terraform-state-after-destroy.log"
-    )
+    state_log_path = session.evidence_dir / "terraform-state-after-destroy.log"
     no_state_exists = (
         state_result.returncode != 0
         and "No state file was found!" in state_result.stderr
@@ -520,9 +534,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             apply_session(
                 session,
                 approved_session_id=arguments.approved_session_id,
-                approved_cost_ceiling_usd=(
-                    arguments.approved_cost_ceiling_usd
-                ),
+                approved_cost_ceiling_usd=(arguments.approved_cost_ceiling_usd),
                 monthly_budget_usd=arguments.monthly_budget_usd,
             )
             print(f"applied approved Terraform plan for {session.session_id}")

@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 from hashlib import sha256
+from json import loads
 from subprocess import CompletedProcess
 
 from jmespath import search
@@ -9,6 +10,7 @@ from pytest import mark, raises
 
 from trackrelay.aws_teardown import (
     AwsTeardownCheckError,
+    cleanup_container_insights,
     inventory_rehost_resources,
 )
 
@@ -25,6 +27,114 @@ def completed(
     returncode: int = 0,
 ) -> CompletedProcess[str]:
     return CompletedProcess(arguments, returncode, stdout, stderr)
+
+
+def test_telemetry_cleanup_deletes_exact_name_and_waits_out_late_recreation(tmp_path):
+    samples = iter([1, 0, 0, 1, 0, 0, 0, 0, 0])
+    calls, waits = [], []
+    group = (
+        "/aws/ecs/containerinsights/trackrelay-"
+        + sha256(SESSION_ID.encode()).hexdigest()[:8]
+        + "-async/performance"
+    )
+
+    def runner(command):
+        calls.append(tuple(command))
+        return completed(
+            command,
+            stdout=str(next(samples)) if "describe-log-groups" in command else "",
+        )
+
+    output = tmp_path / "cleanup.json"
+    cleanup_container_insights(
+        profile=PROFILE,
+        region=REGION,
+        session_id=SESSION_ID,
+        runner=runner,
+        evidence_path=output,
+        sleeper=waits.append,
+        native_inventory=lambda **kw: {
+            "ecs_clusters": 0,
+            "ecs_services": 0,
+            "ecs_tasks": 0,
+            "container_insights_log_groups": 1,
+        },
+    )
+    deletes = [call for call in calls if "delete-log-group" in call]
+    assert len(deletes) == 2
+    assert all(call[-2:] == ("--log-group-name", group) for call in deletes)
+    assert all(
+        f"logGroupName=='{group}'" in call[call.index("--query") + 1]
+        for call in calls
+        if "describe-log-groups" in call
+    )
+    assert waits == [15] * 8
+    assert loads(output.read_text())["stable_absence"]
+
+
+@mark.parametrize(
+    "counts",
+    [
+        {},
+        {"container_insights_log_groups": 1},
+        {
+            "ecs_clusters": 1,
+            "ecs_services": 0,
+            "ecs_tasks": 0,
+            "container_insights_log_groups": 1,
+        },
+        {
+            "ecs_clusters": 0,
+            "ecs_services": 0,
+            "ecs_tasks": 1,
+            "container_insights_log_groups": 1,
+        },
+    ],
+)
+def test_telemetry_cleanup_refuses_missing_or_nonzero_stack_inventory(tmp_path, counts):
+    calls = []
+    with raises(AwsTeardownCheckError, match="refusing telemetry cleanup"):
+        cleanup_container_insights(
+            profile=PROFILE,
+            region=REGION,
+            session_id=SESSION_ID,
+            evidence_path=tmp_path / "cleanup.json",
+            runner=calls.append,
+            native_inventory=lambda **kw: counts,
+        )
+    assert not calls
+
+
+@mark.parametrize("case", ["denied", "recreated", "query"])
+def test_telemetry_cleanup_failures_are_bounded_and_never_report_absence(
+    tmp_path, case
+):
+    waits = []
+
+    def runner(command):
+        if (case == "denied" and "delete-log-group" in command) or case == "query":
+            return completed(command, returncode=254, stderr="AccessDenied")
+        return completed(command, stdout="1")
+
+    output = tmp_path / "cleanup.json"
+    with raises(AwsTeardownCheckError):
+        cleanup_container_insights(
+            profile=PROFILE,
+            region=REGION,
+            session_id=SESSION_ID,
+            runner=runner,
+            evidence_path=output,
+            sleeper=waits.append,
+            maximum_checks=3,
+            native_inventory=lambda **kw: {
+                "ecs_clusters": 0,
+                "ecs_services": 0,
+                "ecs_tasks": 0,
+                "container_insights_log_groups": 1,
+            },
+        )
+    assert not loads(output.read_text())["stable_absence"]
+    assert len(waits) == (2 if case == "recreated" else 0)
 
 
 def absent_resource_runner(

@@ -1,14 +1,120 @@
 """Native AWS absence checks for every TrackRelay infrastructure resource."""
 
 from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 from hashlib import sha256
+from json import dumps
+from pathlib import Path
 from subprocess import CompletedProcess
+from time import sleep
 
 CommandRunner = Callable[[Sequence[str]], CompletedProcess[str]]
 
 
 class AwsTeardownCheckError(RuntimeError):
     """A native AWS inventory check could not establish absence."""
+
+
+def cleanup_container_insights(
+    *,
+    profile: str,
+    region: str,
+    session_id: str,
+    evidence_path: Path,
+    runner: CommandRunner,
+    native_inventory: Callable[..., dict[str, int]] | None = None,
+    sleeper: Callable[[float], None] = sleep,
+    maximum_checks: int = 13,
+    quiet_checks: int = 5,
+    interval_seconds: float = 15,
+) -> None:
+    """Remove only the exact performance group after native stack absence.
+
+    ECS can recreate this group after Terraform deletes it. Require five absent
+    samples spanning at least 60 seconds, with at most 13 checks (three minutes
+    of scheduled waits, plus API time). Full native verification is still required.
+    This is an explicitly destructive teardown step, never part of verification.
+    """
+    inventory = native_inventory or inventory_rehost_resources
+    counts = inventory(
+        profile=profile, region=region, session_id=session_id, runner=runner
+    )
+    if not {
+        "ecs_clusters",
+        "ecs_services",
+        "ecs_tasks",
+        "container_insights_log_groups",
+    } <= counts.keys() or any(
+        count
+        for name, count in counts.items()
+        if name != "container_insights_log_groups"
+    ):
+        raise AwsTeardownCheckError(
+            "refusing telemetry cleanup before native stack absence"
+        )
+    suffix = sha256(session_id.encode()).hexdigest()[:8]
+    group = f"/aws/ecs/containerinsights/trackrelay-{suffix}-async/performance"
+    prefix = aws_command_prefix(profile=profile, region=region)
+    observations: list[dict[str, object]] = []
+    evidence = {
+        "session_id": session_id,
+        "log_group": group,
+        "native_inventory_before_cleanup": counts,
+        "quiet_checks": quiet_checks,
+        "interval_seconds": interval_seconds,
+        "observations": observations,
+        "stable_absence": False,
+    }
+    absent = 0
+    try:
+        for check in range(maximum_checks):
+            count = count_query(
+                name="exact_container_insights_performance_group",
+                command=(
+                    *prefix,
+                    "logs",
+                    "describe-log-groups",
+                    "--log-group-name-prefix",
+                    group,
+                    "--query",
+                    f"length(logGroups[?logGroupName=='{group}'])",
+                    "--output",
+                    "text",
+                ),
+                runner=runner,
+            )
+            observation = {
+                "observed_at": datetime.now(UTC).isoformat(),
+                "count": count,
+                "delete_succeeded": False,
+            }
+            observations.append(observation)
+            if count:
+                absent = 0
+                if count != 1:
+                    raise AwsTeardownCheckError("invalid exact telemetry group count")
+                result = runner(
+                    (*prefix, "logs", "delete-log-group", "--log-group-name", group)
+                )
+                if (
+                    result.returncode
+                    and "ResourceNotFoundException" not in result.stderr
+                ):
+                    raise AwsTeardownCheckError(
+                        "session telemetry group deletion failed"
+                    )
+                observation["delete_succeeded"] = result.returncode == 0
+            else:
+                absent += 1
+                if absent >= quiet_checks:
+                    evidence["stable_absence"] = True
+                    return
+            if check + 1 < maximum_checks:
+                sleeper(interval_seconds)
+        raise AwsTeardownCheckError("session telemetry group absence did not stabilize")
+    finally:
+        evidence_path.parent.mkdir(parents=True, exist_ok=True)
+        evidence_path.write_text(dumps(evidence, indent=2) + "\n", encoding="utf-8")
 
 
 def aws_command_prefix(*, profile: str, region: str) -> tuple[str, ...]:

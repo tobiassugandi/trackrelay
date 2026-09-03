@@ -26,11 +26,13 @@ def test_role_targets_have_distinct_runtime_commands() -> None:
     assert "trackrelay.downstream.main:app" not in worker
 
     assert "EXPOSE 8001" in simulator
-    assert "http://127.0.0.1:8001/health/live" in simulator
+    assert '"trackrelay.healthcheck", "8001"' in simulator
+    assert "--timeout=5s --start-period=30s --retries=3" in simulator
     assert '"trackrelay.downstream.main:app"' in simulator
 
     assert "EXPOSE 8000" in api
-    assert "http://127.0.0.1:8000/health/live" in api
+    assert '"trackrelay.healthcheck", "8000"' in api
+    assert "--timeout=5s --start-period=30s --retries=3" in api
     assert '"trackrelay.main:app"' in api
 
 

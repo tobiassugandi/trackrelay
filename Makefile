@@ -37,6 +37,7 @@ TRACKRELAY_AWS_PROFILE ?= trackrelay-admin
 TRACKRELAY_AWS_REGION ?= ap-southeast-3
 AWS_MONTHLY_BUDGET_USD ?= 25
 AWS_SESSION_RESULTS ?= results/aws-sessions
+ELASTICITY_REPORT_OUTPUT ?= $(AWS_SESSION_RESULTS)/$(SESSION_ID)/elasticity/report
 AWS_DEPLOYMENT_MODE ?= rehost
 SESSION_ID ?=
 APPROVED_SESSION_ID ?=
@@ -280,7 +281,12 @@ aws-experiment-reset:
 		--approved-cost-ceiling-usd "$(APPROVED_COST_CEILING_USD)" \
 		--approved-unconditional-teardown-session-id "$(APPROVED_UNCONDITIONAL_TEARDOWN_SESSION_ID)"
 
-.PHONY: aws-elastic-treatment
+.PHONY: aws-elastic-treatment aws-elasticity-report
+aws-elasticity-report:
+	$(UV) run --locked trackrelay-aws-elasticity-report \
+		--session-directory "$(AWS_SESSION_RESULTS)/$(SESSION_ID)" \
+		--output-directory "$(ELASTICITY_REPORT_OUTPUT)"
+
 aws-elastic-treatment:
 	$(UV) run --locked trackrelay-aws-elastic-treatment \
 		--session-id "$(SESSION_ID)" \

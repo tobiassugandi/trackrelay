@@ -328,13 +328,92 @@ remains in `elastic_treatment.qualified` and the retained summary. Failure or
 interrupt also attempts both destroy and verification, preserving cleanup errors
 alongside the original failure. No cloud experiment has yet been executed.
 
+## Offline comparison and report
+
+`make aws-elasticity-report` reads the local session evidence after teardown. It
+does not invoke AWS, Terraform, Git, Docker, or the API, require credentials, or
+change the session journal. For a completed, explicitly authorized session:
+
+```shell
+make aws-elasticity-report SESSION_ID="$TRACKRELAY_RUN_SESSION_ID"
+```
+
+It writes a new `elasticity/report/` directory beneath the session with:
+
+```text
+comparison-report.json
+comparison-report.md
+comparison.png
+comparison.svg
+```
+
+The large figure uses matching axes for fixed and elastic treatments across
+offered load, observed running workers (with native minute averages), SQS work
+and outstanding accepted events, and native ingestion p95 with its 500 ms SLO.
+Recovery and post-load drain windows are shaded. Native timestamps retain their
+actual minute boundaries; observation gaps are not interpolated. Step-level
+driver p95 remains separate from native p95 and is never averaged into a new
+percentile.
+
+Before rendering, the loader requires `teardown_verified`, a complete zero
+native-resource inventory (including autoscaling), empty Terraform state, the
+matching qualified fixed run, verified reset and transition, unchanged revision
+across the phase journal, before/after native policy and no-change plan evidence,
+and an empty one-worker pre-load state. It re-evaluates the treatment decisions,
+checks ordering and counter consistency, and hashes its source files. A valid
+rejected elastic treatment produces a negative report; missing or contradictory
+provenance refuses publication. Output is staged before publication, and an
+existing report directory is never overwritten. To regenerate after a local
+reporting change, select a fresh `ELASTICITY_REPORT_OUTPUT` directory.
+
+### Frozen short-step support method v1
+
+Passing the elastic waveform and demonstrating a higher supported rate are
+separate claims. A low ingestion latency by itself establishes neither. The
+report evaluates both treatments using the same pre-data method:
+
+- Require the common ingestion, correctness, non-worker headroom, and complete
+  observation gates for the whole run. Re-establish the 180-second stable drain
+  from actual post-load samples, within the unchanged 1,200-second deadline.
+- For each plateau, use the first and last actual samples inside its scheduled
+  window. Each edge must be covered within 30 seconds, gaps must not exceed 30
+  seconds, and the span must be at least the greater of 30 seconds and plateau
+  duration minus 60 seconds. Retain the exact sampled interval in the report.
+- Require completed-event throughput at least equal to the offered rate over
+  that interval and non-growing outstanding accepted events. Apply the same
+  1,500-event/message bound and 180-second native oldest-message-age bound to
+  both treatments, including all overlapping native buckets conservatively.
+- Require every occurrence of a rate to pass; do not select only its favorable
+  rising or falling plateau. Report the highest such observed rate in each
+  treatment. Missing coverage means **not established**, not zero capacity.
+- Emit the observed-step rate ratio only when the full comparison is qualified
+  and both supported rates exist. A missing return to one worker, for example,
+  prevents an elasticity claim even if a high-rate step passed.
+
+These short, ordered plateaus are not independent steady-state capacity tests.
+The resulting ratio is an **observed supported-step multiplier**, not an estimate
+of maximum production capacity. Cumulative completion counters may include work
+from an earlier plateau; throughput plus non-growing backlog measures observed
+processing support, not per-event end-to-end latency. Scale-out, return-to-one,
+and drain times are first observed samples, not exact transition timestamps.
+These conservative reporting rules are frozen before cloud session 4 and do not
+change the workload or tune the scaling intervention after seeing its result.
+
+Local synthetic reporting tests (no cloud resources):
+
+```shell
+uv run --locked pytest tests/test_aws_elasticity_report.py
+```
+
+No synthetic test result is a cloud measurement. The real README headline remains
+unpublished until the approved session has produced qualifying evidence.
+
 ## Still required before cloud session 4
 
-- A compact result model and plot generator that evaluate sustainable
-  end-to-end load and render the aligned causal comparison.
 - A full operator runbook and local end-to-end rehearsal across provision,
-  fixed control, reset, transition, elastic replay, and final teardown.
-- Local failure-path tests for plotting and that complete session sequence.
+  fixed control, reset, transition, elastic replay, final teardown, and reporting.
+- Local failure-path tests for that complete session sequence; individual
+  controllers and plotting already have offline failure coverage.
 
 No cloud-session-4 plan should be proposed until these pieces are locally
 complete and the resource/cost effect of the maximum worker count is reviewed.

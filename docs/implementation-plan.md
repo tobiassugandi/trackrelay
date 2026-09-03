@@ -760,6 +760,14 @@ readiness. Cloud session 4 has not been authorized, provisioned, or run.
 
 ### Stage 9.8 — Publish the elasticity headline
 
+- [x] Implement and locally test the AWS-off comparison/report generator before
+  session 4. Recheck the saved reset, policy, revision, measurement, and teardown
+  evidence; report identical conservative short-step completion/backlog rules
+  for both treatments; retain unavailable values rather than inventing a
+  capacity multiplier; and render aligned PNG/SVG time series plus JSON and
+  Markdown. Verify synthetic success/rejection cases, malformed or missing
+  evidence, no-overwrite behavior, and interrupted or failed plotting. This is
+  reporting readiness, not a measured cloud result or published headline.
 - [ ] Analyze the frozen results and build the report locally with AWS off.
 - [ ] Produce one large, aligned time-series figure comparing fixed and elastic runs across offered load, running worker tasks, queue depth or message age, and p95 latency with its 500 ms SLO line.
 - [ ] Report the highest demand step that satisfies every end-to-end guardrail in each run, the load multiplier, worker expansion A→B, time to scale out, backlog drain time, and return to A.

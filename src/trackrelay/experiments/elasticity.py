@@ -52,17 +52,17 @@ DEFAULT_ELASTICITY_STEPS = (
     ElasticityWorkloadStep(
         name="rise-5",
         offered_rate_per_second=5,
-        duration_seconds=60,
+        duration_seconds=120,
     ),
     ElasticityWorkloadStep(
         name="rise-10",
         offered_rate_per_second=10,
-        duration_seconds=60,
+        duration_seconds=120,
     ),
     ElasticityWorkloadStep(
         name="peak-25",
         offered_rate_per_second=25,
-        duration_seconds=60,
+        duration_seconds=300,
     ),
     ElasticityWorkloadStep(
         name="fall-10",
@@ -77,7 +77,7 @@ DEFAULT_ELASTICITY_STEPS = (
     ElasticityWorkloadStep(
         name="recovery",
         offered_rate_per_second=1,
-        duration_seconds=300,
+        duration_seconds=420,
     ),
 )
 
@@ -94,7 +94,9 @@ class ElasticityWorkloadDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[1] = 1
-    name: Literal["aws-elasticity-candidate-v2"] = "aws-elasticity-candidate-v2"
+    name: Literal["aws-elasticity-candidate-v2", "aws-elasticity-candidate-v3"] = (
+        "aws-elasticity-candidate-v3"
+    )
     steps: tuple[ElasticityWorkloadStep, ...] = DEFAULT_ELASTICITY_STEPS
     random_seed: int = 20260901
     partner_id: str = "elasticity-alpha"
@@ -166,8 +168,16 @@ class ElasticityWorkloadDefinition(BaseModel):
             raise ValueError("elasticity rates must fall strictly after the peak")
         if rates[0] != rates[-1]:
             raise ValueError("elasticity workload must return to its starting rate")
-        if self.steps[-1].duration_seconds < 5 * self.metric_period_seconds:
-            raise ValueError("elasticity recovery must observe at least five periods")
+        minimum_recovery_periods = (
+            7 if self.name == "aws-elasticity-candidate-v3" else 5
+        )
+        if (
+            self.steps[-1].duration_seconds
+            < minimum_recovery_periods * self.metric_period_seconds
+        ):
+            raise ValueError(
+                "elasticity recovery is shorter than the candidate minimum"
+            )
         return self
 
 

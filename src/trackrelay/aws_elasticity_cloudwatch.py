@@ -86,7 +86,7 @@ class ElasticityCloudWatchEvidence(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 2
     test_run_id: UUID
     window_started_at: AwareDatetime
     window_ended_at: AwareDatetime
@@ -99,7 +99,10 @@ class ElasticityCloudWatchEvidence(BaseModel):
     def require_complete_native_window(self) -> "ElasticityCloudWatchEvidence":
         if self.window_ended_at <= self.window_started_at:
             raise ValueError("CloudWatch treatment window must be positive")
-        expected_ids = {definition.query_id for definition in metric_definitions()}
+        expected_ids = {
+            definition.query_id
+            for definition in metric_definitions(schema_version=self.schema_version)
+        }
         observed_ids = {series.query_id for series in self.series}
         if observed_ids != expected_ids or len(observed_ids) != len(self.series):
             raise ValueError("CloudWatch treatment evidence is incomplete")
@@ -132,7 +135,9 @@ class MetricDefinition(NamedTuple):
     fill_missing_with_zero: bool = False
 
 
-def metric_definitions() -> tuple[MetricDefinition, ...]:
+def metric_definitions(
+    *, schema_version: Literal[1, 2] = 2
+) -> tuple[MetricDefinition, ...]:
     """Return the shared fixed/elastic native evidence contract."""
     alb = (("LoadBalancer", "load_balancer_dimension"),)
     api = (
@@ -150,7 +155,7 @@ def metric_definitions() -> tuple[MetricDefinition, ...]:
     source_queue = (("QueueName", "delivery_queue_name"),)
     dead_letter_queue = (("QueueName", "dead_letter_queue_name"),)
     rds = (("DBInstanceIdentifier", "rds_identifier"),)
-    return (
+    definitions = (
         MetricDefinition(
             "alb_requests", "AWS/ApplicationELB", "RequestCount", "Sum", "Count", alb
         ),
@@ -214,6 +219,15 @@ def metric_definitions() -> tuple[MetricDefinition, ...]:
         ),
         MetricDefinition(
             "worker_cpu", "AWS/ECS", "CPUUtilization", "Maximum", "Percent", worker
+        ),
+        MetricDefinition(
+            "source_queue_sent",
+            "AWS/SQS",
+            "NumberOfMessagesSent",
+            "Sum",
+            "Count",
+            source_queue,
+            True,
         ),
         MetricDefinition(
             "source_queue_visible",
@@ -297,6 +311,13 @@ def metric_definitions() -> tuple[MetricDefinition, ...]:
         MetricDefinition(
             "rds_write_iops", "AWS/RDS", "WriteIOPS", "Average", "Count/Second", rds
         ),
+    )
+    if schema_version == 2:
+        return definitions
+    return tuple(
+        definition
+        for definition in definitions
+        if definition.query_id != "source_queue_sent"
     )
 
 
@@ -391,6 +412,7 @@ def parse_elasticity_metric_response(
     window_started_at: datetime,
     window_ended_at: datetime,
     collected_at: datetime,
+    schema_version: Literal[1, 2] = 2,
 ) -> ElasticityCloudWatchEvidence:
     """Parse and require every expected series and overlapping minute bucket."""
     try:
@@ -404,7 +426,10 @@ def parse_elasticity_metric_response(
         raise AwsElasticityCloudWatchError(
             "CloudWatch elasticity metric results must be a list"
         )
-    expected_ids = {definition.query_id for definition in metric_definitions()}
+    expected_ids = {
+        definition.query_id
+        for definition in metric_definitions(schema_version=schema_version)
+    }
     try:
         by_id = {item["Id"]: item for item in results}
     except (KeyError, TypeError) as error:
@@ -419,7 +444,10 @@ def parse_elasticity_metric_response(
         window_started_at,
         window_ended_at,
     )
-    definitions = {item.query_id: item for item in metric_definitions()}
+    definitions = {
+        item.query_id: item
+        for item in metric_definitions(schema_version=schema_version)
+    }
     series = []
     for query_id in sorted(expected_ids):
         result = by_id[query_id]
@@ -465,6 +493,7 @@ def parse_elasticity_metric_response(
             ) from error
     try:
         return ElasticityCloudWatchEvidence(
+            schema_version=schema_version,
             test_run_id=test_run_id,
             window_started_at=window_started_at,
             window_ended_at=window_ended_at,

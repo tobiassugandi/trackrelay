@@ -233,7 +233,6 @@ def cloudwatch_evidence(
         seconds=ELASTICITY_WORKLOAD_DEFINITION.duration_seconds
     )
     values = {
-        "alb_requests": 400,
         "alb_p95_latency": 0.1,
         "api_cpu": 20,
         "api_memory": 20,
@@ -249,7 +248,15 @@ def cloudwatch_evidence(
         "rds_read_iops": 10,
         "rds_write_iops": 10,
     }
-    timestamps = tuple(started_at + timedelta(minutes=minute) for minute in range(11))
+    timestamps = tuple(
+        started_at + timedelta(minutes=minute)
+        for minute in range(ELASTICITY_WORKLOAD_DEFINITION.duration_seconds // 60)
+    )
+    requests_per_bucket = tuple(
+        step.offered_rate_per_second * 60
+        for step in ELASTICITY_WORKLOAD_DEFINITION.steps
+        for _ in range(step.duration_seconds // 60)
+    )
     return ElasticityCloudWatchEvidence(
         test_run_id=test_run_id,
         window_started_at=started_at,
@@ -265,9 +272,14 @@ def cloudwatch_evidence(
                 datapoints=tuple(
                     ElasticityCloudWatchDatapoint(
                         interval_started_at=timestamp,
-                        value=values.get(definition.query_id, 0),
+                        value=(
+                            requests_per_bucket[index]
+                            if definition.query_id
+                            in {"alb_requests", "source_queue_sent"}
+                            else values.get(definition.query_id, 0)
+                        ),
                     )
-                    for timestamp in timestamps
+                    for index, timestamp in enumerate(timestamps)
                 ),
             )
             for definition in metric_definitions()
@@ -436,8 +448,8 @@ def test_live_observation_aligns_database_queue_and_fixed_worker(
             runner=runner,
         )
 
-    assert observed.step_name == "peak-25"
-    assert observed.offered_rate_per_second == 25
+    assert observed.step_name == "rise-10"
+    assert observed.offered_rate_per_second == 10
     assert observed.source_queue_work == 3
     assert observed.worker_running_count == 1
     assert observed.api_runtime is None

@@ -95,11 +95,46 @@ def test_queries_fill_only_sparse_zero_metrics() -> None:
 
     assert by_id["alb_requests"]["MetricStat"]["Stat"] == "Sum"
     assert by_id["alb_requests"]["ReturnData"] is True
+    assert by_id["m_source_queue_sent"]["MetricStat"]["Metric"]["MetricName"] == (
+        "NumberOfMessagesSent"
+    )
+    assert by_id["m_source_queue_sent"]["MetricStat"]["Stat"] == "Sum"
+    assert by_id["source_queue_sent"]["Expression"] == ("FILL(m_source_queue_sent, 0)")
     assert by_id["m_dead_letter_queue_visible"]["ReturnData"] is False
     assert by_id["dead_letter_queue_visible"]["Expression"] == (
         "FILL(m_dead_letter_queue_visible, 0)"
     )
     assert by_id["worker_running_tasks"]["MetricStat"]["Period"] == 60
+
+
+def test_schema_one_remains_readable_without_the_v3_arrival_series() -> None:
+    assert "source_queue_sent" not in {
+        definition.query_id for definition in metric_definitions(schema_version=1)
+    }
+    evidence = parse_elasticity_metric_response(
+        dumps(
+            {
+                "MetricDataResults": [
+                    {
+                        "Id": definition.query_id,
+                        "StatusCode": "Complete",
+                        "Timestamps": [
+                            value.isoformat()
+                            for value in expected_bucket_starts(STARTED_AT, ENDED_AT)
+                        ],
+                        "Values": [1, 1, 1, 1],
+                    }
+                    for definition in metric_definitions(schema_version=1)
+                ]
+            }
+        ),
+        test_run_id=TEST_RUN_ID,
+        window_started_at=STARTED_AT,
+        window_ended_at=ENDED_AT,
+        collected_at=ENDED_AT + timedelta(minutes=3),
+        schema_version=1,
+    )
+    assert evidence.schema_version == 1
 
 
 def test_parser_requires_every_overlapping_native_bucket() -> None:

@@ -14,12 +14,12 @@ have a separate Terraform-owned group, created before the cluster and deleted
 after it. Native verification checks this namespace independently of application
 logs, and comparison reports require that new inventory entry. See the
 [resource/cost review](aws-elasticity-cost-review.md) for the discovery and cleanup
-audit. Four fixed-control attempts have since run and been torn down. The fourth
-qualified and reset successfully, then the worker-only transition guard rejected
-a plan that also proposed replacing Cloud Map and updating the simulator ECS
-service. An ineffective empty `health_check_custom_config` block caused that
-provider-state mismatch and has been removed. Worker autoscaling and the elastic
-treatment have not started.
+audit. Six attempts have since run and been torn down. The sixth completed both
+candidate-v2 treatments with correct delivery and a one-to-eight-to-one worker
+transition, but exceeded the frozen backlog bound and returned to one too late
+in the workload to qualify. Candidate v3 is now frozen locally with a longer
+waveform, demand-based scale-out, and demand-plus-queue-work scale-in. It has not
+run in AWS.
 See the [incident record](aws-elasticity-session-4-incident.md).
 
 ## Workflow and ownership
@@ -86,7 +86,7 @@ Example lines (illustrative, not cloud evidence):
 
 ```text
 [18:55:38+0700] Starting: Phase 3/6: fixed-control treatment
-[19:00:00+0700] Fixed workload: 240/660s; step=fall-10 rate=10/s workers=1/1 queue=1842
+[19:00:00+0700] Fixed workload: 540/1140s; step=peak-25 rate=25/s workers=1/1 queue=1842
 [19:07:03+0700] Fixed workload ended: k6 exit=0; waiting for drain (limit 1200s, stable-empty target 180s)
 [19:11:28+0700] Starting: Cleanup: capturing ECS diagnostics
 [19:18:17+0700] Container Insights cleanup: check 6/13; absent sample 5/5
@@ -143,7 +143,7 @@ phase failures, interrupts, qualification rejection, cleanup failure, and report
 failure. Its synthetic outcomes are not cloud measurements.
 
 After changing the driver, also exercise real k6 timing with the complete
-11-minute, 3,660-event waveform against a local-only HTTP receiver:
+19-minute, 10,680-event waveform against a local-only HTTP receiver:
 
 ```shell
 make elasticity-driver-http-check \
@@ -153,7 +153,7 @@ make elasticity-driver-http-check \
 This uses a loopback receiver and a disposable, uniquely named k6 container
 (Docker Desktop on macOS; host networking on Linux). The receiver returns 201
 for the first submission and 200 for duplicates. The check requires exactly
-3,660 requests and unique events, all per-step counts/checks, and k6 exit zero.
+10,680 requests and unique events, all per-step counts/checks, and k6 exit zero.
 It retains inputs, raw k6 output/summary, and `local-driver-result.json` in a
 fresh directory, never contacts AWS, and does not measure application capacity.
 
@@ -161,7 +161,7 @@ Each step now caps HTTP work at its own manifest slice. A single extra closing
 iteration may be dispatched by the time-based executor; it sends no request and
 is recorded as `driver_boundary_iterations{step:...}` (maximum one per step).
 Larger overruns also increment `driver_errors` and fail. The full 60-second
-step boundaries and five-minute recovery remain intact; no millisecond-shortened
+step boundaries and seven-minute recovery remain intact; no millisecond-shortened
 duration is relied upon for safety. Missing/extra HTTP requests, duplicate
 responses, dropped iterations, and driver errors still reject the treatment.
 
@@ -268,13 +268,13 @@ configured service capacities, not billed-dollar estimates; deployment/migration
 overlap can temporarily add tasks.
 
 The workload is **events per second**, unlike session 3's finite batches:
-`1 → 5 → 10 → 25 → 10 → 5 → 1`, with 60 seconds per first six steps and
-300 seconds at the final recovery rate. Each treatment sends 3,660 events over
-11 minutes; both send 7,320 over 22 minutes of scheduled load. Each also requires
+`1 → 5 → 10 → 25 → 10 → 5 → 1`, with durations
+`60 → 120 → 120 → 300 → 60 → 60 → 420` seconds. Each treatment sends 10,680
+events over 19 minutes; both send 21,360 over 38 minutes of scheduled load. Each also requires
 at least 180 seconds of confirmed post-load drain, with an unchanged 20-minute
 post-load deadline. Allow additional time for image publication, provisioning,
 migration, UTC-minute alignment, metric publication, reset, transition, and
-teardown. Agree a full wall-clock operating window with contingency; 22 minutes
+teardown. Agree a full wall-clock operating window with contingency; 38 minutes
 is not the expected session duration or a cost bound.
 
 Before approving, price the complete topology in the selected region, including
@@ -321,7 +321,7 @@ jq '{status, elasticity_session, fixed_control, experiment_reset,
   "$TRACKRELAY_RUN_SESSION_DIR/session.json"
 ```
 
-Command output is mostly captured in local evidence logs. The journal's phase
+Raw command output remains captured in local evidence logs. The journal's phase
 identifies the active handoff, not a continuously updated progress percentage.
 An AWS command still running may not yet have a completed log. Check the agreed
 time budget rather than interpreting quiet stdout as either success or failure.

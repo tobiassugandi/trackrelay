@@ -515,6 +515,8 @@ def inventory_rehost_resources(
     alarm_names = (
         f"{name_prefix}-worker-backlog-high",
         f"{name_prefix}-worker-empty",
+        f"{name_prefix}-worker-demand-high",
+        f"{name_prefix}-worker-release-safe",
     )
     counts["cloudwatch_metric_alarms"] = count_query(
         name="cloudwatch_metric_alarms",

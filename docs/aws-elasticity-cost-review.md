@@ -17,7 +17,7 @@ estimate in USD, not a bill, a hard spending cap, or an elasticity result.
 - Original Container Insights (`enabled`, not `enhanced`). Four application
   log groups and the additional performance-log group are Terraform-owned.
 - Expected operator window: **60–90 minutes**, an engineering estimate rather
-  than an AWS completion guarantee. Scheduled traffic totals 22 minutes; stable
+  than an AWS completion guarantee. Candidate-v3 traffic totals 38 minutes; stable
   drain, reset, alignment, publication, deployment, and teardown add time.
 - At 90 minutes from foundation apply, stop experiment work and enter cleanup
   if it has not already finished. Reserve another 30 minutes for cleanup: a

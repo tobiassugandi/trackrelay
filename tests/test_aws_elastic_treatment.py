@@ -55,7 +55,10 @@ from trackrelay.aws_fixed_control import (
     run_fixed_control_session,
 )
 from trackrelay.aws_session import AwsSessionError, load_manifest, write_manifest
-from trackrelay.experiments.elasticity import ElasticityTreatment
+from trackrelay.experiments.elasticity import (
+    ELASTICITY_WORKLOAD_DEFINITION,
+    ElasticityTreatment,
+)
 
 ELASTIC_ID = UUID("00000000-0000-0000-0000-000000000947")
 
@@ -64,7 +67,7 @@ def elastic_result():
     fixed = passing_result()
     start = fixed.load_started_at + timedelta(days=2)
     observations = []
-    for seconds in range(0, 851, 10):
+    for seconds in range(0, fixed.definition.duration_seconds + 191, 10):
         remaining = seconds
         persisted = 0
         name, rate = "post-load", 0
@@ -76,7 +79,7 @@ def elastic_result():
                 name, rate = step.name, step.offered_rate_per_second
                 break
             remaining -= step.duration_seconds
-        backlog = min(persisted, 100) if 60 <= seconds < 420 else 0
+        backlog = min(persisted, 100) if 60 <= seconds < 720 else 0
         item = observation(
             observed_at=start + timedelta(seconds=seconds),
             step_name=name,
@@ -87,8 +90,8 @@ def elastic_result():
         ).model_copy(
             update={
                 "seconds_after_load_started": seconds,
-                "worker_running_count": 8 if 60 <= seconds < 480 else 1,
-                "worker_desired_count": 8 if 60 <= seconds < 480 else 1,
+                "worker_running_count": 8 if 60 <= seconds < 900 else 1,
+                "worker_desired_count": 8 if 60 <= seconds < 900 else 1,
             }
         )
         observations.append(item)
@@ -117,9 +120,11 @@ def elastic_cloudwatch(result=None):
                 "datapoints": tuple(
                     ElasticityCloudWatchDatapoint(
                         interval_started_at=timestamp,
-                        value=(8 if 1 <= index < 8 else 1)
+                        value=(8 if 1 <= index < 15 else 1)
                         if item.query_id == "worker_running_tasks"
-                        else item.datapoints[0].value,
+                        else item.datapoints[
+                            min(index, len(item.datapoints) - 1)
+                        ].value,
                     )
                     for index, timestamp in enumerate(timestamps)
                 )
@@ -243,13 +248,16 @@ def test_observed_failures_reject_treatment(case, reason):
             change = {}
             if case == "no-scale":
                 change = {"worker_running_count": 1, "worker_desired_count": 1}
-            elif case == "post-only-return" and 60 <= second < 660:
+            elif (
+                case == "post-only-return"
+                and 60 <= second < result.definition.duration_seconds
+            ):
                 change = {"worker_running_count": 8, "worker_desired_count": 8}
             elif case in {"over-capacity", "zero-capacity"} and second == 120:
                 change = {"worker_running_count": 9 if case == "over-capacity" else 0}
             elif case == "dlq" and second == 120:
                 change = {"dead_letter_queue_messages": 1}
-            elif case == "outstanding" and second == 240:
+            elif case == "outstanding" and second == 300:
                 change = {"completed_delivery_events": 0}
             elif case == "missing-pool":
                 change = {"api_runtime": None}
@@ -595,7 +603,19 @@ def test_shared_driver_stops_local_process_on_interrupt_or_timeout(
         "trackrelay.aws_fixed_control._attempt_observation", interrupted
     )
     start = elastic_result().load_started_at
-    times = iter((start, start + timedelta(seconds=781 if failure == "timeout" else 0)))
+    times = iter(
+        (
+            start,
+            start
+            + timedelta(
+                seconds=(
+                    ELASTICITY_WORKLOAD_DEFINITION.duration_seconds + 121
+                    if failure == "timeout"
+                    else 0
+                )
+            ),
+        )
+    )
     with (
         httpx.Client(
             base_url=API_URL,

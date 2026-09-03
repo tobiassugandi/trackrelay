@@ -556,7 +556,9 @@ def test_inventory_uses_explicit_profile_region_and_session_tags() -> None:
     ]
     assert {name.rsplit("-worker-", 1)[-1] for name in alarm_names} == {
         "backlog-high",
+        "demand-high",
         "empty",
+        "release-safe",
     }
 
     secret_call = next(call for call in calls if "list-secrets" in call)

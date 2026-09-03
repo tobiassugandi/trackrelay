@@ -87,7 +87,8 @@ class WorkerAutoscalingPolicy(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    backlog_threshold_messages: Literal[10] = 10
+    policy_version: Literal[2, 3] = 2
+    backlog_threshold_messages: Literal[10] | None = 10
     empty_alarm_name: str
     high_alarm_name: str
     maximum_capacity: Literal[8] = 8
@@ -97,9 +98,12 @@ class WorkerAutoscalingPolicy(BaseModel):
     resource_id: str
     scale_in_cooldown_seconds: Literal[60] = 60
     scale_in_evaluation_periods: Literal[3] = 3
+    scale_in_messages_per_minute: Literal[120] | None = None
+    scale_in_queue_work_threshold: Literal[10] | None = None
     scale_in_policy_name: str
     scale_out_cooldown_seconds: Literal[60] = 60
     scale_out_evaluation_periods: Literal[1] = 1
+    scale_out_messages_per_minute: Literal[300] | None = None
     scale_out_policy_name: str
 
     @model_validator(mode="after")
@@ -118,13 +122,31 @@ class WorkerAutoscalingPolicy(BaseModel):
         ):
             raise ValueError("autoscaling policy uses an invalid queue")
         expected_prefix = resource_parts[2]
+        expected_high_suffix = (
+            "demand-high" if self.policy_version == 3 else "backlog-high"
+        )
+        expected_low_suffix = "release-safe" if self.policy_version == 3 else "empty"
         if (
-            self.high_alarm_name != f"{expected_prefix}-backlog-high"
-            or self.empty_alarm_name != f"{expected_prefix}-empty"
+            self.high_alarm_name != f"{expected_prefix}-{expected_high_suffix}"
+            or self.empty_alarm_name != f"{expected_prefix}-{expected_low_suffix}"
             or self.scale_out_policy_name != f"{expected_prefix}-scale-out"
             or self.scale_in_policy_name != f"{expected_prefix}-scale-in"
         ):
             raise ValueError("autoscaling resource names are inconsistent")
+        if self.policy_version == 2 and (
+            self.backlog_threshold_messages != 10
+            or self.scale_out_messages_per_minute is not None
+            or self.scale_in_messages_per_minute is not None
+            or self.scale_in_queue_work_threshold is not None
+        ):
+            raise ValueError("candidate v2 autoscaling thresholds are inconsistent")
+        if self.policy_version == 3 and (
+            self.backlog_threshold_messages is not None
+            or self.scale_out_messages_per_minute != 300
+            or self.scale_in_messages_per_minute != 120
+            or self.scale_in_queue_work_threshold != 10
+        ):
+            raise ValueError("candidate v3 autoscaling thresholds are inconsistent")
         return self
 
 
@@ -156,6 +178,8 @@ class WorkerScalingPolicyVerification(BaseModel):
     name: str
     cooldown_seconds: Literal[60]
     scaling_adjustment: PositiveInteger
+    metric_interval_lower_bound: float | None = None
+    metric_interval_upper_bound: float | None = None
 
 
 class WorkerAlarmVerification(BaseModel):
@@ -173,6 +197,10 @@ class WorkerAlarmVerification(BaseModel):
     evaluation_periods: PositiveInteger
     threshold: NonNegativeInteger
     treat_missing_data: Literal["breaching", "notBreaching"]
+    signal: Literal["visible_backlog", "messages_sent", "low_demand_and_queue_work"] = (
+        "visible_backlog"
+    )
+    metric_query_ids: tuple[str, ...] = ()
 
 
 class WorkerAutoscalingVerification(BaseModel):
@@ -192,7 +220,7 @@ class WorkerAutoscalingVerification(BaseModel):
     def matches(self, expected: WorkerAutoscalingPolicy) -> bool:
         policies = {item.name: item for item in self.policies}
         alarms = {item.name: item for item in self.alarms}
-        return (
+        common_matches = (
             self.resource_id == expected.resource_id
             and self.minimum_capacity == expected.minimum_capacity
             and self.maximum_capacity == expected.maximum_capacity
@@ -213,22 +241,48 @@ class WorkerAutoscalingVerification(BaseModel):
             and alarms[expected.high_alarm_name].comparison_operator
             == "GreaterThanOrEqualToThreshold"
             and alarms[expected.high_alarm_name].actions_enabled
-            and alarms[expected.high_alarm_name].threshold
-            == expected.backlog_threshold_messages
             and alarms[expected.high_alarm_name].evaluation_periods
             == expected.scale_out_evaluation_periods
             and alarms[expected.high_alarm_name].datapoints_to_alarm
             == expected.scale_out_evaluation_periods
             and alarms[expected.high_alarm_name].treat_missing_data == "notBreaching"
-            and alarms[expected.empty_alarm_name].comparison_operator
-            == "LessThanThreshold"
             and alarms[expected.empty_alarm_name].actions_enabled
-            and alarms[expected.empty_alarm_name].threshold == 1
             and alarms[expected.empty_alarm_name].evaluation_periods
             == expected.scale_in_evaluation_periods
             and alarms[expected.empty_alarm_name].datapoints_to_alarm
             == expected.scale_in_evaluation_periods
-            and alarms[expected.empty_alarm_name].treat_missing_data == "breaching"
+        )
+        if not common_matches:
+            return False
+        scale_in = policies[expected.scale_in_policy_name]
+        scale_out = policies[expected.scale_out_policy_name]
+        high = alarms[expected.high_alarm_name]
+        low = alarms[expected.empty_alarm_name]
+        if expected.policy_version == 2:
+            return (
+                high.threshold == expected.backlog_threshold_messages
+                and high.signal == "visible_backlog"
+                and not high.metric_query_ids
+                and low.comparison_operator == "LessThanThreshold"
+                and low.threshold == 1
+                and low.treat_missing_data == "breaching"
+                and low.signal == "visible_backlog"
+                and not low.metric_query_ids
+            )
+        return (
+            scale_out.metric_interval_lower_bound == 0
+            and scale_out.metric_interval_upper_bound is None
+            and scale_in.metric_interval_lower_bound == 0
+            and scale_in.metric_interval_upper_bound is None
+            and high.threshold == expected.scale_out_messages_per_minute
+            and high.signal == "messages_sent"
+            and not high.metric_query_ids
+            and low.comparison_operator == "GreaterThanOrEqualToThreshold"
+            and low.threshold == 1
+            and low.treat_missing_data == "notBreaching"
+            and low.signal == "low_demand_and_queue_work"
+            and low.metric_query_ids
+            == ("delayed", "in_flight", "release_safe", "sent", "visible")
         )
 
 
@@ -290,12 +344,17 @@ def _expected_policy(
     queue_name: str,
 ) -> WorkerAutoscalingPolicy:
     return WorkerAutoscalingPolicy(
-        empty_alarm_name=f"{worker_service_name}-empty",
-        high_alarm_name=f"{worker_service_name}-backlog-high",
+        policy_version=3,
+        backlog_threshold_messages=None,
+        empty_alarm_name=f"{worker_service_name}-release-safe",
+        high_alarm_name=f"{worker_service_name}-demand-high",
         queue_name=queue_name,
         resource_id=f"service/{cluster_name}/{worker_service_name}",
         scale_in_policy_name=f"{worker_service_name}-scale-in",
+        scale_in_messages_per_minute=120,
+        scale_in_queue_work_threshold=10,
         scale_out_policy_name=f"{worker_service_name}-scale-out",
+        scale_out_messages_per_minute=300,
     )
 
 
@@ -368,7 +427,9 @@ def validate_elasticity_transition_plan(
             if address not in expected_addresses
         )
         missing = tuple(
-            address for address in MEANINGFUL_RESOURCE_ADDRESSES if address not in actions
+            address
+            for address in MEANINGFUL_RESOURCE_ADDRESSES
+            if address not in actions
         )
         wrong_actions = tuple(
             f"{address} ({'/'.join(actions[address])})"
@@ -423,53 +484,140 @@ def validate_elasticity_transition_plan(
         configuration = resource["change"]["after"].get(
             "step_scaling_policy_configuration"
         )
+        step = (
+            configuration[0]["step_adjustment"][0]
+            if isinstance(configuration, list)
+            and len(configuration) == 1
+            and isinstance(configuration[0].get("step_adjustment"), list)
+            and len(configuration[0]["step_adjustment"]) == 1
+            else {}
+        )
+        interval_matches = (
+            step.get("metric_interval_upper_bound") in (0, "0")
+            and step.get("metric_interval_lower_bound") is None
+            if expected_policy.policy_version == 2 and direction == "scale_in"
+            else step.get("metric_interval_lower_bound") in (0, "0")
+        )
         if (
             not isinstance(configuration, list)
             or len(configuration) != 1
             or configuration[0].get("adjustment_type") != "ExactCapacity"
             or configuration[0].get("cooldown") != cooldown
             or configuration[0].get("metric_aggregation_type") != "Maximum"
-            or not isinstance(configuration[0].get("step_adjustment"), list)
-            or len(configuration[0]["step_adjustment"]) != 1
-            or configuration[0]["step_adjustment"][0].get("scaling_adjustment")
-            != capacity
+            or step.get("scaling_adjustment") != capacity
+            or not interval_matches
         ):
             raise AwsElasticityTransitionError(
                 "Terraform scaling steps differ from the frozen policy"
             )
 
-    alarm_expectations = {
-        "aws_cloudwatch_metric_alarm.async_worker_backlog_high[0]": {
-            "actions_enabled": True,
-            "alarm_name": expected_policy.high_alarm_name,
-            "comparison_operator": "GreaterThanOrEqualToThreshold",
-            "datapoints_to_alarm": expected_policy.scale_out_evaluation_periods,
-            "evaluation_periods": expected_policy.scale_out_evaluation_periods,
-            "threshold": expected_policy.backlog_threshold_messages,
-            "treat_missing_data": "notBreaching",
-        },
-        "aws_cloudwatch_metric_alarm.async_worker_empty[0]": {
-            "actions_enabled": True,
-            "alarm_name": expected_policy.empty_alarm_name,
-            "comparison_operator": "LessThanThreshold",
-            "datapoints_to_alarm": expected_policy.scale_in_evaluation_periods,
-            "evaluation_periods": expected_policy.scale_in_evaluation_periods,
-            "threshold": 1,
-            "treat_missing_data": "breaching",
-        },
-    }
-    for address, expected in alarm_expectations.items():
+    high_address = "aws_cloudwatch_metric_alarm.async_worker_backlog_high[0]"
+    low_address = "aws_cloudwatch_metric_alarm.async_worker_empty[0]"
+    if expected_policy.policy_version == 2:
+        alarm_expectations = {
+            high_address: {
+                "actions_enabled": True,
+                "alarm_name": expected_policy.high_alarm_name,
+                "comparison_operator": "GreaterThanOrEqualToThreshold",
+                "datapoints_to_alarm": expected_policy.scale_out_evaluation_periods,
+                "evaluation_periods": expected_policy.scale_out_evaluation_periods,
+                "threshold": expected_policy.backlog_threshold_messages,
+                "treat_missing_data": "notBreaching",
+            },
+            low_address: {
+                "actions_enabled": True,
+                "alarm_name": expected_policy.empty_alarm_name,
+                "comparison_operator": "LessThanThreshold",
+                "datapoints_to_alarm": expected_policy.scale_in_evaluation_periods,
+                "evaluation_periods": expected_policy.scale_in_evaluation_periods,
+                "threshold": 1,
+                "treat_missing_data": "breaching",
+            },
+        }
+        for address, expected in alarm_expectations.items():
+            _exact_after(
+                meaningful[address],
+                {
+                    **expected,
+                    "dimensions": {"QueueName": expected_policy.queue_name},
+                    "metric_name": "ApproximateNumberOfMessagesVisible",
+                    "namespace": "AWS/SQS",
+                    "period": expected_policy.metric_period_seconds,
+                    "statistic": "Maximum",
+                },
+            )
+    else:
         _exact_after(
-            meaningful[address],
+            meaningful[high_address],
             {
-                **expected,
+                "actions_enabled": True,
+                "alarm_name": expected_policy.high_alarm_name,
+                "comparison_operator": "GreaterThanOrEqualToThreshold",
+                "datapoints_to_alarm": expected_policy.scale_out_evaluation_periods,
                 "dimensions": {"QueueName": expected_policy.queue_name},
-                "metric_name": "ApproximateNumberOfMessagesVisible",
+                "evaluation_periods": expected_policy.scale_out_evaluation_periods,
+                "metric_name": "NumberOfMessagesSent",
                 "namespace": "AWS/SQS",
                 "period": expected_policy.metric_period_seconds,
-                "statistic": "Maximum",
+                "statistic": "Sum",
+                "threshold": expected_policy.scale_out_messages_per_minute,
+                "treat_missing_data": "notBreaching",
             },
         )
+        _exact_after(
+            meaningful[low_address],
+            {
+                "actions_enabled": True,
+                "alarm_name": expected_policy.empty_alarm_name,
+                "comparison_operator": "GreaterThanOrEqualToThreshold",
+                "datapoints_to_alarm": expected_policy.scale_in_evaluation_periods,
+                "evaluation_periods": expected_policy.scale_in_evaluation_periods,
+                "threshold": 1,
+                "treat_missing_data": "notBreaching",
+            },
+        )
+        queries = meaningful[low_address]["change"]["after"].get("metric_query")
+        if not isinstance(queries, list):
+            raise AwsElasticityTransitionError(
+                "Terraform scale-in alarm omits its frozen metric queries"
+            )
+        by_id = {query.get("id"): query for query in queries if isinstance(query, dict)}
+        expected_expression = (
+            "IF(FILL(sent, 0) < 120, IF(FILL(visible, 0) + "
+            "FILL(in_flight, 0) + FILL(delayed, 0) < 10, 1, 0), 0)"
+        )
+        expected_metrics = {
+            "sent": ("NumberOfMessagesSent", "Sum"),
+            "visible": ("ApproximateNumberOfMessagesVisible", "Maximum"),
+            "in_flight": ("ApproximateNumberOfMessagesNotVisible", "Maximum"),
+            "delayed": ("ApproximateNumberOfMessagesDelayed", "Maximum"),
+        }
+        expression = by_id.get("release_safe", {})
+        if (
+            set(by_id) != {"release_safe", *expected_metrics}
+            or expression.get("expression") != expected_expression
+            or expression.get("return_data") is not True
+        ):
+            raise AwsElasticityTransitionError(
+                "Terraform scale-in expression differs from the frozen policy"
+            )
+        for query_id, (metric_name, statistic) in expected_metrics.items():
+            query = by_id[query_id]
+            metrics = query.get("metric")
+            if (
+                query.get("return_data") is not False
+                or not isinstance(metrics, list)
+                or len(metrics) != 1
+                or metrics[0].get("dimensions")
+                != {"QueueName": expected_policy.queue_name}
+                or metrics[0].get("metric_name") != metric_name
+                or metrics[0].get("namespace") != "AWS/SQS"
+                or metrics[0].get("period") != expected_policy.metric_period_seconds
+                or metrics[0].get("stat") != statistic
+            ):
+                raise AwsElasticityTransitionError(
+                    "Terraform scale-in metrics differ from the frozen policy"
+                )
 
     meaningful_outputs = {
         name: value
@@ -679,6 +827,12 @@ def _native_autoscaling_state(
                 scaling_adjustment=item["StepScalingPolicyConfiguration"][
                     "StepAdjustments"
                 ][0]["ScalingAdjustment"],
+                metric_interval_lower_bound=item["StepScalingPolicyConfiguration"][
+                    "StepAdjustments"
+                ][0].get("MetricIntervalLowerBound"),
+                metric_interval_upper_bound=item["StepScalingPolicyConfiguration"][
+                    "StepAdjustments"
+                ][0].get("MetricIntervalUpperBound"),
             )
             for item in sorted(policies, key=lambda value: value["PolicyName"])
             if item["PolicyType"] == "StepScaling"
@@ -691,27 +845,108 @@ def _native_autoscaling_state(
             == "Maximum"
             and len(item["StepScalingPolicyConfiguration"]["StepAdjustments"]) == 1
         )
-        normalized_alarms = tuple(
-            WorkerAlarmVerification(
-                name=item["AlarmName"],
-                actions_enabled=item["ActionsEnabled"],
-                comparison_operator=item["ComparisonOperator"],
-                datapoints_to_alarm=item["DatapointsToAlarm"],
-                evaluation_periods=item["EvaluationPeriods"],
-                threshold=item["Threshold"],
-                treat_missing_data=item["TreatMissingData"],
+        normalized_alarms = []
+        for item in sorted(alarms, key=lambda value: value["AlarmName"]):
+            alarm_name = item["AlarmName"]
+            if (
+                item["AlarmActions"] != expected_alarm_actions[alarm_name]
+                or item["OKActions"] != []
+                or item["InsufficientDataActions"] != []
+            ):
+                continue
+            signal_name = "visible_backlog"
+            metric_query_ids: tuple[str, ...] = ()
+            if alarm_name == expected.high_alarm_name:
+                expected_metric_name = (
+                    "NumberOfMessagesSent"
+                    if expected.policy_version == 3
+                    else "ApproximateNumberOfMessagesVisible"
+                )
+                expected_statistic = (
+                    "Sum" if expected.policy_version == 3 else "Maximum"
+                )
+                if (
+                    item.get("MetricName") != expected_metric_name
+                    or item.get("Namespace") != "AWS/SQS"
+                    or item.get("Period") != expected.metric_period_seconds
+                    or item.get("Statistic") != expected_statistic
+                    or item.get("Dimensions")
+                    != [{"Name": "QueueName", "Value": expected.queue_name}]
+                ):
+                    continue
+                signal_name = (
+                    "messages_sent"
+                    if expected.policy_version == 3
+                    else "visible_backlog"
+                )
+            elif expected.policy_version == 3:
+                metrics = item.get("Metrics")
+                if not isinstance(metrics, list):
+                    continue
+                metric_query_ids = tuple(sorted(query["Id"] for query in metrics))
+                expected_metric_names = {
+                    "sent": ("NumberOfMessagesSent", "Sum"),
+                    "visible": ("ApproximateNumberOfMessagesVisible", "Maximum"),
+                    "in_flight": (
+                        "ApproximateNumberOfMessagesNotVisible",
+                        "Maximum",
+                    ),
+                    "delayed": ("ApproximateNumberOfMessagesDelayed", "Maximum"),
+                }
+                query_by_id = {query["Id"]: query for query in metrics}
+                expression = query_by_id.get("release_safe", {})
+                if (
+                    set(query_by_id) != {"release_safe", *expected_metric_names}
+                    or expression.get("Expression")
+                    != (
+                        "IF(FILL(sent, 0) < 120, IF(FILL(visible, 0) + "
+                        "FILL(in_flight, 0) + FILL(delayed, 0) < 10, 1, 0), 0)"
+                    )
+                    or expression.get("ReturnData") is not True
+                ):
+                    continue
+                metric_queries_match = True
+                for query_id, (metric_name, statistic) in expected_metric_names.items():
+                    query = query_by_id[query_id]
+                    metric_stat = query.get("MetricStat", {})
+                    metric = metric_stat.get("Metric", {})
+                    if (
+                        query.get("ReturnData") is not False
+                        or metric.get("MetricName") != metric_name
+                        or metric.get("Namespace") != "AWS/SQS"
+                        or metric.get("Dimensions")
+                        != [{"Name": "QueueName", "Value": expected.queue_name}]
+                        or metric_stat.get("Period") != expected.metric_period_seconds
+                        or metric_stat.get("Stat") != statistic
+                    ):
+                        metric_queries_match = False
+                        break
+                if not metric_queries_match:
+                    continue
+                signal_name = "low_demand_and_queue_work"
+            else:
+                if (
+                    item.get("MetricName") != "ApproximateNumberOfMessagesVisible"
+                    or item.get("Namespace") != "AWS/SQS"
+                    or item.get("Period") != expected.metric_period_seconds
+                    or item.get("Statistic") != "Maximum"
+                    or item.get("Dimensions")
+                    != [{"Name": "QueueName", "Value": expected.queue_name}]
+                ):
+                    continue
+            normalized_alarms.append(
+                WorkerAlarmVerification(
+                    name=alarm_name,
+                    actions_enabled=item["ActionsEnabled"],
+                    comparison_operator=item["ComparisonOperator"],
+                    datapoints_to_alarm=item["DatapointsToAlarm"],
+                    evaluation_periods=item["EvaluationPeriods"],
+                    threshold=item["Threshold"],
+                    treat_missing_data=item["TreatMissingData"],
+                    signal=signal_name,
+                    metric_query_ids=metric_query_ids,
+                )
             )
-            for item in sorted(alarms, key=lambda value: value["AlarmName"])
-            if item["MetricName"] == "ApproximateNumberOfMessagesVisible"
-            and item["Namespace"] == "AWS/SQS"
-            and item["Period"] == expected.metric_period_seconds
-            and item["Statistic"] == "Maximum"
-            and item["Dimensions"]
-            == [{"Name": "QueueName", "Value": expected.queue_name}]
-            and item["AlarmActions"] == expected_alarm_actions[item["AlarmName"]]
-            and item["OKActions"] == []
-            and item["InsufficientDataActions"] == []
-        )
         verification = WorkerAutoscalingVerification(
             collected_at=observed_at,
             resource_id=target["ResourceId"],
@@ -719,7 +954,7 @@ def _native_autoscaling_state(
             maximum_capacity=target["MaxCapacity"],
             suspended=any(suspended_state.values()),
             policies=normalized_policies,
-            alarms=normalized_alarms,
+            alarms=tuple(normalized_alarms),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise AwsElasticityTransitionError(

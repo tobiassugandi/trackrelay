@@ -284,3 +284,44 @@ of plan values in the error, and the absent custom-health Terraform contract.
 This correction does not authorize another AWS attempt. A fresh reviewed plan,
 new session ID, matching clean revision, and explicit spending and unconditional
 teardown approval remain required for another paired run.
+
+## Fifth attempt: transient observation timeout
+
+Session `cloud-session-4-20260903T170106Z` reached the elastic treatment on
+revision `68e2c8a4467b`, but a bounded application observation timed out after
+the workload ended. Its evidence is retained as an interrupted candidate-v2
+attempt, not a capacity result. The combined controller completed unconditional
+cleanup: `teardown_verified` at 2026-09-03 18:19:51 UTC, all native inventory
+categories zero, and no cleanup or diagnostic errors.
+
+## Sixth attempt: completed candidate-v2 negative result
+
+Session `cloud-session-4-20260903T182124Z` completed both candidate-v2
+treatments and exact reconciliation. Fixed and elastic runs each accepted and
+delivered all 3,660 events with no duplicate business effects and an empty DLQ.
+The elastic worker pool changed from one to eight tasks and eventually returned
+to one; native ingestion and non-worker headroom checks passed.
+
+The frozen v2 acceptance gate nevertheless rejected the elastic treatment for
+`worker_recovery_not_observed_during_load` and `backlog_bound_exceeded`.
+Maximum observed outstanding work was 1,577 against the frozen 1,500 bound.
+The desired count first reached eight at about 292 seconds and running count at
+about 325 seconds, after the short peak had already created most of the backlog.
+Desired count returned to one at about 614 seconds and running count at about
+626 seconds, too late to establish a full one-worker recovery interval before
+the 660-second workload ended. These are policy/workload-timing failures, not
+delivery correctness failures.
+
+The offline negative comparison is retained under that session's
+`elasticity/report/` directory and correctly publishes no elasticity multiplier.
+The controller reached `teardown_verified` at 2026-09-03 19:12:34 UTC, with all
+30 native inventory categories zero and no cleanup or diagnostic errors. The
+measurement remains immutable and readable as candidate v2.
+
+Candidate v3 is a newly frozen experiment, not a relabelling or repair of v2.
+It retains the 1/5/10/25/10/5/1 rate shape and all acceptance bounds, lengthens
+the plateaus to 60/120/120/300/60/60/420 seconds, scales out from one native
+minute with at least 300 SQS sends, and scales in only after three minutes with
+both fewer than 120 sends and fewer than ten visible, in-flight, and delayed
+messages. A future run requires a fresh session ID, plan review, and explicit
+cost and teardown authorization.

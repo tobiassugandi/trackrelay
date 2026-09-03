@@ -50,8 +50,8 @@ def comparison_summaries():
     for index, item in enumerate(original.observations):
         accepted = item.database_persisted_events
         if index:
-            fixed_completed = min(accepted, fixed_completed + 100)
-            capacity = 40 if 60 <= item.seconds_after_load_started < 480 else 10
+            fixed_completed = min(accepted, fixed_completed + 200)
+            capacity = 40 if 60 <= item.seconds_after_load_started < 900 else 10
             elastic_completed = min(accepted, elastic_completed + 10 * capacity)
         for completed, points, fixed in (
             (fixed_completed, fixed_points, True),
@@ -236,11 +236,11 @@ def test_comparison_requires_completion_not_only_api_latency():
     peak = next(
         item for item in report.fixed.step_results if item.step_name == "peak-25"
     )
-    assert peak.completed_events_per_second == 10
-    assert peak.outstanding_change == 900
+    assert peak.completed_events_per_second == 20
+    assert peak.outstanding_change == 1500
     assert "completion_rate_below_offered_rate" in peak.rejection_reasons
     assert report.elastic.scale_out_seconds_after_start == 60
-    assert report.elastic.return_to_minimum_seconds_after_start == 480
+    assert report.elastic.return_to_minimum_seconds_after_start == 900
     assert report.elastic.stable_drain_seconds_after_load == 0
     assert report.elastic.drain_confirmed_seconds_after_load == 180
     assert (
@@ -285,7 +285,7 @@ def test_all_occurrences_of_rate_must_pass():
     fixed, _ = comparison_summaries()
     points = tuple(
         item.model_copy(update={"source_queue_visible_messages": 1501})
-        if item.seconds_after_load_started == 270
+        if item.seconds_after_load_started == 630
         else item
         for item in fixed.measurement.observations
     )
@@ -360,7 +360,7 @@ def test_rejected_elastic_evidence_produces_negative_report():
     fixed, elastic = comparison_summaries()
     points = tuple(
         item.model_copy(update={"worker_running_count": 8, "worker_desired_count": 8})
-        if 480 <= item.seconds_after_load_started < 660
+        if 720 <= item.seconds_after_load_started < 1140
         else item
         for item in elastic.measurement.observations
     )

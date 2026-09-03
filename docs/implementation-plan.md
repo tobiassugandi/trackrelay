@@ -825,12 +825,23 @@ A fresh saved plan and explicit approval are required for any new attempt.
   rejection, drift, interruption, serialization handoff, and cleanup failures.
 
 The remaining checkboxes below describe actual cloud execution, not local code
-readiness. Four session-4 attempts ran; the fourth fixed control qualified and
-reset passed, but the transition guard rejected an unrelated Cloud Map
-replacement before applying autoscaling. The elastic treatment has not yet run.
-A fresh approved session must repeat both treatments together.
+readiness. Six session-4 attempts ran. The sixth completed both candidate-v2
+treatments and exact delivery but was correctly rejected: worker scale-out was
+too late to keep outstanding work below 1,500 and recovery to one worker was not
+observed long enough before load ended. Its offline negative report publishes
+no multiplier, and teardown was verified with all 30 native categories zero.
 
-- [ ] Enable a documented worker scaling policy with the same minimum task count and a bounded maximum; use queue backlog or backlog per task as the demand signal.
+Candidate v3 is now frozen locally. It retains the 1/5/10/25/10/5/1 rate shape
+and guardrails, extends the waveform to 60/120/120/300/60/60/420 seconds
+(10,680 events), scales from one to eight on at least 300 SQS sends in one
+minute, and returns to one only after three periods with fewer than 120 sends
+and fewer than ten total visible/in-flight/delayed messages. Historical v2
+workload, policy, and CloudWatch evidence remain schema-compatible. A fresh
+approved session must repeat both treatments together.
+
+- [x] Freeze candidate-v3's demand-based scale-out and backlog-aware scale-in
+  policy with the same minimum and bounded maximum worker count; retain exactly
+  five transition resources and native verification of every alarm operand.
 - [ ] Replay the fixed-control workload without changing the application, task definition, API capacity, database, simulator, benchmark driver, SLO, or guardrails.
 - [ ] Verify that workers scale from A to B as load rises, backlog remains bounded and drains, and workers return to A after demand falls.
 - [ ] Freeze the scaling policy, environment, raw aligned time series, reconciliation evidence, and summary in `results/aws-elastic-treatment/`.
@@ -852,6 +863,11 @@ A fresh approved session must repeat both treatments together.
 - [ ] Put the figure and one-sentence elasticity result near the top of the repository README.
 - [ ] Explain the causal chain plainly: SQS exposes pending demand, autoscaling responds, ECS changes the worker count, and AWS supplies and releases compute without TrackRelay owning spare hardware.
 - [ ] Present the Stage 9.3 hardware-flexibility result as the clear first answer to "why not choose more suitable cloud hardware?", then keep migration details and extensive guardrail evidence from competing with the primary elasticity result.
+- [ ] Freeze and run a separate matched capacity staircase for the synchronous
+  reference and elastic asynchronous architecture. Use identical correctness,
+  completed-delivery, observation-duration, and stopping rules; report its
+  sustainable-rate ratio as the async-versus-sync `X×` headline. Do not infer
+  that ratio from candidate v3's 1-to-25 demand swing or API acceptance latency.
 
 ## Deferred follow-up results
 

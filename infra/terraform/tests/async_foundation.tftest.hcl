@@ -821,14 +821,17 @@ run "worker_elasticity_policy_is_bounded_and_queue_driven" {
     condition = (
       local.worker_autoscaling_policy.minimum_capacity == 1
       && local.worker_autoscaling_policy.maximum_capacity == 8
-      && local.worker_autoscaling_policy.backlog_threshold_messages == 10
+      && local.worker_autoscaling_policy.policy_version == 3
+      && local.worker_autoscaling_policy.scale_out_messages_per_minute == 300
+      && local.worker_autoscaling_policy.scale_in_messages_per_minute == 120
+      && local.worker_autoscaling_policy.scale_in_queue_work_threshold == 10
       && local.worker_autoscaling_policy.metric_period_seconds == 60
       && local.worker_autoscaling_policy.scale_out_evaluation_periods == 1
       && local.worker_autoscaling_policy.scale_in_evaluation_periods == 3
       && local.worker_autoscaling_policy.scale_out_cooldown_seconds == 60
       && local.worker_autoscaling_policy.scale_in_cooldown_seconds == 60
     )
-    error_message = "Worker elasticity must retain its frozen bounds, threshold, periods, and cooldowns."
+    error_message = "Worker elasticity must retain its frozen v3 bounds, thresholds, periods, and cooldowns."
   }
 
   assert {
@@ -853,6 +856,7 @@ run "worker_elasticity_policy_is_bounded_and_queue_driven" {
         && one(policy.step_scaling_policy_configuration).adjustment_type == "ExactCapacity"
         && one(policy.step_scaling_policy_configuration).cooldown == 60
         && one(policy.step_scaling_policy_configuration).metric_aggregation_type == "Maximum"
+        && tonumber(one(one(policy.step_scaling_policy_configuration).step_adjustment).metric_interval_lower_bound) == 0
       )
     ])
     error_message = "Both worker policy directions must use exact bounded capacity and one-minute cooldowns."
@@ -860,43 +864,50 @@ run "worker_elasticity_policy_is_bounded_and_queue_driven" {
 
   assert {
     condition = (
-      aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].metric_name == "ApproximateNumberOfMessagesVisible"
+      aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].metric_name == "NumberOfMessagesSent"
       && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].actions_enabled
       && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].namespace == "AWS/SQS"
-      && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].statistic == "Maximum"
+      && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].statistic == "Sum"
       && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].period == 60
-      && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].threshold == 10
+      && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].threshold == 300
       && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].evaluation_periods == 1
       && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].datapoints_to_alarm == 1
       && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].treat_missing_data == "notBreaching"
       && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].dimensions.QueueName == "trackrelay-8a7e37db-delivery"
       && length(aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].alarm_actions) == 1
     )
-    error_message = "Scale-out must use one complete native SQS backlog period."
+    error_message = "Scale-out must use one complete native SQS arrival-demand period."
   }
 
   assert {
     condition = (
-      aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_name == "ApproximateNumberOfMessagesVisible"
-      && aws_cloudwatch_metric_alarm.async_worker_empty[0].actions_enabled
-      && aws_cloudwatch_metric_alarm.async_worker_empty[0].namespace == "AWS/SQS"
-      && aws_cloudwatch_metric_alarm.async_worker_empty[0].statistic == "Maximum"
-      && aws_cloudwatch_metric_alarm.async_worker_empty[0].period == 60
-      && aws_cloudwatch_metric_alarm.async_worker_empty[0].comparison_operator == "LessThanThreshold"
+      aws_cloudwatch_metric_alarm.async_worker_empty[0].actions_enabled
+      && aws_cloudwatch_metric_alarm.async_worker_empty[0].comparison_operator == "GreaterThanOrEqualToThreshold"
       && aws_cloudwatch_metric_alarm.async_worker_empty[0].threshold == 1
       && aws_cloudwatch_metric_alarm.async_worker_empty[0].evaluation_periods == 3
       && aws_cloudwatch_metric_alarm.async_worker_empty[0].datapoints_to_alarm == 3
-      && aws_cloudwatch_metric_alarm.async_worker_empty[0].treat_missing_data == "breaching"
-      && aws_cloudwatch_metric_alarm.async_worker_empty[0].dimensions.QueueName == "trackrelay-8a7e37db-delivery"
+      && aws_cloudwatch_metric_alarm.async_worker_empty[0].treat_missing_data == "notBreaching"
       && length(aws_cloudwatch_metric_alarm.async_worker_empty[0].alarm_actions) == 1
+      && length(aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_query) == 5
+      && one([for query in aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_query : query if query.id == "release_safe"]).expression == "IF(FILL(sent, 0) < 120, IF(FILL(visible, 0) + FILL(in_flight, 0) + FILL(delayed, 0) < 10, 1, 0), 0)"
+      && one([for query in aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_query : query if query.id == "release_safe"]).return_data
+      && one(one([for query in aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_query : query if query.id == "sent"]).metric).metric_name == "NumberOfMessagesSent"
+      && one(one([for query in aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_query : query if query.id == "sent"]).metric).stat == "Sum"
+      && one(one([for query in aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_query : query if query.id == "visible"]).metric).metric_name == "ApproximateNumberOfMessagesVisible"
+      && one(one([for query in aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_query : query if query.id == "in_flight"]).metric).metric_name == "ApproximateNumberOfMessagesNotVisible"
+      && one(one([for query in aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_query : query if query.id == "delayed"]).metric).metric_name == "ApproximateNumberOfMessagesDelayed"
     )
-    error_message = "Scale-in must require three empty native SQS periods."
+    error_message = "Scale-in must require three low-demand, low-queue-work native SQS periods."
   }
 
   assert {
     condition = (
       output.worker_autoscaling_policy.minimum_capacity == 1
       && output.worker_autoscaling_policy.maximum_capacity == 8
+      && output.worker_autoscaling_policy.policy_version == 3
+      && output.worker_autoscaling_policy.scale_out_messages_per_minute == 300
+      && output.worker_autoscaling_policy.scale_in_messages_per_minute == 120
+      && output.worker_autoscaling_policy.scale_in_queue_work_threshold == 10
       && output.worker_autoscaling_policy.queue_name == "trackrelay-8a7e37db-delivery"
       && output.worker_autoscaling_policy.resource_id == "service/trackrelay-8a7e37db-async/trackrelay-8a7e37db-worker"
     )

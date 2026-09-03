@@ -1,13 +1,16 @@
 locals {
   worker_autoscaling_policy = {
-    backlog_threshold_messages   = 10
-    maximum_capacity             = 8
-    minimum_capacity             = 1
-    metric_period_seconds        = 60
-    scale_in_cooldown_seconds    = 60
-    scale_in_evaluation_periods  = 3
-    scale_out_cooldown_seconds   = 60
-    scale_out_evaluation_periods = 1
+    policy_version                = 3
+    maximum_capacity              = 8
+    minimum_capacity              = 1
+    metric_period_seconds         = 60
+    scale_in_messages_per_minute  = 120
+    scale_in_queue_work_threshold = 10
+    scale_in_cooldown_seconds     = 60
+    scale_in_evaluation_periods   = 3
+    scale_out_messages_per_minute = 300
+    scale_out_cooldown_seconds    = 60
+    scale_out_evaluation_periods  = 1
   }
 }
 
@@ -61,7 +64,7 @@ resource "aws_appautoscaling_policy" "async_worker_scale_in" {
     metric_aggregation_type = "Maximum"
 
     step_adjustment {
-      metric_interval_upper_bound = 0
+      metric_interval_lower_bound = 0
       scaling_adjustment          = local.worker_autoscaling_policy.minimum_capacity
     }
   }
@@ -72,23 +75,23 @@ resource "aws_cloudwatch_metric_alarm" "async_worker_backlog_high" {
 
   actions_enabled     = true
   alarm_actions       = [aws_appautoscaling_policy.async_worker_scale_out[0].arn]
-  alarm_description   = "Scale the experiment worker pool to its frozen maximum."
-  alarm_name          = "${local.name_prefix}-worker-backlog-high"
+  alarm_description   = "Scale the experiment worker pool to its frozen maximum when demand rises."
+  alarm_name          = "${local.name_prefix}-worker-demand-high"
   comparison_operator = "GreaterThanOrEqualToThreshold"
   datapoints_to_alarm = local.worker_autoscaling_policy.scale_out_evaluation_periods
   dimensions = {
     QueueName = aws_sqs_queue.delivery[0].name
   }
   evaluation_periods = local.worker_autoscaling_policy.scale_out_evaluation_periods
-  metric_name        = "ApproximateNumberOfMessagesVisible"
+  metric_name        = "NumberOfMessagesSent"
   namespace          = "AWS/SQS"
   period             = local.worker_autoscaling_policy.metric_period_seconds
-  statistic          = "Maximum"
-  threshold          = local.worker_autoscaling_policy.backlog_threshold_messages
+  statistic          = "Sum"
+  threshold          = local.worker_autoscaling_policy.scale_out_messages_per_minute
   treat_missing_data = "notBreaching"
 
   tags = {
-    Name = "${local.name_prefix}-worker-backlog-high"
+    Name = "${local.name_prefix}-worker-demand-high"
   }
 }
 
@@ -97,22 +100,70 @@ resource "aws_cloudwatch_metric_alarm" "async_worker_empty" {
 
   actions_enabled     = true
   alarm_actions       = [aws_appautoscaling_policy.async_worker_scale_in[0].arn]
-  alarm_description   = "Return the experiment worker pool to its fixed minimum."
-  alarm_name          = "${local.name_prefix}-worker-empty"
-  comparison_operator = "LessThanThreshold"
+  alarm_description   = "Return the worker pool to its minimum after sustained low demand and queue work."
+  alarm_name          = "${local.name_prefix}-worker-release-safe"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
   datapoints_to_alarm = local.worker_autoscaling_policy.scale_in_evaluation_periods
-  dimensions = {
-    QueueName = aws_sqs_queue.delivery[0].name
+  evaluation_periods  = local.worker_autoscaling_policy.scale_in_evaluation_periods
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+
+  metric_query {
+    id          = "release_safe"
+    expression  = "IF(FILL(sent, 0) < ${local.worker_autoscaling_policy.scale_in_messages_per_minute}, IF(FILL(visible, 0) + FILL(in_flight, 0) + FILL(delayed, 0) < ${local.worker_autoscaling_policy.scale_in_queue_work_threshold}, 1, 0), 0)"
+    label       = "Low arrivals and low unfinished queue work"
+    return_data = true
   }
-  evaluation_periods = local.worker_autoscaling_policy.scale_in_evaluation_periods
-  metric_name        = "ApproximateNumberOfMessagesVisible"
-  namespace          = "AWS/SQS"
-  period             = local.worker_autoscaling_policy.metric_period_seconds
-  statistic          = "Maximum"
-  threshold          = 1
-  treat_missing_data = "breaching"
+
+  metric_query {
+    id          = "sent"
+    return_data = false
+    metric {
+      dimensions  = { QueueName = aws_sqs_queue.delivery[0].name }
+      metric_name = "NumberOfMessagesSent"
+      namespace   = "AWS/SQS"
+      period      = local.worker_autoscaling_policy.metric_period_seconds
+      stat        = "Sum"
+    }
+  }
+
+  metric_query {
+    id          = "visible"
+    return_data = false
+    metric {
+      dimensions  = { QueueName = aws_sqs_queue.delivery[0].name }
+      metric_name = "ApproximateNumberOfMessagesVisible"
+      namespace   = "AWS/SQS"
+      period      = local.worker_autoscaling_policy.metric_period_seconds
+      stat        = "Maximum"
+    }
+  }
+
+  metric_query {
+    id          = "in_flight"
+    return_data = false
+    metric {
+      dimensions  = { QueueName = aws_sqs_queue.delivery[0].name }
+      metric_name = "ApproximateNumberOfMessagesNotVisible"
+      namespace   = "AWS/SQS"
+      period      = local.worker_autoscaling_policy.metric_period_seconds
+      stat        = "Maximum"
+    }
+  }
+
+  metric_query {
+    id          = "delayed"
+    return_data = false
+    metric {
+      dimensions  = { QueueName = aws_sqs_queue.delivery[0].name }
+      metric_name = "ApproximateNumberOfMessagesDelayed"
+      namespace   = "AWS/SQS"
+      period      = local.worker_autoscaling_policy.metric_period_seconds
+      stat        = "Maximum"
+    }
+  }
 
   tags = {
-    Name = "${local.name_prefix}-worker-empty"
+    Name = "${local.name_prefix}-worker-release-safe"
   }
 }

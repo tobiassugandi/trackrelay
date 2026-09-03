@@ -76,13 +76,35 @@ def completed(
 
 def policy() -> WorkerAutoscalingPolicy:
     return WorkerAutoscalingPolicy(
-        empty_alarm_name=f"{WORKER_SERVICE}-empty",
-        high_alarm_name=f"{WORKER_SERVICE}-backlog-high",
+        policy_version=3,
+        backlog_threshold_messages=None,
+        empty_alarm_name=f"{WORKER_SERVICE}-release-safe",
+        high_alarm_name=f"{WORKER_SERVICE}-demand-high",
         queue_name=QUEUE_NAME,
         resource_id=f"service/{CLUSTER_NAME}/{WORKER_SERVICE}",
         scale_in_policy_name=f"{WORKER_SERVICE}-scale-in",
+        scale_in_messages_per_minute=120,
+        scale_in_queue_work_threshold=10,
         scale_out_policy_name=f"{WORKER_SERVICE}-scale-out",
+        scale_out_messages_per_minute=300,
     )
+
+
+def test_candidate_v2_policy_evidence_remains_readable() -> None:
+    historical = WorkerAutoscalingPolicy.model_validate(
+        {
+            "empty_alarm_name": f"{WORKER_SERVICE}-empty",
+            "high_alarm_name": f"{WORKER_SERVICE}-backlog-high",
+            "queue_name": QUEUE_NAME,
+            "resource_id": f"service/{CLUSTER_NAME}/{WORKER_SERVICE}",
+            "scale_in_policy_name": f"{WORKER_SERVICE}-scale-in",
+            "scale_out_policy_name": f"{WORKER_SERVICE}-scale-out",
+        }
+    )
+
+    assert historical.policy_version == 2
+    assert historical.backlog_threshold_messages == 10
+    assert historical.scale_out_messages_per_minute is None
 
 
 def empty_state() -> ExperimentStateSnapshot:
@@ -228,7 +250,12 @@ def plan_document(expected: WorkerAutoscalingPolicy) -> dict[str, object]:
                         "adjustment_type": "ExactCapacity",
                         "cooldown": 60,
                         "metric_aggregation_type": "Maximum",
-                        "step_adjustment": [{"scaling_adjustment": 8}],
+                        "step_adjustment": [
+                            {
+                                "metric_interval_lower_bound": 0,
+                                "scaling_adjustment": 8,
+                            }
+                        ],
                     }
                 ],
             },
@@ -244,7 +271,12 @@ def plan_document(expected: WorkerAutoscalingPolicy) -> dict[str, object]:
                         "adjustment_type": "ExactCapacity",
                         "cooldown": 60,
                         "metric_aggregation_type": "Maximum",
-                        "step_adjustment": [{"scaling_adjustment": 1}],
+                        "step_adjustment": [
+                            {
+                                "metric_interval_lower_bound": 0,
+                                "scaling_adjustment": 1,
+                            }
+                        ],
                     }
                 ],
             },
@@ -258,11 +290,11 @@ def plan_document(expected: WorkerAutoscalingPolicy) -> dict[str, object]:
                 "datapoints_to_alarm": 1,
                 "dimensions": {"QueueName": expected.queue_name},
                 "evaluation_periods": 1,
-                "metric_name": "ApproximateNumberOfMessagesVisible",
+                "metric_name": "NumberOfMessagesSent",
                 "namespace": "AWS/SQS",
                 "period": 60,
-                "statistic": "Maximum",
-                "threshold": 10,
+                "statistic": "Sum",
+                "threshold": 300,
                 "treat_missing_data": "notBreaching",
             },
         ),
@@ -271,16 +303,51 @@ def plan_document(expected: WorkerAutoscalingPolicy) -> dict[str, object]:
             {
                 "actions_enabled": True,
                 "alarm_name": expected.empty_alarm_name,
-                "comparison_operator": "LessThanThreshold",
+                "comparison_operator": "GreaterThanOrEqualToThreshold",
                 "datapoints_to_alarm": 3,
-                "dimensions": {"QueueName": expected.queue_name},
                 "evaluation_periods": 3,
-                "metric_name": "ApproximateNumberOfMessagesVisible",
-                "namespace": "AWS/SQS",
-                "period": 60,
-                "statistic": "Maximum",
+                "metric_query": [
+                    {
+                        "id": "release_safe",
+                        "expression": "IF(FILL(sent, 0) < 120, IF(FILL(visible, 0) + FILL(in_flight, 0) + FILL(delayed, 0) < 10, 1, 0), 0)",
+                        "return_data": True,
+                    },
+                    *(
+                        {
+                            "id": query_id,
+                            "return_data": False,
+                            "metric": [
+                                {
+                                    "dimensions": {"QueueName": expected.queue_name},
+                                    "metric_name": metric_name,
+                                    "namespace": "AWS/SQS",
+                                    "period": 60,
+                                    "stat": statistic,
+                                }
+                            ],
+                        }
+                        for query_id, metric_name, statistic in (
+                            ("sent", "NumberOfMessagesSent", "Sum"),
+                            (
+                                "visible",
+                                "ApproximateNumberOfMessagesVisible",
+                                "Maximum",
+                            ),
+                            (
+                                "in_flight",
+                                "ApproximateNumberOfMessagesNotVisible",
+                                "Maximum",
+                            ),
+                            (
+                                "delayed",
+                                "ApproximateNumberOfMessagesDelayed",
+                                "Maximum",
+                            ),
+                        )
+                    ),
+                ],
                 "threshold": 1,
-                "treat_missing_data": "breaching",
+                "treat_missing_data": "notBreaching",
             },
         ),
     ]
@@ -310,22 +377,32 @@ def native_verification(
                 name=expected.scale_in_policy_name,
                 cooldown_seconds=60,
                 scaling_adjustment=1,
+                metric_interval_lower_bound=0,
             ),
             WorkerScalingPolicyVerification(
                 name=expected.scale_out_policy_name,
                 cooldown_seconds=60,
                 scaling_adjustment=8,
+                metric_interval_lower_bound=0,
             ),
         ),
         alarms=(
             WorkerAlarmVerification(
                 name=expected.empty_alarm_name,
                 actions_enabled=True,
-                comparison_operator="LessThanThreshold",
+                comparison_operator="GreaterThanOrEqualToThreshold",
                 datapoints_to_alarm=3,
                 evaluation_periods=3,
                 threshold=1,
-                treat_missing_data="breaching",
+                treat_missing_data="notBreaching",
+                signal="low_demand_and_queue_work",
+                metric_query_ids=(
+                    "delayed",
+                    "in_flight",
+                    "release_safe",
+                    "sent",
+                    "visible",
+                ),
             ),
             WorkerAlarmVerification(
                 name=expected.high_alarm_name,
@@ -333,8 +410,9 @@ def native_verification(
                 comparison_operator="GreaterThanOrEqualToThreshold",
                 datapoints_to_alarm=1,
                 evaluation_periods=1,
-                threshold=10,
+                threshold=300,
                 treat_missing_data="notBreaching",
+                signal="messages_sent",
             ),
         ),
     )
@@ -449,9 +527,7 @@ def test_plan_reports_cloud_map_replacement_without_plan_values() -> None:
 
     message = str(captured.value)
     assert "aws_ecs_service.async_simulator[0] (update)" in message
-    assert (
-        "aws_service_discovery_service.simulator[0] (delete/create)" in message
-    )
+    assert "aws_service_discovery_service.simulator[0] (delete/create)" in message
     assert "sensitive-value" not in message
     assert "old-sensitive-value" not in message
     assert "new-sensitive-value" not in message
@@ -530,50 +606,89 @@ def test_native_verification_requires_alarm_policy_wiring(tmp_path: Path) -> Non
                             "AdjustmentType": "ExactCapacity",
                             "Cooldown": 60,
                             "MetricAggregationType": "Maximum",
-                            "StepAdjustments": [{"ScalingAdjustment": capacity}],
+                            "StepAdjustments": [
+                                {
+                                    "MetricIntervalLowerBound": 0,
+                                    "ScalingAdjustment": capacity,
+                                }
+                            ],
                         },
                     }
                 )
             return completed(call, stdout=dumps({"ScalingPolicies": policies}))
         if "describe-alarms" in call:
-            alarms = []
-            for name, action, comparison, periods, threshold, missing in (
-                (
-                    expected.empty_alarm_name,
-                    scale_in_arn,
-                    "LessThanThreshold",
-                    3,
-                    1,
-                    "breaching",
-                ),
-                (
-                    expected.high_alarm_name,
-                    scale_out_arn,
-                    "GreaterThanOrEqualToThreshold",
-                    1,
-                    10,
-                    "notBreaching",
-                ),
-            ):
-                alarms.append(
-                    {
-                        "AlarmName": name,
-                        "AlarmActions": [action],
-                        "ActionsEnabled": True,
-                        "ComparisonOperator": comparison,
-                        "DatapointsToAlarm": periods,
-                        "Dimensions": [{"Name": "QueueName", "Value": QUEUE_NAME}],
-                        "EvaluationPeriods": periods,
-                        "MetricName": "ApproximateNumberOfMessagesVisible",
-                        "Namespace": "AWS/SQS",
-                        "OKActions": [],
-                        "Period": 60,
-                        "Statistic": "Maximum",
-                        "Threshold": threshold,
-                        "TreatMissingData": missing,
-                        "InsufficientDataActions": [],
-                    }
-                )
+            common_alarm = {
+                "ActionsEnabled": True,
+                "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+                "OKActions": [],
+                "InsufficientDataActions": [],
+                "TreatMissingData": "notBreaching",
+            }
+            alarms = [
+                {
+                    **common_alarm,
+                    "AlarmName": expected.high_alarm_name,
+                    "AlarmActions": [scale_out_arn],
+                    "DatapointsToAlarm": 1,
+                    "Dimensions": [{"Name": "QueueName", "Value": QUEUE_NAME}],
+                    "EvaluationPeriods": 1,
+                    "MetricName": "NumberOfMessagesSent",
+                    "Namespace": "AWS/SQS",
+                    "Period": 60,
+                    "Statistic": "Sum",
+                    "Threshold": 300,
+                },
+                {
+                    **common_alarm,
+                    "AlarmName": expected.empty_alarm_name,
+                    "AlarmActions": [scale_in_arn],
+                    "DatapointsToAlarm": 3,
+                    "EvaluationPeriods": 3,
+                    "Threshold": 1,
+                    "Metrics": [
+                        {
+                            "Id": "release_safe",
+                            "Expression": "IF(FILL(sent, 0) < 120, IF(FILL(visible, 0) + FILL(in_flight, 0) + FILL(delayed, 0) < 10, 1, 0), 0)",
+                            "ReturnData": True,
+                        },
+                        *(
+                            {
+                                "Id": query_id,
+                                "ReturnData": False,
+                                "MetricStat": {
+                                    "Metric": {
+                                        "Dimensions": [
+                                            {"Name": "QueueName", "Value": QUEUE_NAME}
+                                        ],
+                                        "MetricName": metric_name,
+                                        "Namespace": "AWS/SQS",
+                                    },
+                                    "Period": 60,
+                                    "Stat": statistic,
+                                },
+                            }
+                            for query_id, metric_name, statistic in (
+                                ("sent", "NumberOfMessagesSent", "Sum"),
+                                (
+                                    "visible",
+                                    "ApproximateNumberOfMessagesVisible",
+                                    "Maximum",
+                                ),
+                                (
+                                    "in_flight",
+                                    "ApproximateNumberOfMessagesNotVisible",
+                                    "Maximum",
+                                ),
+                                (
+                                    "delayed",
+                                    "ApproximateNumberOfMessagesDelayed",
+                                    "Maximum",
+                                ),
+                            )
+                        ),
+                    ],
+                },
+            ]
             return completed(call, stdout=dumps({"MetricAlarms": alarms}))
         raise AssertionError(call)
 

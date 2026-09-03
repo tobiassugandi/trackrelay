@@ -24,21 +24,27 @@ TEST_RUN_ID = UUID("00000000-0000-0000-0000-000000000906")
 def test_candidate_is_one_metric_aligned_rise_and_fall() -> None:
     definition = ELASTICITY_WORKLOAD_DEFINITION
 
-    assert tuple(
-        step.offered_rate_per_second for step in definition.steps
-    ) == (1, 5, 10, 25, 10, 5, 1)
+    assert tuple(step.offered_rate_per_second for step in definition.steps) == (
+        1,
+        5,
+        10,
+        25,
+        10,
+        5,
+        1,
+    )
     assert tuple(step.duration_seconds for step in definition.steps) == (
         60,
-        60,
-        60,
-        60,
-        60,
-        60,
+        120,
+        120,
         300,
+        60,
+        60,
+        420,
     )
-    assert definition.event_offsets == (0, 60, 360, 960, 2460, 3060, 3360)
-    assert definition.expected_request_count == 3660
-    assert definition.duration_seconds == 660
+    assert definition.event_offsets == (0, 60, 660, 1860, 9360, 9960, 10260)
+    assert definition.expected_request_count == 10680
+    assert definition.duration_seconds == 1140
     assert definition.peak_rate_per_second == 25
     assert definition.minimum_worker_count == 1
     assert definition.maximum_non_worker_utilization_percent == 70
@@ -117,6 +123,7 @@ def test_definition_rejects_an_unaligned_or_non_recovering_wave() -> None:
 
 def test_treatments_use_the_same_exact_created_event_shape() -> None:
     definition = ElasticityWorkloadDefinition(
+        name="aws-elasticity-candidate-v2",
         steps=(
             ElasticityWorkloadStep(
                 name="baseline",
@@ -143,7 +150,7 @@ def test_treatments_use_the_same_exact_created_event_shape() -> None:
                 offered_rate_per_second=1,
                 duration_seconds=300,
             ),
-        )
+        ),
     )
     fixed = build_elasticity_manifest(
         ElasticityTreatment.FIXED,
@@ -161,9 +168,7 @@ def test_treatments_use_the_same_exact_created_event_shape() -> None:
     assert fixed.expected_events == elastic.expected_events
     assert fixed.events_generated == definition.expected_request_count
     assert fixed.expected_unique_events == definition.expected_request_count
-    assert set(fixed.expected_final_shipments.values()) == {
-        ShipmentStatus.CREATED
-    }
+    assert set(fixed.expected_final_shipments.values()) == {ShipmentStatus.CREATED}
 
 
 def test_k6_command_mounts_the_definition_manifest_and_results() -> None:
@@ -205,11 +210,9 @@ def test_prepare_writes_self_describing_replay_inputs(tmp_path: Path) -> None:
 
     definition = loads(definition_path.read_text(encoding="utf-8"))
     manifest = loads(manifest_path.read_text(encoding="utf-8"))
-    command = loads(
-        (output_directory / "k6-command.json").read_text(encoding="utf-8")
-    )
-    assert definition["name"] == "aws-elasticity-candidate-v2"
-    assert definition["expected_request_count"] == 3660
+    command = loads((output_directory / "k6-command.json").read_text(encoding="utf-8"))
+    assert definition["name"] == "aws-elasticity-candidate-v3"
+    assert definition["expected_request_count"] == 10680
     assert manifest["scenario_name"] == "elasticity-fixed-control"
-    assert manifest["events_generated"] == 3660
+    assert manifest["events_generated"] == 10680
     assert command[-1] == "/scripts/elasticity-steps.js"

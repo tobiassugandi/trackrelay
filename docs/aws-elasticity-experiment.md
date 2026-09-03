@@ -14,7 +14,7 @@ work accumulates. A successful treatment must show this complete sequence:
 offered load rises
         |
         v
-SQS backlog exposes pending work
+SQS arrival demand crosses the frozen threshold
         |
         v
 ECS increases worker tasks
@@ -31,24 +31,24 @@ below 1%, complete request scheduling, every accepted event, zero duplicate
 business effects, correct final shipment states, an empty DLQ, and the frozen
 drain contract. API latency alone cannot establish sustainable end-to-end load.
 
-## Candidate workload v2
+## Candidate workload v3
 
-`aws-elasticity-candidate-v2` is now defined in code and consumed from a saved
+`aws-elasticity-candidate-v3` is now defined in code and consumed from a saved
 JSON definition by `load/elasticity-steps.js`:
 
 | Step | Offered rate | Duration | Scheduled events |
 | --- | ---: | ---: | ---: |
 | baseline | 1 event/s | 60 s | 60 |
-| rise-5 | 5 events/s | 60 s | 300 |
-| rise-10 | 10 events/s | 60 s | 600 |
-| peak-25 | 25 events/s | 60 s | 1,500 |
+| rise-5 | 5 events/s | 120 s | 600 |
+| rise-10 | 10 events/s | 120 s | 1,200 |
+| peak-25 | 25 events/s | 300 s | 7,500 |
 | fall-10 | 10 events/s | 60 s | 600 |
 | fall-5 | 5 events/s | 60 s | 300 |
-| recovery | 1 event/s | 300 s | 300 |
+| recovery | 1 event/s | 420 s | 420 |
 
-The complete waveform schedules 3,660 unique `CREATED` events over 660 seconds.
+The complete waveform schedules 10,680 unique `CREATED` events over 1,140 seconds.
 Every plateau aligns to CloudWatch's 60-second native metric period. The final
-five-minute low-rate window exists to observe backlog recovery and, in the
+seven-minute low-rate window exists to observe backlog recovery and, in the
 elastic treatment, return to the minimum worker count.
 
 The controller waits until the next UTC minute boundary when necessary and
@@ -69,9 +69,13 @@ retains headroom. If those conditions do not isolate the worker, revise and
 re-freeze the candidate before enabling autoscaling; never tune the workload
 after seeing the elastic result.
 
-Candidate v2 preserves v1's exact waveform and deterministic events. It adds
-the fixed, machine-evaluated native and database-pool qualification limits
-rather than silently changing the meaning of the earlier saved definition.
+Candidate v3 follows the completed candidate-v2 negative result. V2 proved
+correct delivery and a one-to-eight-to-one worker transition, but its
+backlog-triggered scale-out arrived too late to keep maximum outstanding work
+under 1,500, and its empty-queue scale-in occurred only after load ended. V3
+retains the rates, deterministic event shape, resource bounds, and acceptance
+limits while lengthening the demand plateaus and replacing the worker policy.
+Historical v2 evidence remains readable and is never relabelled as v3.
 
 The non-worker qualification limits are frozen before session 4: maximum API,
 simulator, RDS CPU, API memory, simulator memory, and API database-pool use must
@@ -168,9 +172,9 @@ Only a manifest in `fixed_control_qualified` state can enter the reset. The
 controller revalidates the approved clean revision, all fixed ECS capacities,
 the API and queue endpoints, a stable one-of-one worker service, and the
 absence of an ECS scalable target. It also requires the live application state
-to describe exactly the qualified fixed run: one test-run row, all 3,660
+to describe exactly the qualified fixed run: one test-run row, all 10,680
 events, shipments, durable outbox entries, at least one delivery attempt per
-event, 3,660 simulator receipts, a healthy simulator, and empty source and
+event, 10,680 simulator receipts, a healthy simulator, and empty source and
 dead-letter queues.
 
 For an authorized live session, run:
@@ -208,16 +212,21 @@ against a partially changed stack.
 ## Worker-autoscaling transition
 
 The elastic treatment uses one frozen step-scaling policy. The source queue's
-native `ApproximateNumberOfMessagesVisible` maximum is evaluated in 60-second
-periods. Ten or more visible messages for one period sets the worker service to
-eight tasks. Zero visible messages for three consecutive periods returns it to
-one. Both directions use exact-capacity adjustments and a 60-second cooldown;
-missing data does not cause scale-out and is treated as empty for scale-in.
+native `NumberOfMessagesSent` sum is evaluated in 60-second periods. At least
+300 messages sent in one period (5 events/s) sets the worker service to eight
+tasks. Returning to one requires both fewer than 120 messages sent per minute
+(below 2 events/s) and fewer than ten unfinished messages across visible,
+in-flight, and delayed queue work for three consecutive periods. Both
+directions use exact-capacity adjustments and a 60-second cooldown. Missing
+data does not trigger either direction because every sparse operand is filled
+inside the explicit metric-math expression and the alarm itself treats missing
+data as non-breaching.
 
 This is an experiment policy, not a general production recommendation. Its
 purpose is to make acquisition and release obvious within the fixed waveform:
-one complete backlog bucket can trigger expansion, while the five-minute
-recovery step contains the three empty buckets required for contraction. The
+one complete arrival-demand bucket can trigger expansion before backlog grows,
+while the seven-minute recovery step contains the three low-demand,
+low-queue-work buckets required for safe contraction. The
 maximum adds at most seven 0.25-vCPU/0.5-GiB Fargate workers—1.75 vCPU and
 3.5 GiB above the fixed control—only while the alarm-driven service desires
 them. It adds one scalable target, two scaling policies, and two CloudWatch
@@ -299,7 +308,7 @@ The pre-data elastic contract adds these explicit qualification bounds:
 - Desired and running workers must remain within 1–8. Both live samples and
   native metrics must show expansion before recovery; a desired count of eight
   without actual running workers does not pass.
-- During the five-minute low-rate recovery, the sampled one-worker suffix must
+- During the seven-minute low-rate recovery, the sampled one-worker suffix must
   last at least 60 seconds and reach within 30 seconds of the waveform's end.
   The last complete native recovery minute must also show one running worker.
   Returning to one only after traffic stops does not pass.
@@ -398,6 +407,16 @@ processing support, not per-event end-to-end latency. Scale-out, return-to-one,
 and drain times are first observed samples, not exact transition timestamps.
 These conservative reporting rules are frozen before cloud session 4 and do not
 change the workload or tune the scaling intervention after seeing its result.
+
+This paired fixed-versus-elastic async run answers the elasticity question:
+whether cloud workers are acquired for high demand and released after demand
+falls while end-to-end guardrails continue to pass. Its 1-to-25 offered-load
+swing is not the claimed async-versus-synchronous traffic multiplier. That
+headline requires a separate, pre-frozen capacity staircase comparing the
+synchronous reference and modernized asynchronous architecture with matched
+correctness, delivery completion, observation duration, and stop rules. Do not
+add a 50 events/s step to candidate v3 after seeing its result or substitute API
+acceptance latency for completed delivery throughput.
 
 Local synthetic reporting tests (no cloud resources):
 

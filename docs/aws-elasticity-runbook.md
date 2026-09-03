@@ -14,7 +14,9 @@ have a separate Terraform-owned group, created before the cluster and deleted
 after it. Native verification checks this namespace independently of application
 logs, and comparison reports require that new inventory entry. See the
 [resource/cost review](aws-elasticity-cost-review.md) for the discovery and cleanup
-audit. No session-4 resources have been provisioned.
+audit. Two fixed-control attempts have since run and been torn down; neither
+qualified, and the elastic treatment has not started. The second attempt exposed
+a load-driver slice-boundary bug. See the [incident record](aws-elasticity-session-4-incident.md).
 
 ## Workflow and ownership
 
@@ -102,7 +104,7 @@ elapsed-time ticker. The CLI cancels the ticker on success, failure, or interrup
 
 ## 1. Local preflight, before provisioning
 
-Run from the repository root with Python 3.12, uv, Terraform, Docker, AWS CLI,
+Run from the repository root with Python 3.12, uv, Node.js 22+, Terraform, Docker, AWS CLI,
 curl, and jq installed. Start Docker, then run:
 
 ```shell
@@ -120,11 +122,39 @@ git rev-parse HEAD
 
 These checks do not provision AWS. Dependency initialization and container builds
 may download packages or images. `infra-check` uses mocked-provider Terraform
-tests. The driver check validates the pinned k6 image against the actual manifest
-and script; it does not send load. The session rehearsal exercises real lifecycle
+tests. The driver check executes the actual JavaScript module with mocked k6
+APIs and generated inputs, then validates it with the pinned k6 image. It sends
+no HTTP requests. Node's VM-module experimental warning is expected; there are
+no npm dependencies. The tests force boundary iterations for every step,
+including the failed session's baseline/fall-5/recovery pattern, and require
+exact, non-overlapping submissions and strict failure thresholds.
+The session rehearsal exercises real lifecycle
 controllers and saved evidence handoffs using simulated external work, including
 phase failures, interrupts, qualification rejection, cleanup failure, and report
 failure. Its synthetic outcomes are not cloud measurements.
+
+After changing the driver, also exercise real k6 timing with the complete
+11-minute, 3,660-event waveform against a local-only HTTP receiver:
+
+```shell
+make elasticity-driver-http-check \
+  LOCAL_ELASTICITY_DRIVER_OUTPUT="results/local-elasticity-driver/$(date -u +%Y%m%dT%H%M%SZ)"
+```
+
+This uses a loopback receiver and a disposable, uniquely named k6 container
+(Docker Desktop on macOS; host networking on Linux). The receiver returns 201
+for the first submission and 200 for duplicates. The check requires exactly
+3,660 requests and unique events, all per-step counts/checks, and k6 exit zero.
+It retains inputs, raw k6 output/summary, and `local-driver-result.json` in a
+fresh directory, never contacts AWS, and does not measure application capacity.
+
+Each step now caps HTTP work at its own manifest slice. A single extra closing
+iteration may be dispatched by the time-based executor; it sends no request and
+is recorded as `driver_boundary_iterations{step:...}` (maximum one per step).
+Larger overruns also increment `driver_errors` and fail. The full 60-second
+step boundaries and five-minute recovery remain intact; no millisecond-shortened
+duration is relied upon for safety. Missing/extra HTTP requests, duplicate
+responses, dropped iterations, and driver errors still reject the treatment.
 
 All checks must pass and Git status must be empty before planning. Commit any
 intended changes first; never change code between the plan and either treatment.

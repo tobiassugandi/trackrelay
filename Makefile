@@ -1,6 +1,7 @@
 UV := uv
 COMPOSE := docker compose
 DOCKER := docker
+NODE ?= node
 TERRAFORM := terraform
 TERRAFORM_DIR := infra/terraform
 API_IMAGE ?= trackrelay-api:local
@@ -29,6 +30,7 @@ LOAD_DURATION_SECONDS ?= 5
 PERFORMANCE_OUTPUT ?= results/performance
 ELASTICITY_TREATMENT ?= fixed
 ELASTICITY_OUTPUT ?= results/elasticity-workload
+LOCAL_ELASTICITY_DRIVER_OUTPUT ?= results/local-elasticity-driver-check
 BASELINE_RATES ?= 10,25,50,100,250,500
 BASELINE_TIER_DURATION_SECONDS ?= 10
 BASELINE_OUTPUT ?= results/legacy-baseline
@@ -184,8 +186,13 @@ elasticity-prepare:
 		--output-directory "$(ELASTICITY_OUTPUT)"
 
 elasticity-driver-check:
-	UV="$(UV)" DOCKER="$(DOCKER)" K6_IMAGE="$(K6_IMAGE)" \
+	UV="$(UV)" DOCKER="$(DOCKER)" NODE="$(NODE)" K6_IMAGE="$(K6_IMAGE)" \
 		./scripts/check-elasticity-driver.sh
+
+.PHONY: elasticity-driver-http-check
+elasticity-driver-http-check:
+	$(UV) run --locked python scripts/check-elasticity-driver-http.py \
+		--output-directory "$(LOCAL_ELASTICITY_DRIVER_OUTPUT)"
 
 aws-check:
 	$(UV) run --locked trackrelay-aws-check \

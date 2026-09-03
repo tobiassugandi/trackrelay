@@ -213,16 +213,3 @@ def test_prepare_writes_self_describing_replay_inputs(tmp_path: Path) -> None:
     assert manifest["scenario_name"] == "elasticity-fixed-control"
     assert manifest["events_generated"] == 3660
     assert command[-1] == "/scripts/elasticity-steps.js"
-
-
-def test_k6_driver_uses_non_overlapping_manifest_slices() -> None:
-    script = (
-        Path(__file__).resolve().parents[2] / "load" / "elasticity-steps.js"
-    ).read_text(encoding="utf-8")
-
-    assert "constant-arrival-rate" in script
-    assert "EVENT_OFFSET" in script
-    assert "exec.scenario.iterationInTest" in script
-    assert "X-Test-Run-ID" in script
-    assert "offered_rate" in script
-    assert "dropped_iterations" in script

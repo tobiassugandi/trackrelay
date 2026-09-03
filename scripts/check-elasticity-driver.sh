@@ -11,6 +11,10 @@ trap 'rm -rf -- "$trackrelay_elasticity_tmp"' EXIT HUP INT TERM
   --treatment fixed \
   --output-directory "$trackrelay_elasticity_tmp/fixed"
 
+ELASTICITY_TEST_INPUT_DIR="$trackrelay_elasticity_tmp/fixed" \
+  "${NODE:-node}" --experimental-vm-modules --test \
+  "$trackrelay_elasticity_root/scripts/test-elasticity-driver.mjs"
+
 "${DOCKER:-docker}" run --rm \
   --env K6_MANIFEST_PATH=/input-manifest.json \
   --env K6_WORKLOAD_PATH=/workload-definition.json \

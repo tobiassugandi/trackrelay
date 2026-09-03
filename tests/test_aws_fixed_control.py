@@ -682,6 +682,39 @@ def test_simulator_receipt_loss_cannot_pass_despite_ingestion_and_stable_drain()
     assert "measurement_incomplete" in qualification.rejection_reasons
 
 
+@mark.parametrize("count_delta", [-1, 1])
+def test_request_count_mismatch_cannot_pass_with_complete_unique_receipts(
+    count_delta: int,
+) -> None:
+    result = passing_result()
+    steps = list(result.ingestion_steps)
+    steps[0] = steps[0].model_copy(
+        update={"observed_request_count": steps[0].expected_request_count + count_delta}
+    )
+    result = result.model_copy(update={"ingestion_steps": tuple(steps)})
+
+    assert result.correctness_guardrails_passed
+    assert result.drain_stability_confirmed
+    assert not result.ingestion_guardrails_passed
+    qualification = evaluate_fixed_control_qualification(result, cloudwatch_evidence())
+    assert not qualification.qualified
+    assert "measurement_incomplete" in qualification.rejection_reasons
+
+
+@mark.parametrize("failure", [{"k6_exit_code": 99}, {"dropped_iteration_count": 1}])
+def test_driver_failure_cannot_pass_with_exact_request_counts_and_receipts(
+    failure: dict[str, int],
+) -> None:
+    result = passing_result().model_copy(update=failure)
+
+    assert result.correctness_guardrails_passed
+    assert all(step.ingestion_guardrails_passed for step in result.ingestion_steps)
+    assert not result.ingestion_guardrails_passed
+    qualification = evaluate_fixed_control_qualification(result, cloudwatch_evidence())
+    assert not qualification.qualified
+    assert "measurement_incomplete" in qualification.rejection_reasons
+
+
 def test_rejected_candidate_saves_evidence_then_destroys(tmp_path: Path) -> None:
     aws_session = ready_session(tmp_path)
     expected = passing_result()

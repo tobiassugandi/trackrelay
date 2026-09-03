@@ -773,6 +773,20 @@ A fresh saved plan and explicit approval are required for any new attempt.
   CloudWatch retries, explicit cleanup/verification, and evidence paths. Keep
   raw output captured, provide `--quiet`, and make progress sink failures
   non-fatal. Regression-test output ordering and unchanged teardown/results.
+- [x] Correct the driver boundary bug found in the second fixed attempt
+  (`cloud-session-4-20260903T133450Z`): cap submissions by each step's slice,
+  record skipped closing iterations, reject larger overruns, and preserve exact
+  HTTP-count/response/drop/error checks. Replace source-text checks with execution
+  of the actual JavaScript module and add a local real-k6 HTTP replay helper.
+  This attempt retained all 3,660 unique receipts and complete native metrics,
+  but two extra HTTP requests invalidated the workload; do not promote it.
+  The existing controller verified all 30 resource categories absent at
+  2026-09-03 14:12:34 UTC with no cleanup errors. Stage 9.7 did not start.
+  Local validation passed: 585 Python tests, 10 executable JavaScript tests,
+  and the full real-k6 660-second replay against a local receiver. All 3,660
+  requests were unique and accepted; five extra boundary iterations sent no
+  HTTP requests, no iterations were dropped, and k6 exited zero. This does not
+  qualify a cloud control or authorize another AWS attempt.
 - [ ] Define a sustainable end-to-end load using ingestion SLOs plus bounded backlog, completion, drain-deadline, and correctness guardrails; API latency alone is insufficient.
 - [ ] Freeze the fixed-control configuration and aligned time series in `results/aws-fixed-control/`.
 - [ ] Leave the deployment unchanged and continue directly into Stage 9.7; do not tear it down or redeploy it between treatments.
@@ -792,7 +806,8 @@ A fresh saved plan and explicit approval are required for any new attempt.
   rejection, drift, interruption, serialization handoff, and cleanup failures.
 
 The remaining checkboxes below describe actual cloud execution, not local code
-readiness. Cloud session 4 has not been authorized, provisioned, or run.
+readiness. Two session-4 fixed-control attempts were authorized and run, but
+neither qualified. The elastic treatment has not yet run.
 
 - [ ] Enable a documented worker scaling policy with the same minimum task count and a bounded maximum; use queue backlog or backlog per task as the demand signal.
 - [ ] Replay the fixed-control workload without changing the application, task definition, API capacity, database, simulator, benchmark driver, SLO, or guardrails.

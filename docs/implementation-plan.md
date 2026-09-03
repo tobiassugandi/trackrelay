@@ -717,6 +717,13 @@ native AWS inventory count was zero.
   both queues, wait through SQS propagation, prove 30 seconds of empty state
   with one fixed worker and no autoscaling target, and destroy and verify the
   session on any reset failure or interrupt.
+- [x] Freeze and locally validate the sole elasticity intervention. Bound the
+  worker service at one to eight tasks, scale to eight after one native minute
+  at ten visible SQS messages, return to one after three empty minutes, and
+  require an exact saved Terraform plan that creates only one scalable target,
+  two policies, and two alarms. Natively revalidate policy wiring and unchanged
+  empty one-worker state after apply; include all five resources in teardown
+  inventory and destroy and verify the session on any transition failure.
 
 - [ ] Make provision, fixed experiment, application-state reset, elastic experiment, result collection, and teardown reproducible through `make aws-up`, `make experiment-fixed`, `make experiment-reset`, `make experiment-elastic`, `make collect-results`, and `make aws-down` (or clearly documented equivalents).
 - [ ] Test the workload driver, reset procedure, metrics collection, reconciliation, and plot generation locally before starting cloud session 4.

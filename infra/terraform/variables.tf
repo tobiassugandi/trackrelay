@@ -175,3 +175,14 @@ variable "async_services_enabled" {
   type        = bool
   default     = false
 }
+
+variable "worker_autoscaling_enabled" {
+  description = "Enable only the frozen Stage 9.7 worker elasticity treatment policy."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.worker_autoscaling_enabled || (var.deployment_mode == "async" && var.async_services_enabled)
+    error_message = "Worker autoscaling requires the running asynchronous service topology."
+  }
+}

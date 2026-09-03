@@ -1,6 +1,6 @@
 # TrackRelay AWS infrastructure
 
-This directory is the Terraform root module for TrackRelay's disposable AWS experiment environments. It retains the synchronous host and private RDS data layer first validated in Stages 9.1 and 9.2, the frozen Stage 9.3 hardware tiers, and the growing Stage 9.5 asynchronous stack. `deployment_mode` selects exactly one runtime topology: `rehost` includes the EC2 host and excludes the asynchronous runtime, while `async` includes the SQS/ECS/ALB runtime and excludes the EC2 host. The VPC, private RDS data layer, and API ECR repository are shared foundations. A guarded controller now owns the asynchronous runtime, migration, and service phases after foundation apply.
+This directory is the Terraform root module for TrackRelay's disposable AWS experiment environments. It retains the synchronous host and private RDS data layer first validated in Stages 9.1 and 9.2, the frozen Stage 9.3 hardware tiers, the Stage 9.5 asynchronous stack, and the disabled-by-default Stage 9.7 worker policy. `deployment_mode` selects exactly one runtime topology: `rehost` includes the EC2 host and excludes the asynchronous runtime, while `async` includes the SQS/ECS/ALB runtime and excludes the EC2 host. The VPC, private RDS data layer, and API ECR repository are shared foundations. Guarded controllers own asynchronous deployment and the later policy-only transition.
 
 Across those mutually exclusive modes, the module contains:
 
@@ -28,6 +28,9 @@ Across those mutually exclusive modes, the module contains:
 - one standalone Alembic migration definition plus fixed two-task API,
   one-task worker, and one-task simulator services that remain absent until
   explicitly enabled after a successful migration;
+- one disabled-by-default worker scalable target bounded at one to eight tasks,
+  two exact-capacity policies, and two 60-second SQS backlog alarms enabled
+  only by the guarded elasticity transition;
 - session-private Cloud Map DNS so workers can resolve replaceable simulator
   task IPs without exposing the simulator;
 - an instance role for ECR reads, Systems Manager access, and retrieval of one specific RDS-managed secret;
@@ -75,7 +78,7 @@ make aws-verify-down \
 
 Replace the documentation-only address with the public IPv4 `/32` of the approved benchmark location. The Makefile's `127.0.0.1/32` default is deliberately safe: a forgotten override produces an unreachable cloud API rather than public ingress.
 
-`aws-plan` saves an immutable plan hash and non-secret session record, including the approved ingress CIDR and deployment mode. `aws-up`, `aws-down`, and `aws-verify-down` reject a mode that differs from that record; older manifests without the field are treated as `rehost`. Planning also resolves PostgreSQL 17 to the exact available minor version and validates that the selected class/storage combination is orderable in the target region. `aws-up` refuses a mismatched session, a changed plan or Git revision, and a cost ceiling above the monthly budget. `aws-down` intentionally has no approval gate so recovery cannot block teardown. `aws-verify-down` supplies the generic state and tag checks plus native checks for every resource type currently introduced by this module, including the load balancer and target group, ECS cluster, pending/running tasks, services and active task definitions, Cloud Map namespace, task log groups, the session dashboard and roles, all three ECR repositories, both SQS queues, RDS instances, subnet and parameter groups, snapshots, retained automated backups, and the RDS-managed secret.
+`aws-plan` saves an immutable plan hash and non-secret session record, including the approved ingress CIDR and deployment mode. `aws-up`, `aws-down`, and `aws-verify-down` reject a mode that differs from that record; older manifests without the field are treated as `rehost`. Planning also resolves PostgreSQL 17 to the exact available minor version and validates that the selected class/storage combination is orderable in the target region. `aws-up` refuses a mismatched session, a changed plan or Git revision, and a cost ceiling above the monthly budget. `aws-down` intentionally has no approval gate so recovery cannot block teardown. `aws-verify-down` supplies the generic state and tag checks plus native checks for every resource type currently introduced by this module, including the load balancer and target group, ECS cluster, pending/running tasks, services and active task definitions, worker scalable target and policies, CloudWatch alarms, Cloud Map namespace, task log groups, the session dashboard and roles, all three ECR repositories, both SQS queues, RDS instances, subnet and parameter groups, snapshots, retained automated backups, and the RDS-managed secret.
 
 After an explicitly approved async foundation apply, the deployment phase is:
 

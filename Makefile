@@ -50,7 +50,7 @@ APPROVED_TARGET_INSTANCE_TYPE ?=
 APPROVED_TIER_ORDER ?=
 APPROVED_UNCONDITIONAL_TEARDOWN_SESSION_ID ?=
 
-.PHONY: sync test test-integration lint run run-worker run-downstream image-api image-api-smoke image-worker image-worker-smoke image-simulator image-simulator-smoke images images-smoke rehost-config rehost-smoke generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp load-slow load-outage load-baseline elasticity-prepare elasticity-driver-check aws-check aws-plan aws-up aws-async-deploy aws-async-integration aws-fixed-control aws-experiment-reset aws-rehost-publish aws-rehost-deploy aws-rehost-workload aws-rds-deploy aws-rds-deploy-canary aws-rds-correctness aws-scaling-prepare aws-scaling-run-tier aws-scaling-transition aws-scaling-report aws-scaling-canary aws-scaling-session aws-down aws-verify-down infra-init infra-check db-up db-status db-check db-down migrate migration-status
+.PHONY: sync test test-integration lint run run-worker run-downstream image-api image-api-smoke image-worker image-worker-smoke image-simulator image-simulator-smoke images images-smoke rehost-config rehost-smoke generate reconcile summary scenario-normal scenario-duplicate scenario-out-of-order scenario-downstream-outage load-smoke load-prepare load-ramp load-slow load-outage load-baseline elasticity-prepare elasticity-driver-check aws-check aws-plan aws-up aws-async-deploy aws-async-integration aws-fixed-control aws-experiment-reset aws-elasticity-transition aws-rehost-publish aws-rehost-deploy aws-rehost-workload aws-rds-deploy aws-rds-deploy-canary aws-rds-correctness aws-scaling-prepare aws-scaling-run-tier aws-scaling-transition aws-scaling-report aws-scaling-canary aws-scaling-session aws-down aws-verify-down infra-init infra-check db-up db-status db-check db-down migrate migration-status
 
 sync:
 	$(UV) sync --locked --python 3.12
@@ -268,6 +268,20 @@ aws-fixed-control:
 
 aws-experiment-reset:
 	$(UV) run --locked trackrelay-aws-experiment-reset \
+		--session-id "$(SESSION_ID)" \
+		--profile "$(TRACKRELAY_AWS_PROFILE)" \
+		--region "$(TRACKRELAY_AWS_REGION)" \
+		--api-ingress-cidr "$(API_INGRESS_CIDR)" \
+		--deployment-mode async \
+		--rehost-instance-type "$(REHOST_INSTANCE_TYPE)" \
+		--terraform-dir "$(TERRAFORM_DIR)" \
+		--evidence-root "$(AWS_SESSION_RESULTS)" \
+		--approved-session-id "$(APPROVED_SESSION_ID)" \
+		--approved-cost-ceiling-usd "$(APPROVED_COST_CEILING_USD)" \
+		--approved-unconditional-teardown-session-id "$(APPROVED_UNCONDITIONAL_TEARDOWN_SESSION_ID)"
+
+aws-elasticity-transition:
+	$(UV) run --locked trackrelay-aws-elasticity-transition \
 		--session-id "$(SESSION_ID)" \
 		--profile "$(TRACKRELAY_AWS_PROFILE)" \
 		--region "$(TRACKRELAY_AWS_REGION)" \

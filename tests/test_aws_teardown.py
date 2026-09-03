@@ -51,9 +51,7 @@ def absent_resource_runner(
         return completed(call, stderr="NoSuchEntity", returncode=254)
     not_found_by_command = {
         "describe-db-instances": "DBInstanceNotFound",
-        "describe-db-instance-automated-backups": (
-            "DBInstanceAutomatedBackupNotFound"
-        ),
+        "describe-db-instance-automated-backups": ("DBInstanceAutomatedBackupNotFound"),
         "describe-db-subnet-groups": "DBSubnetGroupNotFoundFault",
         "describe-db-parameter-groups": "DBParameterGroupNotFound",
     }
@@ -73,9 +71,12 @@ def test_inventory_proves_every_resource_type_absent() -> None:
 
     assert counts == {
         "active_ecs_task_definitions": 0,
+        "application_autoscaling_policies": 0,
+        "application_autoscaling_targets": 0,
         "application_load_balancers": 0,
         "cloudwatch_dashboards": 0,
         "cloudwatch_log_groups": 0,
+        "cloudwatch_metric_alarms": 0,
         "ebs_volumes": 0,
         "ec2_instances": 0,
         "ecr_repositories": 0,
@@ -145,9 +146,9 @@ def test_inventory_counts_each_service_repository_and_delivery_queue() -> None:
             and call[call.index("--repository-names") + 1].endswith("-worker")
         ):
             return completed(call, stdout="{}\n")
-        if "get-queue-url" in call and call[
-            call.index("--queue-name") + 1
-        ].endswith("-delivery"):
+        if "get-queue-url" in call and call[call.index("--queue-name") + 1].endswith(
+            "-delivery"
+        ):
             return completed(call, stdout="{}\n")
         return absent_resource_runner(call)
 
@@ -176,9 +177,9 @@ def test_inventory_counts_remaining_async_platform_resources() -> None:
             or "list-dashboards" in call
         ):
             return completed(call, stdout="1\n")
-        if "get-role" in call and call[
-            call.index("--role-name") + 1
-        ].endswith("-worker-task"):
+        if "get-role" in call and call[call.index("--role-name") + 1].endswith(
+            "-worker-task"
+        ):
             return completed(call, stdout="{}\n")
         return absent_resource_runner(call)
 
@@ -196,6 +197,30 @@ def test_inventory_counts_remaining_async_platform_resources() -> None:
     assert counts["cloudwatch_log_groups"] == 1
     assert counts["iam_roles"] == 1
     assert sum(counts.values()) == 6
+
+
+def test_inventory_counts_remaining_worker_autoscaling_resources() -> None:
+    def runner(arguments: Sequence[str]) -> CompletedProcess[str]:
+        call = tuple(arguments)
+        if "describe-scalable-targets" in call:
+            return completed(call, stdout="1\n")
+        if "describe-scaling-policies" in call:
+            return completed(call, stdout="2\n")
+        if "describe-alarms" in call:
+            return completed(call, stdout="2\n")
+        return absent_resource_runner(call)
+
+    counts = inventory_rehost_resources(
+        profile=PROFILE,
+        region=REGION,
+        session_id=SESSION_ID,
+        runner=runner,
+    )
+
+    assert counts["application_autoscaling_targets"] == 1
+    assert counts["application_autoscaling_policies"] == 2
+    assert counts["cloudwatch_metric_alarms"] == 2
+    assert sum(counts.values()) == 5
 
 
 def test_inventory_counts_remaining_async_runtime_resources() -> None:
@@ -227,7 +252,9 @@ def test_inventory_counts_pending_and_running_ecs_tasks() -> None:
         call = tuple(arguments)
         if "list-tasks" in call:
             desired_status = call[call.index("--desired-status") + 1]
-            return completed(call, stdout="2\n" if desired_status == "RUNNING" else "1\n")
+            return completed(
+                call, stdout="2\n" if desired_status == "RUNNING" else "1\n"
+            )
         return absent_resource_runner(call)
 
     counts = inventory_rehost_resources(
@@ -283,9 +310,7 @@ def test_inventory_uses_explicit_profile_region_and_session_tags() -> None:
         if "get-queue-url" in call
     }
     role_names = {
-        call[call.index("--role-name") + 1]
-        for call in calls
-        if "get-role" in call
+        call[call.index("--role-name") + 1] for call in calls if "get-role" in call
     }
     assert {name.rsplit("-", 1)[-1] for name in repository_names} == {
         "api",
@@ -296,7 +321,9 @@ def test_inventory_uses_explicit_profile_region_and_session_tags() -> None:
         "",
         "-dlq",
     }
-    assert {name.split("trackrelay-", 1)[-1].split("-", 1)[-1] for name in role_names} == {
+    assert {
+        name.split("trackrelay-", 1)[-1].split("-", 1)[-1] for name in role_names
+    } == {
         "api-task",
         "ecs-execution",
         "instance",
@@ -308,42 +335,53 @@ def test_inventory_uses_explicit_profile_region_and_session_tags() -> None:
     load_balancer_call = next(
         call for call in calls if "describe-load-balancers" in call
     )
-    target_group_call = next(
-        call for call in calls if "describe-target-groups" in call
-    )
+    target_group_call = next(call for call in calls if "describe-target-groups" in call)
     cluster_call = next(call for call in calls if "describe-clusters" in call)
     service_call = next(call for call in calls if "list-services" in call)
     task_definition_call = next(
         call for call in calls if "list-task-definitions" in call
     )
     namespace_call = next(call for call in calls if "list-namespaces" in call)
-    log_group_call = next(
-        call for call in calls if "describe-log-groups" in call
-    )
+    log_group_call = next(call for call in calls if "describe-log-groups" in call)
     dashboard_call = next(call for call in calls if "list-dashboards" in call)
+    target_call = next(call for call in calls if "describe-scalable-targets" in call)
+    policy_call = next(call for call in calls if "describe-scaling-policies" in call)
+    alarm_call = next(call for call in calls if "describe-alarms" in call)
     assert load_balancer_call[load_balancer_call.index("--names") + 1].endswith(
         "-async"
     )
-    assert target_group_call[target_group_call.index("--names") + 1].endswith(
-        "-api"
-    )
+    assert target_group_call[target_group_call.index("--names") + 1].endswith("-api")
     assert cluster_call[cluster_call.index("--clusters") + 1].endswith("-async")
     assert service_call[service_call.index("--cluster") + 1].endswith("-async")
     assert task_definition_call[
         task_definition_call.index("--family-prefix") + 1
     ].endswith("-")
-    assert task_definition_call[
-        task_definition_call.index("--status") + 1
-    ] == "ACTIVE"
+    assert task_definition_call[task_definition_call.index("--status") + 1] == "ACTIVE"
     assert "trackrelay-" in namespace_call[namespace_call.index("--query") + 1]
     assert log_group_call[
         log_group_call.index("--log-group-name-prefix") + 1
     ].startswith("/trackrelay/")
-    dashboard_name = dashboard_call[
-        dashboard_call.index("--dashboard-name-prefix") + 1
-    ]
+    dashboard_name = dashboard_call[dashboard_call.index("--dashboard-name-prefix") + 1]
     assert dashboard_name.endswith("-async")
     assert dashboard_name in dashboard_call[dashboard_call.index("--query") + 1]
+    expected_worker_resource = target_call[target_call.index("--resource-ids") + 1]
+    resource_kind, resource_cluster, resource_worker = expected_worker_resource.split(
+        "/"
+    )
+    assert resource_kind == "service"
+    assert resource_cluster.removesuffix("-async") == resource_worker.removesuffix(
+        "-worker"
+    )
+    assert (
+        policy_call[policy_call.index("--resource-id") + 1] == expected_worker_resource
+    )
+    alarm_names = alarm_call[
+        alarm_call.index("--alarm-names") + 1 : alarm_call.index("--query")
+    ]
+    assert {name.rsplit("-worker-", 1)[-1] for name in alarm_names} == {
+        "backlog-high",
+        "empty",
+    }
 
     secret_call = next(call for call in calls if "list-secrets" in call)
     assert "--include-planned-deletion" in secret_call

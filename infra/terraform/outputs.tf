@@ -91,6 +91,26 @@ output "async_observability_dimensions" {
   } : {}
 }
 
+output "worker_autoscaling_policy" {
+  description = "Frozen non-secret policy used only by the Stage 9.7 elastic treatment."
+  value = var.worker_autoscaling_enabled && local.async_runtime_enabled ? {
+    backlog_threshold_messages   = local.worker_autoscaling_policy.backlog_threshold_messages
+    empty_alarm_name             = aws_cloudwatch_metric_alarm.async_worker_empty[0].alarm_name
+    high_alarm_name              = aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].alarm_name
+    maximum_capacity             = local.worker_autoscaling_policy.maximum_capacity
+    metric_period_seconds        = local.worker_autoscaling_policy.metric_period_seconds
+    minimum_capacity             = local.worker_autoscaling_policy.minimum_capacity
+    queue_name                   = aws_sqs_queue.delivery[0].name
+    resource_id                  = aws_appautoscaling_target.async_worker[0].resource_id
+    scale_in_cooldown_seconds    = local.worker_autoscaling_policy.scale_in_cooldown_seconds
+    scale_in_evaluation_periods  = local.worker_autoscaling_policy.scale_in_evaluation_periods
+    scale_in_policy_name         = aws_appautoscaling_policy.async_worker_scale_in[0].name
+    scale_out_cooldown_seconds   = local.worker_autoscaling_policy.scale_out_cooldown_seconds
+    scale_out_evaluation_periods = local.worker_autoscaling_policy.scale_out_evaluation_periods
+    scale_out_policy_name        = aws_appautoscaling_policy.async_worker_scale_out[0].name
+  } : null
+}
+
 output "async_migration_run_configuration" {
   description = "Non-secret inputs for running the one-off migration before services are enabled."
   value = local.async_runtime_enabled ? {

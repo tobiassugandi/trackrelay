@@ -210,6 +210,17 @@ worker, and verifies that worker autoscaling remains absent. Only that proof
 may advance the session to the elastic-policy boundary; any reset failure
 destroys and verifies the complete stack.
 
+The only elastic-treatment infrastructure delta is one Application Auto
+Scaling target for the existing worker ECS service, two exact-capacity step
+policies, and two SQS-visible-backlog alarms. One 60-second maximum at or above
+ten visible messages sets desired capacity to the bounded maximum of eight;
+three consecutive empty minutes set it back to the unchanged minimum of one.
+The ECS worker ignores desired-count drift only after creation so Terraform
+does not fight the scaling service; fixed-control and transition controllers
+still verify the live one-worker boundary explicitly. No task definition,
+image, service shape, network, API capacity, simulator, queue, or database
+resource changes between treatments.
+
 ## Teardown boundary
 
 Every taggable resource inherits the session tags; the globally scoped
@@ -219,7 +230,8 @@ pending/running tasks and services, active task-definition family, private
 Cloud Map namespace, all ECS and rehost IAM roles, all service ECR
 repositories, both SQS queues, every
 session log group, the exact session dashboard, the RDS resources and managed
-secret, and the underlying EC2 network resources. Listener deletion is implied
+secret, worker scalable target, both scaling policies and alarms, and the
+underlying EC2 network resources. Listener deletion is implied
 by authoritative load-balancer absence because a listener cannot exist
 independently of its load balancer; Cloud Map namespace absence likewise
 implies that its service and managed private hosted zone are gone. Deregistered

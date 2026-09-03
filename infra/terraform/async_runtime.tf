@@ -391,6 +391,10 @@ resource "aws_ecs_service" "async_worker" {
     Name = "${local.name_prefix}-worker"
   }
 
+  lifecycle {
+    ignore_changes = [desired_count]
+  }
+
   depends_on = [aws_ecs_service.async_simulator]
 }
 

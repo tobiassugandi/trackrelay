@@ -94,15 +94,14 @@ def inventory_rehost_resources(
     session_id: str,
     runner: CommandRunner,
 ) -> dict[str, int]:
-    """Count every native resource type introduced through Stage 9.5."""
+    """Count every native resource type introduced through Stage 9.7."""
     prefix = aws_command_prefix(profile=profile, region=region)
     tag_filters = (
         "Name=tag:Project,Values=TrackRelay",
         f"Name=tag:SessionId,Values={session_id}",
     )
     active_instance_states = (
-        "Name=instance-state-name,"
-        "Values=pending,running,shutting-down,stopping,stopped"
+        "Name=instance-state-name,Values=pending,running,shutting-down,stopping,stopped"
     )
     count_commands = {
         "ec2_instances": (
@@ -323,9 +322,7 @@ def inventory_rehost_resources(
         runner=runner,
     )
     dashboard_name = f"{name_prefix}-async"
-    dashboard_query = (
-        f"length(DashboardEntries[?DashboardName=='{dashboard_name}'])"
-    )
+    dashboard_query = f"length(DashboardEntries[?DashboardName=='{dashboard_name}'])"
     counts["cloudwatch_dashboards"] = count_query(
         name="cloudwatch_dashboards",
         command=(
@@ -336,6 +333,64 @@ def inventory_rehost_resources(
             dashboard_name,
             "--query",
             dashboard_query,
+            "--output",
+            "text",
+        ),
+        runner=runner,
+    )
+    worker_resource_id = f"service/{name_prefix}-async/{name_prefix}-worker"
+    counts["application_autoscaling_targets"] = count_query(
+        name="application_autoscaling_targets",
+        command=(
+            *prefix,
+            "application-autoscaling",
+            "describe-scalable-targets",
+            "--service-namespace",
+            "ecs",
+            "--resource-ids",
+            worker_resource_id,
+            "--scalable-dimension",
+            "ecs:service:DesiredCount",
+            "--query",
+            "length(ScalableTargets)",
+            "--output",
+            "text",
+        ),
+        runner=runner,
+    )
+    counts["application_autoscaling_policies"] = count_query(
+        name="application_autoscaling_policies",
+        command=(
+            *prefix,
+            "application-autoscaling",
+            "describe-scaling-policies",
+            "--service-namespace",
+            "ecs",
+            "--resource-id",
+            worker_resource_id,
+            "--scalable-dimension",
+            "ecs:service:DesiredCount",
+            "--query",
+            "length(ScalingPolicies)",
+            "--output",
+            "text",
+        ),
+        runner=runner,
+    )
+    alarm_names = (
+        f"{name_prefix}-worker-backlog-high",
+        f"{name_prefix}-worker-empty",
+    )
+    counts["cloudwatch_metric_alarms"] = count_query(
+        name="cloudwatch_metric_alarms",
+        command=(
+            *prefix,
+            "cloudwatch",
+            "describe-alarms",
+            "--alarm-names",
+            *alarm_names,
+            "--query",
+            "length(MetricAlarms)",
             "--output",
             "text",
         ),

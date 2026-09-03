@@ -205,10 +205,62 @@ failure, timeout, or interrupt after the reset workflow begins triggers full
 session teardown and native teardown verification. Do not retry a failed reset
 against a partially changed stack.
 
+## Worker-autoscaling transition
+
+The elastic treatment uses one frozen step-scaling policy. The source queue's
+native `ApproximateNumberOfMessagesVisible` maximum is evaluated in 60-second
+periods. Ten or more visible messages for one period sets the worker service to
+eight tasks. Zero visible messages for three consecutive periods returns it to
+one. Both directions use exact-capacity adjustments and a 60-second cooldown;
+missing data does not cause scale-out and is treated as empty for scale-in.
+
+This is an experiment policy, not a general production recommendation. Its
+purpose is to make acquisition and release obvious within the fixed waveform:
+one complete backlog bucket can trigger expansion, while the five-minute
+recovery step contains the three empty buckets required for contraction. The
+maximum adds at most seven 0.25-vCPU/0.5-GiB Fargate workers—1.75 vCPU and
+3.5 GiB above the fixed control—only while the alarm-driven service desires
+them. It adds one scalable target, two scaling policies, and two CloudWatch
+alarms; API, simulator, RDS, SQS, task definitions, images, and the minimum
+worker count remain unchanged.
+
+After the reset succeeds, run:
+
+```shell
+make aws-elasticity-transition \
+  SESSION_ID="$TRACKRELAY_RUN_SESSION_ID" \
+  API_INGRESS_CIDR="$TRACKRELAY_RUN_API_CIDR" \
+  APPROVED_SESSION_ID="$TRACKRELAY_RUN_SESSION_ID" \
+  APPROVED_COST_CEILING_USD="$TRACKRELAY_RUN_COST_CEILING_USD" \
+  APPROVED_UNCONDITIONAL_TEARDOWN_SESSION_ID="$TRACKRELAY_RUN_SESSION_ID"
+```
+
+The controller accepts only `experiment_reset_verified`, revalidates the clean
+approved revision, immutable image digests, exact fixed service configuration,
+empty application/simulator/queue state, and a one-of-one worker. It saves a
+Terraform plan and rejects it unless its only meaningful resource actions are
+creation of the one target, two policies, and two alarms. It hashes and applies
+that exact saved plan, then verifies the typed Terraform output, native target
+bounds and suspension state, both exact-capacity policies, alarm-to-policy
+wiring, and unchanged empty one-worker state. Evidence is written under:
+
+```text
+elasticity/transition/pre-apply.json
+elasticity/transition/terraform-autoscaling.tfplan
+elasticity/transition/terraform-plan.log
+elasticity/transition/plan-evidence.json
+elasticity/transition/terraform-apply.log
+elasticity/transition/evidence.json
+```
+
+Success advances the manifest to `worker_autoscaling_verified` and leaves the
+stack ready for the identical elastic replay. A plan mismatch, apply failure,
+verification timeout, HTTP/AWS failure, or interrupt destroys and natively
+verifies the complete session. Native teardown includes the target, policies,
+and alarms even if Terraform state is unexpectedly incomplete.
+
 ## Still required before cloud session 4
 
-- A bounded worker autoscaling policy and an exact apply/verification boundary
-  between the fixed and elastic treatments.
 - A compact result model and plot generator that evaluate sustainable
   end-to-end load and render the aligned causal comparison.
 - Local failure-path tests for plotting and the complete session teardown

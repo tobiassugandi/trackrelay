@@ -8,7 +8,7 @@ group those events into shipment histories for the final-state comparison.
 
 from argparse import ArgumentParser
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -33,6 +33,7 @@ from trackrelay.domain import (
     DeliveryAttemptResult,
     EventProcessingStatus,
     NormalizedEvent,
+    ShipmentStatus,
 )
 from trackrelay.experiments.generator import InputManifest, ManifestEvent
 from trackrelay.models import DeliveryAttempt, Event, Shipment
@@ -409,23 +410,12 @@ def _compare_manifest_with_database_shipments(
         database_shipment.tracking_number: database_shipment
         for database_shipment in database_shipments
     }
-    manifest_final_event_by_tracking_number = {
-        tracking_number: max(
-            (
-                manifest_event
-                for manifest_event in manifest.expected_events
-                if manifest_event.tracking_number == tracking_number
-                and manifest_event.expected_status is manifest_final_status
-            ),
-            key=lambda manifest_event: (
-                _as_utc(manifest_event.expected_occurred_at),
-                manifest_event.sequence_number,
-            ),
+    manifest_final_event_by_tracking_number = (
+        _latest_manifest_final_events_by_tracking_number(
+            manifest.expected_events,
+            expected_final_shipments=manifest.expected_final_shipments,
         )
-        for tracking_number, manifest_final_status in (
-            manifest.expected_final_shipments.items()
-        )
-    }
+    )
 
     incorrect_database_shipment_count = 0
     for tracking_number, manifest_final_status in (
@@ -448,6 +438,29 @@ def _compare_manifest_with_database_shipments(
     return FinalShipmentComparison(
         incorrect_database_shipment_count=incorrect_database_shipment_count
     )
+
+
+def _latest_manifest_final_events_by_tracking_number(
+    manifest_events: Sequence[ManifestEvent],
+    *,
+    expected_final_shipments: Mapping[str, ShipmentStatus],
+) -> dict[str, ManifestEvent]:
+    """Find every declared final event in one pass over the manifest."""
+    final_events: dict[str, ManifestEvent] = {}
+    for event in manifest_events:
+        expected_status = expected_final_shipments.get(event.tracking_number)
+        if event.expected_status is not expected_status:
+            continue
+        current = final_events.get(event.tracking_number)
+        if current is None or (
+            _as_utc(event.expected_occurred_at),
+            event.sequence_number,
+        ) > (
+            _as_utc(current.expected_occurred_at),
+            current.sequence_number,
+        ):
+            final_events[event.tracking_number] = event
+    return final_events
 
 
 def reconcile_manifest(

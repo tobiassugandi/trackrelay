@@ -325,3 +325,45 @@ minute with at least 300 SQS sends, and scales in only after three minutes with
 both fewer than 120 sends and fewer than ten visible, in-flight, and delayed
 messages. A future run requires a fresh session ID, plan review, and explicit
 cost and teardown authorization.
+
+## Seventh attempt: candidate-v3 reconciliation timeout
+
+Session `cloud-session-4-20260903T211203Z` ran candidate v3 at revision
+`5891efdcbc53`. The fixed workload issued exactly 10,680 HTTP requests with no
+dropped iterations or driver errors. The retained observations reached 10,680
+persisted, processed, and delivered events, an empty source queue and DLQ, and
+one running fixed worker. They also cover more than the required 180-second
+stable-empty interval.
+
+The controller then timed out before writing `elasticity/fixed/result.json`.
+The final retained observation is at 21:59:31 UTC, ECS diagnostics began at
+21:59:46 UTC, and the next operation in the controller is the reconciliation
+POST with a 10-second client timeout. The API's final-shipment comparison was
+quadratic: for each of 10,680 expected shipments it scanned all 10,680 manifest
+events to locate the expected final event, roughly 114 million comparisons.
+This scaling defect was not exposed by candidate v2's smaller 3,660-event
+manifest. Without a reconciliation report, native CloudWatch summary, or fixed
+result, this attempt is incomplete and cannot qualify or be paired with an
+elastic treatment.
+
+The correction derives all final events in one manifest pass, retaining the
+same latest-timestamp and sequence-number semantics. On the retained 7.6 MB
+manifest, local parsing took about 0.033 seconds and final-event selection about
+0.001 seconds. The controller now gives only reconciliation a bounded
+120-second HTTP budget; registration, observations, and health-sensitive calls
+retain their short timeout. Regression coverage requires a single manifest
+iteration and verifies the dedicated timeout. Local validation passed all 612
+default Python tests and lint; the 16 separately selected database integration
+tests were not run for this correction.
+
+Initial cleanup also failed because the AWS login session expired while
+Terraform was waiting for ECS service deletion and internet-gateway detach.
+After reauthentication, the documented `aws-down` recovery completed and the
+independent `aws-verify-down` check passed. The session reached
+`teardown_verified` at 2026-09-03 22:41:47 UTC, Terraform state is empty, and
+tagged and all native inventory categories are zero. The original workflow and
+cleanup errors remain in the journal rather than being rewritten.
+
+This correction is local only and does not salvage the attempt or authorize a
+retry. A fresh session ID, reviewed plan, matching immutable images, and
+explicit spending and unconditional teardown approval are still required.

@@ -490,6 +490,7 @@ def test_execution_uses_definition_and_confirms_stable_drain(
 
     monkeypatch.setattr("trackrelay.aws_fixed_control.Popen", CompletedK6)
     registered: list[dict[str, object]] = []
+    reconciliation_timeouts: list[dict[str, float]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST" and request.url.path == "/api/v1/test-runs":
@@ -525,6 +526,7 @@ def test_execution_uses_definition_and_confirms_stable_drain(
         if request.url.path.endswith("/complete"):
             return httpx.Response(204, request=request)
         if request.url.path.endswith("/reconciliation"):
+            reconciliation_timeouts.append(request.extensions["timeout"])
             return httpx.Response(
                 200,
                 json={
@@ -615,6 +617,9 @@ def test_execution_uses_definition_and_confirms_stable_drain(
     )
     assert f"{label}: stable drain confirmed" in messages
     assert any(message.startswith(f"{label} reconciliation:") for message in messages)
+    assert reconciliation_timeouts == [
+        {"connect": 120.0, "read": 120.0, "write": 120.0, "pool": 120.0}
+    ]
 
 
 def test_fixed_control_success_leaves_stack_for_reset(tmp_path: Path) -> None:

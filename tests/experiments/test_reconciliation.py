@@ -1,5 +1,6 @@
 """Tests for basic manifest-to-database reconciliation."""
 
+from collections.abc import Sequence
 from datetime import timedelta
 from pathlib import Path
 from uuid import UUID
@@ -24,6 +25,7 @@ from trackrelay.experiments.generator import (
 )
 from trackrelay.experiments.reconciliation import (
     ReconciliationReport,
+    _latest_manifest_final_events_by_tracking_number,
     fetch_simulator_receipts,
     load_input_manifest,
     reconcile_manifest,
@@ -347,6 +349,48 @@ def test_wrong_final_shipment_state_alone_fails_reconciliation() -> None:
     assert report.incorrect_final_shipment_states == 1
     assert report.invariants_passed is False
     engine.dispose()
+
+
+def test_latest_final_events_are_selected_in_one_manifest_pass() -> None:
+    manifest = generate_input_manifest(
+        seed=20260904,
+        configuration=GeneratorConfiguration(
+            partner_id="linear-reconciliation-alpha",
+            shipment_count=2,
+        ),
+        test_run_id=UUID("00000000-0000-0000-0000-000000000709"),
+    )
+
+    class SinglePassEvents(Sequence[ManifestEvent]):
+        def __init__(self, events: tuple[ManifestEvent, ...]) -> None:
+            self.events = events
+            self.iterations = 0
+
+        def __getitem__(self, index):
+            return self.events[index]
+
+        def __len__(self) -> int:
+            return len(self.events)
+
+        def __iter__(self):
+            self.iterations += 1
+            if self.iterations > 1:
+                raise AssertionError("manifest events were scanned more than once")
+            return iter(self.events)
+
+    events = SinglePassEvents(manifest.expected_events)
+
+    selected = _latest_manifest_final_events_by_tracking_number(
+        events,
+        expected_final_shipments=manifest.expected_final_shipments,
+    )
+
+    assert events.iterations == 1
+    assert set(selected) == set(manifest.expected_final_shipments)
+    assert all(
+        event.expected_status is manifest.expected_final_shipments[tracking_number]
+        for tracking_number, event in selected.items()
+    )
 
 
 def test_fetch_simulator_receipts_validates_normalized_events() -> None:

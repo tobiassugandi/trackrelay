@@ -825,7 +825,7 @@ A fresh saved plan and explicit approval are required for any new attempt.
   rejection, drift, interruption, serialization handoff, and cleanup failures.
 
 The remaining checkboxes below describe actual cloud execution, not local code
-readiness. Six session-4 attempts ran. The sixth completed both candidate-v2
+readiness. Seven session-4 attempts ran. The sixth completed both candidate-v2
 treatments and exact delivery but was correctly rejected: worker scale-out was
 too late to keep outstanding work below 1,500 and recovery to one worker was not
 observed long enough before load ended. Its offline negative report publishes
@@ -842,6 +842,17 @@ approved session must repeat both treatments together.
 - [x] Freeze candidate-v3's demand-based scale-out and backlog-aware scale-in
   policy with the same minimum and bounded maximum worker count; retain exactly
   five transition resources and native verification of every alarm operand.
+- [x] Correct the candidate-v3 reconciliation scaling defect exposed by the
+  seventh attempt (`cloud-session-4-20260903T211203Z`). Its fixed workload sent
+  exactly 10,680 requests, delivered all 10,680 events, and confirmed stable
+  drain, but the API's final-shipment comparison scanned all 10,680 manifest
+  events once for each of 10,680 shipments and exceeded the controller's
+  10-second read timeout before producing `result.json`. Replace the quadratic
+  comparison with one linear manifest pass and give only the evidence-heavy
+  reconciliation call a 120-second client budget. Preserve the attempt as
+  incomplete; after AWS login recovery, teardown was independently verified at
+  2026-09-03 22:41:47 UTC with empty Terraform state and all native categories
+  zero.
 - [ ] Replay the fixed-control workload without changing the application, task definition, API capacity, database, simulator, benchmark driver, SLO, or guardrails.
 - [ ] Verify that workers scale from A to B as load rises, backlog remains bounded and drains, and workers return to A after demand falls.
 - [ ] Freeze the scaling policy, environment, raw aligned time series, reconciliation evidence, and summary in `results/aws-elastic-treatment/`.

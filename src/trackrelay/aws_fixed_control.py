@@ -77,6 +77,7 @@ Now = Callable[[], datetime]
 SessionAction = Callable[..., object]
 TreatmentRunner = Callable[..., "FixedControlResult"]
 MetricCollector = Callable[..., ElasticityCloudWatchEvidence]
+RECONCILIATION_TIMEOUT_SECONDS = 120.0
 
 
 class AwsFixedControlError(RuntimeError):
@@ -1075,6 +1076,7 @@ def execute_elasticity_workload(
         reconciliation_response = client.post(
             f"/api/v1/test-runs/{manifest.test_run_id}/reconciliation",
             json=manifest.model_dump(mode="json"),
+            timeout=RECONCILIATION_TIMEOUT_SECONDS,
         )
         reconciliation_response.raise_for_status()
         reconciliation = ReconciliationReport.model_validate(

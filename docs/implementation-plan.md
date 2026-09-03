@@ -787,6 +787,17 @@ A fresh saved plan and explicit approval are required for any new attempt.
   requests were unique and accepted; five extra boundary iterations sent no
   HTTP requests, no iterations were dropped, and k6 exited zero. This does not
   qualify a cloud control or authorize another AWS attempt.
+- [x] Qualify the fixed control in the third attempt
+  (`cloud-session-4-20260903T144402Z`), then preserve its result when the initial
+  reset state read failed. All 3,660 events were delivered, k6 exited zero, and
+  native headroom/correctness/drain gates passed. This is a qualified control,
+  not a paired elasticity result; the failed session cannot be resumed.
+- [x] Correct reset's simulator-mode contract: reuse the real uppercase enum,
+  include all five modes, permit destructive reset only while healthy, and add
+  tests connecting the actual controller/API/simulator with isolated SQLite
+  and PostgreSQL. Retain safe HTTP operation/status diagnostics and verify
+  failure cleanup without retrying uncertain POSTs. The third attempt's teardown
+  was verified at 2026-09-03 15:22:02 UTC, all 30 native categories zero.
 - [ ] Define a sustainable end-to-end load using ingestion SLOs plus bounded backlog, completion, drain-deadline, and correctness guardrails; API latency alone is insufficient.
 - [ ] Freeze the fixed-control configuration and aligned time series in `results/aws-fixed-control/`.
 - [ ] Leave the deployment unchanged and continue directly into Stage 9.7; do not tear it down or redeploy it between treatments.
@@ -806,8 +817,9 @@ A fresh saved plan and explicit approval are required for any new attempt.
   rejection, drift, interruption, serialization handoff, and cleanup failures.
 
 The remaining checkboxes below describe actual cloud execution, not local code
-readiness. Two session-4 fixed-control attempts were authorized and run, but
-neither qualified. The elastic treatment has not yet run.
+readiness. Three session-4 attempts ran; the third fixed control qualified but
+reset failed before the worker-only transition. The elastic treatment has not
+yet run. A fresh approved session must repeat both treatments together.
 
 - [ ] Enable a documented worker scaling policy with the same minimum task count and a bounded maximum; use queue backlog or backlog per task as the demand signal.
 - [ ] Replay the fixed-control workload without changing the application, task definition, API capacity, database, simulator, benchmark driver, SLO, or guardrails.

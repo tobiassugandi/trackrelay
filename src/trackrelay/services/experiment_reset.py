@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
+from trackrelay.downstream.control import SimulatorMode
 from trackrelay.models import (
     DeliveryAttempt,
     DeliveryOutboxEntry,
@@ -47,14 +48,14 @@ class ExperimentStateSnapshot(BaseModel):
     schema_version: Literal[1] = 1
     database: ExperimentDatabaseCounts
     simulator_receipts: NonNegativeInteger
-    simulator_mode: Literal["healthy", "slow", "return_500", "unavailable"]
+    simulator_mode: SimulatorMode
 
     @property
     def empty_and_healthy(self) -> bool:
         return (
             self.database.empty
             and self.simulator_receipts == 0
-            and self.simulator_mode == "healthy"
+            and self.simulator_mode is SimulatorMode.HEALTHY
         )
 
 
@@ -84,7 +85,7 @@ class ExperimentResetEvidence(BaseModel):
             raise ValueError("reset evidence starts without complete delivery attempts")
         if self.before.simulator_receipts != self.expected_event_count:
             raise ValueError("reset evidence starts with unexpected simulator receipts")
-        if self.before.simulator_mode != "healthy":
+        if self.before.simulator_mode is not SimulatorMode.HEALTHY:
             raise ValueError("reset evidence must start with a healthy simulator")
         if self.simulator_receipts_removed != self.before.simulator_receipts:
             raise ValueError("simulator reset count differs from prior state")
@@ -111,21 +112,17 @@ def database_experiment_counts(session: Session) -> ExperimentDatabaseCounts:
     )
 
 
-def _simulator_state(downstream_client: httpx.Client) -> tuple[int, str]:
+def _simulator_state(downstream_client: httpx.Client) -> tuple[int, SimulatorMode]:
     status_response = downstream_client.get("/control/status")
     status_response.raise_for_status()
     count_response = downstream_client.get("/control/events/count")
     count_response.raise_for_status()
     try:
-        mode = status_response.json()["mode"]
+        mode = SimulatorMode(status_response.json()["mode"])
         receipt_count = count_response.json()["event_count"]
-    except (KeyError, TypeError) as error:
+    except (KeyError, TypeError, ValueError) as error:
         raise ExperimentResetError("simulator returned invalid reset state") from error
-    if (
-        mode not in {"healthy", "slow", "return_500", "unavailable"}
-        or type(receipt_count) is not int
-        or receipt_count < 0
-    ):
+    if type(receipt_count) is not int or receipt_count < 0:
         raise ExperimentResetError("simulator returned invalid reset state")
     return receipt_count, mode
 
@@ -189,7 +186,7 @@ def reset_experiment_state(
         or before.database.delivery_attempts < expected_event_count
         or target_event_count != expected_event_count
         or before.simulator_receipts != expected_event_count
-        or before.simulator_mode != "healthy"
+        or before.simulator_mode is not SimulatorMode.HEALTHY
     ):
         raise ExperimentResetError(
             "application state differs from the approved fixed-control run"
@@ -197,7 +194,7 @@ def reset_experiment_state(
 
     mode_response = downstream_client.put(
         "/control/mode",
-        json={"mode": "healthy"},
+        json={"mode": SimulatorMode.HEALTHY.value},
     )
     mode_response.raise_for_status()
     _clear_database_experiment_state(session)
@@ -206,7 +203,7 @@ def reset_experiment_state(
     clear_response.raise_for_status()
     try:
         cleared_receipts = clear_response.json()["cleared_event_count"]
-    except (KeyError, TypeError) as error:
+    except (KeyError, TypeError, ValueError) as error:
         raise ExperimentResetError(
             "simulator returned invalid reset evidence"
         ) from error

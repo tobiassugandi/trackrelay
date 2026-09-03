@@ -14,9 +14,10 @@ have a separate Terraform-owned group, created before the cluster and deleted
 after it. Native verification checks this namespace independently of application
 logs, and comparison reports require that new inventory entry. See the
 [resource/cost review](aws-elasticity-cost-review.md) for the discovery and cleanup
-audit. Two fixed-control attempts have since run and been torn down; neither
-qualified, and the elastic treatment has not started. The second attempt exposed
-a load-driver slice-boundary bug. See the [incident record](aws-elasticity-session-4-incident.md).
+audit. Three fixed-control attempts have since run and been torn down. The third
+qualified, then stopped during reset because of a simulator mode-contract
+mismatch. Worker autoscaling and the elastic treatment have not started.
+See the [incident record](aws-elasticity-session-4-incident.md).
 
 ## Workflow and ownership
 
@@ -72,6 +73,11 @@ The progress stream shows:
 - CloudWatch attempt counts and publication retries; reset/purge waits.
 - Failure phase/reason before cleanup, diagnostic capture, Terraform destroy,
   late-log absence samples, native verification, and the evidence directory.
+- Reset HTTP failures name the fixed GET/POST operation and status code (or
+  transport exception type). Request URLs, credentials, headers, bodies and
+  arbitrary exception text are not printed or saved in the phase journal.
+  Failed reset requests are never automatically retried: a timed-out POST may
+  have partially changed state and must enter the existing cleanup path.
 
 Example lines (illustrative, not cloud evidence):
 
@@ -160,6 +166,27 @@ All checks must pass and Git status must be empty before planning. Commit any
 intended changes first; never change code between the plan and either treatment.
 The rehearsal complements individual reset, metrics, reconciliation, and real
 PNG/SVG plotting tests in `make test`; it is not a live AWS integration test.
+
+`make test` also connects the real API and simulator ASGI apps through the reset
+controller with an isolated SQLite database and simulated AWS queue/worker
+observations. It checks the actual uppercase `SimulatorMode` wire values,
+clearing both stores, preserving the partner, rejecting degraded modes and
+another run ID without writes, and serializing the stable-empty proof. The
+controller's queue purge and autoscaling checks remain required.
+
+A PostgreSQL variant of that contract test exercises the real `TRUNCATE` path.
+Use only a fresh, disposable local PostgreSQL 17 database named
+`trackrelay_reset_contract`, supplied through `TRACKRELAY_RESET_TEST_DATABASE_URL`
+as `postgresql+psycopg://...@127.0.0.1:PORT/trackrelay_reset_contract`, then run:
+
+```shell
+uv run --locked pytest -m integration tests/test_experiment_reset_contract.py
+```
+
+The test rejects remote URLs, other database names, connection-query overrides,
+and databases with existing tables. It is excluded from the default suite and
+skips if the dedicated URL is missing. Do not point it at an existing development
+database or AWS. Dispose of the dedicated local database after the check.
 
 ## 2. Identity, authentication, and a fresh session
 

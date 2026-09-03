@@ -36,6 +36,7 @@ from trackrelay.aws_session import (
     load_manifest,
     write_manifest,
 )
+from trackrelay.downstream.control import SimulatorMode
 from trackrelay.services.experiment_reset import (
     ExperimentDatabaseCounts,
     ExperimentResetEvidence,
@@ -94,7 +95,7 @@ def empty_state() -> ExperimentStateSnapshot:
             test_runs=0,
         ),
         simulator_receipts=0,
-        simulator_mode="healthy",
+        simulator_mode=SimulatorMode.HEALTHY,
     )
 
 
@@ -108,7 +109,7 @@ def reset_result() -> ExperimentResetResult:
             test_runs=1,
         ),
         simulator_receipts=2,
-        simulator_mode="healthy",
+        simulator_mode=SimulatorMode.HEALTHY,
     )
     reset = ExperimentResetEvidence(
         test_run_id=TEST_RUN_ID,

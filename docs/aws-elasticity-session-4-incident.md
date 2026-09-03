@@ -185,3 +185,61 @@ results/local-elasticity-driver/
   boundary-fix-20260903T141600Z/           # stopped receiver test; failed
   boundary-fix-keepalive-20260903T142000Z/ # complete 11-minute replay; passed
 ```
+
+## Third attempt: qualified control, reset contract failure
+
+Session: `cloud-session-4-20260903T144402Z`, measured revision `0d61173ed2aa`.
+
+The fixed control qualified: k6 exited zero with no dropped iterations, all
+3,660 unique events were accepted and delivered, stable drain and reconciliation
+passed, and all native headroom/ingestion gates passed. The retained fixed
+summary has `qualified: true` and no rejection reasons. This control remains
+useful evidence, but it is not a paired elasticity result.
+
+Reset failed immediately after entering phase 4. No pre-reset observation was
+saved. The controller reads `/api/v1/experiments/state` before any reset POST or
+queue purge, and the API reads the real simulator's status at that point. The
+simulator returns `HEALTHY`; reset's separate string contract expected `healthy`
+and rejected it. A local reproduction connecting both real ASGI apps returned
+HTTP 503, matching this failure path. The retained cloud exception recorded only
+`HTTPStatusError`, not its exact response status/body. A second latent mismatch
+was reproduced locally: reset's lowercase mode PUT returned HTTP 422 because
+the simulator accepts uppercase enum values.
+
+The controller stopped before the worker-only scaling transition. Its existing
+unconditional cleanup completed without intervention: `teardown_verified` at
+2026-09-03 15:22:02 UTC, all 30 native inventory categories zero, no cleanup errors.
+The original journal and all cloud measurements remain unchanged.
+
+The correction reuses `SimulatorMode` for reads, snapshot serialization,
+healthy-state checks, and the PUT payload. This also restores the omitted
+`TIMEOUT` mode to the state contract; degraded modes still prohibit reset.
+Unknown or lowercase wire values are rejected rather than silently normalized.
+Reset HTTP failures now become safe controller errors containing the fixed
+GET/POST operation and status code, or the transport exception type. Existing
+progress and journal handling retain that description without exposing hosts,
+credentials, headers, response bodies or arbitrary exception text. There are no
+new HTTP retries, particularly for potentially partially committed reset POSTs.
+
+The old reset service mocks invented lowercase simulator responses. New tests
+connect the real controller, API and simulator handlers/response models, with
+only the external AWS observations and clock simulated. They check full reset,
+stable-empty proof, partner preservation, all five modes, refusal of degraded
+or mismatched runs without writes, and JSON evidence round-trips. A separate
+isolated PostgreSQL 17 run covers the actual `TRUNCATE` branch; SQLite alone
+would exercise only the `DELETE` fallback. Error tests cover HTTP 409/422/503
+and GET/POST timeouts, safe diagnostics, one cleanup, and no retry or queue purge
+after HTTP failure.
+
+Local validation passed: 607 default Python tests, the separately selected
+PostgreSQL 17 contract test, and all three rebuilt API/worker/simulator image
+smoke tests. Lint and whitespace checks were clean. The new real-app state test
+first reproduced HTTP 503 on the old implementation and passed after correction.
+The dedicated PostgreSQL container and its temporary database were removed;
+no existing development database or AWS resource was used. The other 15
+database integration tests were not run for this correction.
+
+This correction is locally verified, not another cloud run. A fresh reviewed
+plan, new session ID, new immutable images, and explicit spending/teardown
+approval are still required. Do not combine this control with an elastic run
+from a different session or reconstruct a successful reset after teardown.

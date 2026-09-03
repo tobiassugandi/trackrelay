@@ -9,8 +9,9 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import httpx
-from pytest import MonkeyPatch, raises
+from pytest import MonkeyPatch, mark, raises
 
+from trackrelay.aws_diagnostics import error_evidence
 from trackrelay.aws_experiment_reset import (
     AwsExperimentResetError,
     ExperimentResetObservation,
@@ -26,6 +27,8 @@ from trackrelay.aws_session import (
     load_manifest,
     write_manifest,
 )
+from trackrelay.downstream.control import SimulatorMode
+from trackrelay.operator_status import progress_output
 from trackrelay.services.experiment_reset import (
     ExperimentDatabaseCounts,
     ExperimentResetEvidence,
@@ -119,7 +122,7 @@ def application_state(count: int) -> ExperimentStateSnapshot:
     return ExperimentStateSnapshot(
         database=database_counts(count),
         simulator_receipts=count,
-        simulator_mode="healthy",
+        simulator_mode=SimulatorMode.HEALTHY,
     )
 
 
@@ -405,3 +408,103 @@ def test_reset_workflow_failure_destroys_and_verifies(
         )
 
     assert cleanup == ["destroy", "verify"]
+
+
+@mark.parametrize(
+    ("failed_method", "failure"),
+    [
+        ("GET", 503),
+        ("POST", 409),
+        ("POST", 422),
+        ("POST", 503),
+        ("GET", "timeout"),
+        ("POST", "timeout"),
+    ],
+)
+def test_http_failure_reports_safe_operation_before_cleanup_without_retry(
+    tmp_path,
+    monkeypatch,
+    failed_method,
+    failure,
+):
+    session = ready_session(tmp_path)
+    monkeypatch.setattr(
+        "trackrelay.aws_experiment_reset.validate_experiment_reset_approval",
+        lambda *_args, **_kwargs: (load_manifest(session), fixed_summary_stub()),
+    )
+    calls = []
+    messages = []
+    private = "private-password-token-and-payload"
+
+    def handler(request):
+        calls.append(request.method)
+        if request.method == failed_method:
+            if failure == "timeout":
+                raise httpx.ReadTimeout(private, request=request)
+            return httpx.Response(
+                failure,
+                json={"detail": private},
+                headers={"X-Private": private},
+                request=request,
+            )
+        assert request.method == "GET"
+        return httpx.Response(
+            200,
+            json=application_state(EXPECTED_COUNT).model_dump(mode="json"),
+            request=request,
+        )
+
+    def runner(arguments, input_text):
+        if "get-queue-attributes" in arguments:
+            names = arguments[
+                arguments.index("--attribute-names") + 1 : arguments.index("--query")
+            ]
+            return completed(arguments, stdout=dumps({name: "0" for name in names}))
+        if "describe-services" in arguments:
+            return completed(arguments, stdout="[1, 1, 0]")
+        if "describe-scalable-targets" in arguments:
+            return completed(arguments, stdout="[]")
+        assert "purge-queue" not in arguments
+        return preparation_runner(arguments, input_text)
+
+    with (
+        httpx.Client(
+            base_url=f"http://user:{private}@private-endpoint.invalid",
+            transport=httpx.MockTransport(handler),
+        ) as client,
+        progress_output(messages.append, repeat_interval_seconds=0),
+        raises(AwsExperimentResetError) as caught,
+    ):
+        run_experiment_reset_session(
+            session,
+            **approvals(session),
+            runner=runner,
+            reset_runner=lambda *args, **kwargs: execute_experiment_reset(
+                *args,
+                **kwargs,
+                client=client,
+            ),
+            destroyer=lambda _session: messages.append("destroy"),
+            teardown_verifier=lambda _session: messages.append("verify"),
+        )
+
+    assert calls == (["GET"] if failed_method == "GET" else ["GET", "POST"])
+    path = (
+        "/api/v1/experiments/state"
+        if failed_method == "GET"
+        else "/api/v1/experiments/reset"
+    )
+    reason = "ReadTimeout" if failure == "timeout" else f"HTTP {failure}"
+    expected = f"Experiment reset {failed_method} {path} failed: {reason}"
+    assert str(caught.value) == expected
+    assert expected in messages[0]
+    assert messages[-2:] == ["destroy", "verify"]
+    evidence = error_evidence(caught.value)
+    assert evidence["message"] == expected
+    assert evidence["cause"]["type"] == (
+        "ReadTimeout" if failure == "timeout" else "HTTPStatusError"
+    )
+    safe_output = dumps(evidence) + " ".join(messages)
+    assert private not in safe_output
+    assert "private-endpoint" not in safe_output
+    assert "X-Private" not in safe_output

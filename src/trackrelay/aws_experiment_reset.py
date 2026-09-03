@@ -38,6 +38,7 @@ from trackrelay.aws_session import (
     verify_destroyed,
     write_manifest,
 )
+from trackrelay.downstream.control import SimulatorMode
 from trackrelay.operator_status import (
     PeriodicStatus,
     operator_failure,
@@ -356,9 +357,35 @@ def _autoscaling_target_absent(
     return targets == []
 
 
+def _api_request(
+    client: httpx.Client,
+    method: Literal["GET", "POST"],
+    path: Literal["/api/v1/experiments/state", "/api/v1/experiments/reset"],
+    *,
+    json: dict[str, object] | None = None,
+) -> httpx.Response:
+    """Expose a fixed operation label/status, never arbitrary HTTP error text.
+
+    These errors are retained by the session journal and printed before cleanup.
+    Do not retry here: the reset POST can have partially committed state.
+    """
+    operation = f"Experiment reset {method} {path}"
+    try:
+        response = client.request(method, path, json=json)
+        response.raise_for_status()
+    except httpx.HTTPStatusError as error:
+        raise AwsExperimentResetError(
+            f"{operation} failed: HTTP {error.response.status_code}"
+        ) from error
+    except httpx.RequestError as error:
+        raise AwsExperimentResetError(
+            f"{operation} failed: {type(error).__name__}"
+        ) from error
+    return response
+
+
 def _application_state(client: httpx.Client) -> ExperimentStateSnapshot:
-    response = client.get("/api/v1/experiments/state")
-    response.raise_for_status()
+    response = _api_request(client, "GET", "/api/v1/experiments/state")
     try:
         return ExperimentStateSnapshot.model_validate(response.json())
     except ValueError as error:
@@ -465,7 +492,7 @@ def execute_experiment_reset(
             or before.application.database.delivery_outbox_entries != expected_count
             or before.application.database.shipments != expected_count
             or before.application.simulator_receipts != expected_count
-            or before.application.simulator_mode != "healthy"
+            or before.application.simulator_mode is not SimulatorMode.HEALTHY
         ):
             raise AwsExperimentResetError(
                 "pre-reset state differs from the qualified fixed control"
@@ -480,14 +507,15 @@ def execute_experiment_reset(
             raise AwsExperimentResetError(
                 "worker autoscaling appeared before the treatment reset"
             )
-        response = client_context.post(
+        response = _api_request(
+            client_context,
+            "POST",
             "/api/v1/experiments/reset",
             json={
                 "test_run_id": str(fixed_summary.measurement.test_run_id),
                 "expected_event_count": expected_count,
             },
         )
-        response.raise_for_status()
         try:
             application_reset = ExperimentResetEvidence.model_validate(response.json())
         except ValueError as error:

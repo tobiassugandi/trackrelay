@@ -686,8 +686,10 @@ run "async_runtime_injects_only_the_password_and_discovers_the_simulator" {
       == "A"
       && one(one(aws_service_discovery_service.simulator[0].dns_config).dns_records).ttl
       == 10
+      && length(aws_service_discovery_service.simulator[0].health_check_custom_config)
+      == 0
     )
-    error_message = "The worker must discover replaceable simulator task IPs through private Cloud Map DNS."
+    error_message = "The worker must discover replaceable simulator task IPs through stable private Cloud Map DNS."
   }
 
   assert {

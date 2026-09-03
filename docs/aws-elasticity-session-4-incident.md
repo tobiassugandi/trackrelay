@@ -243,3 +243,44 @@ This correction is locally verified, not another cloud run. A fresh reviewed
 plan, new session ID, new immutable images, and explicit spending/teardown
 approval are still required. Do not combine this control with an elastic run
 from a different session or reconstruct a successful reset after teardown.
+
+## Fourth attempt: successful reset, non-idempotent Cloud Map plan
+
+Session: `cloud-session-4-20260903T153822Z`, measured revision `28117b7db199`.
+
+The fixed control qualified with complete measurement and observed worker
+pressure. The corrected reset then completed at 2026-09-03 16:08:24 UTC. This
+confirms the simulator-mode correction in the real deployment, but the retained
+control is still not a paired elasticity result.
+
+Before applying the worker policy, the transition controller inspected its saved
+Terraform plan and rejected it. In addition to the five expected autoscaling
+creates, the plan proposed replacing
+`aws_service_discovery_service.simulator[0]` and updating
+`aws_ecs_service.async_simulator[0]`. The saved plan showed the precise cause:
+the configured empty `health_check_custom_config {}` was absent from refreshed
+state, so adding it was a replacement-only difference whose new discovery ARN
+would flow into the ECS service registration. Terraform reported six creates,
+one update and one destroy. The strict transition guard stopped before apply;
+no autoscaling resource or elastic workload was started.
+
+This is a known AWS provider 6.x behavior: an empty custom-health map expands to
+no API configuration and is not retained on refresh, while the block itself is
+replacement-only. Setting its deprecated `failure_threshold = 1` would make the
+block concrete, but would introduce a configuration change and repeated provider
+warnings. Removing the ineffective empty block instead matches the resource that
+AWS had already created and keeps the treatment boundary unchanged. The
+Terraform contract now explicitly requires no custom-health block. Plan rejection
+still requires exactly the same five autoscaling creates, but its error identifies
+unexpected addresses and actions without emitting before/after values.
+
+The combined controller performed unconditional cleanup without intervention.
+The session reached `teardown_verified` at 2026-09-03 16:18:33 UTC; all 30 native
+inventory categories were zero, with no cleanup or diagnostic errors. Original
+plans, measurements and phase journal remain unchanged.
+
+Local validation covers the two-change Cloud Map/ECS plan shape, non-disclosure
+of plan values in the error, and the absent custom-health Terraform contract.
+This correction does not authorize another AWS attempt. A fresh reviewed plan,
+new session ID, matching clean revision, and explicit spending and unconditional
+teardown approval remain required for another paired run.

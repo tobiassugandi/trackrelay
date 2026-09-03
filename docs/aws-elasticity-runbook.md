@@ -14,9 +14,12 @@ have a separate Terraform-owned group, created before the cluster and deleted
 after it. Native verification checks this namespace independently of application
 logs, and comparison reports require that new inventory entry. See the
 [resource/cost review](aws-elasticity-cost-review.md) for the discovery and cleanup
-audit. Three fixed-control attempts have since run and been torn down. The third
-qualified, then stopped during reset because of a simulator mode-contract
-mismatch. Worker autoscaling and the elastic treatment have not started.
+audit. Four fixed-control attempts have since run and been torn down. The fourth
+qualified and reset successfully, then the worker-only transition guard rejected
+a plan that also proposed replacing Cloud Map and updating the simulator ECS
+service. An ineffective empty `health_check_custom_config` block caused that
+provider-state mismatch and has been removed. Worker autoscaling and the elastic
+treatment have not started.
 See the [incident record](aws-elasticity-session-4-incident.md).
 
 ## Workflow and ownership

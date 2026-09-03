@@ -401,7 +401,68 @@ def test_plan_allows_only_the_five_policy_resources() -> None:
             "change": {"actions": ["update"], "before": {}, "after": {}},
         }
     )
-    with raises(AwsElasticityTransitionError, match="only the five"):
+    with raises(
+        AwsElasticityTransitionError,
+        match=r"unexpected: aws_ecs_service\.async_api\[0\] \(update\)",
+    ):
+        validate_elasticity_transition_plan(
+            dumps(document),
+            plan_sha256="2" * 64,
+            expected_policy=expected,
+        )
+
+
+def test_plan_reports_cloud_map_replacement_without_plan_values() -> None:
+    expected = policy()
+    document = plan_document(expected)
+    document["resource_changes"].extend(
+        [
+            {
+                "address": "aws_ecs_service.async_simulator[0]",
+                "change": {
+                    "actions": ["update"],
+                    "before": {"service_registries": "old-sensitive-value"},
+                    "after": {"service_registries": "new-sensitive-value"},
+                },
+            },
+            {
+                "address": "aws_service_discovery_service.simulator[0]",
+                "change": {
+                    "actions": ["delete", "create"],
+                    "before": {"health_check_custom_config": []},
+                    "after": {
+                        "health_check_custom_config": [
+                            {"failure_threshold": "sensitive-value"}
+                        ]
+                    },
+                },
+            },
+        ]
+    )
+
+    with raises(AwsElasticityTransitionError) as captured:
+        validate_elasticity_transition_plan(
+            dumps(document),
+            plan_sha256="2" * 64,
+            expected_policy=expected,
+        )
+
+    message = str(captured.value)
+    assert "aws_ecs_service.async_simulator[0] (update)" in message
+    assert (
+        "aws_service_discovery_service.simulator[0] (delete/create)" in message
+    )
+    assert "sensitive-value" not in message
+    assert "old-sensitive-value" not in message
+    assert "new-sensitive-value" not in message
+
+
+def test_plan_rejects_non_string_actions_as_invalid() -> None:
+    expected = policy()
+    document = plan_document(expected)
+    document["resource_changes"][0]["change"]["actions"] = ["create", 1]
+
+    with raises(AwsElasticityTransitionError, match="change is invalid"):
         validate_elasticity_transition_plan(
             dumps(document),
             plan_sha256="2" * 64,

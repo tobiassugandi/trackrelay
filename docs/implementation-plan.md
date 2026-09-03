@@ -798,6 +798,14 @@ A fresh saved plan and explicit approval are required for any new attempt.
   and PostgreSQL. Retain safe HTTP operation/status diagnostics and verify
   failure cleanup without retrying uncertain POSTs. The third attempt's teardown
   was verified at 2026-09-03 15:22:02 UTC, all 30 native categories zero.
+- [x] Preserve the fourth attempt's qualified fixed control and successful reset
+  when the worker-only transition guard rejected two additional Terraform
+  changes. The empty Cloud Map custom-health block was omitted from provider
+  state and would have replaced the simulator discovery service plus updated its
+  ECS registration. Remove that ineffective block, retain the exact five-resource
+  guard, and report unexpected resource addresses/actions without plan values.
+  Teardown was verified at 2026-09-03 16:18:33 UTC with all 30 native categories
+  zero. The elastic treatment still has not run.
 - [ ] Define a sustainable end-to-end load using ingestion SLOs plus bounded backlog, completion, drain-deadline, and correctness guardrails; API latency alone is insufficient.
 - [ ] Freeze the fixed-control configuration and aligned time series in `results/aws-fixed-control/`.
 - [ ] Leave the deployment unchanged and continue directly into Stage 9.7; do not tear it down or redeploy it between treatments.
@@ -817,9 +825,10 @@ A fresh saved plan and explicit approval are required for any new attempt.
   rejection, drift, interruption, serialization handoff, and cleanup failures.
 
 The remaining checkboxes below describe actual cloud execution, not local code
-readiness. Three session-4 attempts ran; the third fixed control qualified but
-reset failed before the worker-only transition. The elastic treatment has not
-yet run. A fresh approved session must repeat both treatments together.
+readiness. Four session-4 attempts ran; the fourth fixed control qualified and
+reset passed, but the transition guard rejected an unrelated Cloud Map
+replacement before applying autoscaling. The elastic treatment has not yet run.
+A fresh approved session must repeat both treatments together.
 
 - [ ] Enable a documented worker scaling policy with the same minimum task count and a bounded maximum; use queue backlog or backlog per task as the demand signal.
 - [ ] Replay the fixed-control workload without changing the application, task definition, API capacity, database, simulator, benchmark driver, SLO, or guardrails.

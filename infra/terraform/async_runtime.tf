@@ -140,8 +140,8 @@ resource "aws_service_discovery_service" "simulator" {
     }
   }
 
-  health_check_custom_config {}
-
+  # Do not add an empty health_check_custom_config block. AWS provider 6.x
+  # omits it from state, so later plans would replace this live service.
   tags = {
     Name = "${local.name_prefix}-simulator"
   }

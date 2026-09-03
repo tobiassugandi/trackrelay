@@ -347,18 +347,45 @@ def validate_elasticity_transition_plan(
             raise AwsElasticityTransitionError(
                 "Terraform autoscaling change is invalid"
             ) from error
+        if (
+            not isinstance(address, str)
+            or not isinstance(resource, dict)
+            or any(not isinstance(action, str) for action in resource_actions)
+        ):
+            raise AwsElasticityTransitionError(
+                "Terraform autoscaling change is invalid"
+            )
         if resource_actions != ("no-op",):
-            if not isinstance(address, str) or not isinstance(resource, dict):
-                raise AwsElasticityTransitionError(
-                    "Terraform autoscaling change is invalid"
-                )
             meaningful[address] = resource
             actions[address] = resource_actions
     if tuple(sorted(meaningful)) != MEANINGFUL_RESOURCE_ADDRESSES or any(
         item != ("create",) for item in actions.values()
     ):
+        expected_addresses = set(MEANINGFUL_RESOURCE_ADDRESSES)
+        unexpected = tuple(
+            f"{address} ({'/'.join(resource_actions)})"
+            for address, resource_actions in sorted(actions.items())
+            if address not in expected_addresses
+        )
+        missing = tuple(
+            address for address in MEANINGFUL_RESOURCE_ADDRESSES if address not in actions
+        )
+        wrong_actions = tuple(
+            f"{address} ({'/'.join(actions[address])})"
+            for address in MEANINGFUL_RESOURCE_ADDRESSES
+            if address in actions and actions[address] != ("create",)
+        )
+        details = []
+        if unexpected:
+            details.append(f"unexpected: {', '.join(unexpected)}")
+        if missing:
+            details.append(f"missing: {', '.join(missing)}")
+        if wrong_actions:
+            details.append(f"wrong actions: {', '.join(wrong_actions)}")
+        suffix = f"; {'; '.join(details)}" if details else ""
         raise AwsElasticityTransitionError(
             "autoscaling plan must create only the five frozen policy resources"
+            f"{suffix}"
         )
 
     common = {

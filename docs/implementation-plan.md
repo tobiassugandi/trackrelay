@@ -746,6 +746,13 @@ The eight-worker resource envelope is documented; regional pricing, budget
 headroom, expected operating window, and the explicit session-4 approval still
 need review. Cloud session 4 has not been provisioned or measured.
 
+- [ ] Close the Container Insights performance-log lifecycle/inventory gap
+  found during the 2026-09-03 read-only preflight. Two older session-3 groups
+  remain outside the application's log prefix despite the recorded teardown
+  status. See `docs/aws-elasticity-cost-review.md`; do not prepare the session-4
+  plan until the fix and regression tests are complete. Removal of the old
+  groups requires a separate explicit cleanup decision.
+
 - [ ] **You:** Explicitly authorize cloud session 4 after reviewing its resource list, region, expected experiment duration, cost ceiling, and teardown command.
 - [ ] Provision the final experiment environment once and record its immutable application and infrastructure versions.
 - [ ] Disable worker autoscaling and fix the worker tier at its documented minimum task count.

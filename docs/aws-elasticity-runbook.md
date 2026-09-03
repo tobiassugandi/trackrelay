@@ -9,6 +9,12 @@ This runbook is not cloud authorization or a measured result. Session 4 still
 requires explicit approval of the session ID, region, complete staged resource
 list, expected duration, cost ceiling, and unconditional teardown.
 
+**2026-09-03 preflight hold:** the [resource/cost review](aws-elasticity-cost-review.md)
+found that Container Insights performance log groups are not covered by the
+current Terraform lifecycle or native log-group inventory. Resolve that gap
+before preparing or approving a session-4 plan. No session-4 resources have
+been provisioned.
+
 ## Workflow and ownership
 
 ```text

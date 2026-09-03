@@ -38,6 +38,12 @@ from trackrelay.aws_session import (
     verify_destroyed,
     write_manifest,
 )
+from trackrelay.operator_status import (
+    PeriodicStatus,
+    operator_failure,
+    operator_status,
+    status_activity,
+)
 from trackrelay.services.experiment_reset import (
     ExperimentResetEvidence,
     ExperimentStateSnapshot,
@@ -493,16 +499,19 @@ def execute_experiment_reset(
             encoding="utf-8",
         )
         purge_started_at = now()
+        operator_status("Reset: purging source queue and dead-letter queue")
         for queue_url in (source_queue_url, dead_letter_queue_url):
             invoke(
                 runner,
                 (*aws_prefix(session), "sqs", "purge-queue", "--queue-url", queue_url),
                 action="SQS treatment reset purge",
             )
-        sleeper(60)
+        with status_activity("Reset: waiting 60s for SQS purge propagation"):
+            sleeper(60)
 
         observations: list[ExperimentResetObservation] = []
         stable_since: datetime | None = None
+        reset_progress = PeriodicStatus()
         while True:
             observed_at = now()
             observation = _observe(
@@ -523,7 +532,17 @@ def execute_experiment_reset(
             elif stable_since is None:
                 stable_since = observed_at
             elif (observed_at - stable_since).total_seconds() >= 30:
+                operator_status("Reset: stable empty application/queue state confirmed")
                 break
+            elapsed = (observed_at - purge_started_at).total_seconds()
+            stable_seconds = (
+                (observed_at - stable_since).total_seconds() if stable_since else 0
+            )
+            reset_progress.update(
+                elapsed,
+                f"Reset verification: {elapsed:.0f}/{verification_timeout_seconds:.0f}s; "
+                f"empty_and_fixed={observation.empty_and_fixed}; stable={stable_seconds:.0f}/30s",
+            )
             if (observed_at - purge_started_at).total_seconds() >= (
                 verification_timeout_seconds
             ):
@@ -708,6 +727,7 @@ def run_experiment_reset_session(
         write_manifest(session, manifest)
         return result
     except BaseException as workflow_error:
+        operator_failure("Phase reset; beginning cleanup", workflow_error)
         cleanup_errors = []
         try:
             destroyer(session)

@@ -18,6 +18,7 @@ from trackrelay.aws_elasticity_cloudwatch import (
     parse_elasticity_metric_response,
 )
 from trackrelay.aws_session import AwsSession
+from trackrelay.operator_status import progress_output
 
 STARTED_AT = datetime(2026, 9, 2, 10, 0, 10, tzinfo=UTC)
 ENDED_AT = STARTED_AT + timedelta(seconds=180)
@@ -158,19 +159,31 @@ def test_collector_retries_until_full_window_is_published(tmp_path: Path) -> Non
         )
         return completed(command, stdout=responses.pop(0))
 
-    evidence = collect_elasticity_cloudwatch_evidence(
-        aws_session,
-        test_run_id=TEST_RUN_ID,
-        window_started_at=STARTED_AT,
-        window_ended_at=ENDED_AT,
-        runner=runner,
-        now=lambda: ENDED_AT + timedelta(minutes=3),
-        sleeper=waits.append,
-        retry_interval_seconds=2,
-    )
+    messages = []
+    with progress_output(messages.append, repeat_interval_seconds=0):
+        evidence = collect_elasticity_cloudwatch_evidence(
+            aws_session,
+            test_run_id=TEST_RUN_ID,
+            window_started_at=STARTED_AT,
+            window_ended_at=ENDED_AT,
+            runner=runner,
+            now=lambda: ENDED_AT + timedelta(minutes=3),
+            sleeper=waits.append,
+            retry_interval_seconds=2,
+        )
 
     assert evidence.test_run_id == TEST_RUN_ID
     assert waits == [2]
+    assert "CloudWatch collection: attempt 1/8" in messages
+    assert "CloudWatch collection: attempt 2/8" in messages
+    assert any(
+        "rds_cpu" in message and "retrying in 2s" in message for message in messages
+    )
+    assert (
+        messages[-1]
+        == "CloudWatch evidence complete: all required native buckets present"
+    )
+    assert not any(DIMENSIONS["cluster_name"] in message for message in messages)
     assert observed_return_ids == {
         definition.query_id for definition in metric_definitions()
     }

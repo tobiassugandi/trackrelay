@@ -61,6 +61,12 @@ from trackrelay.experiments.elasticity import (
     build_elasticity_manifest,
 )
 from trackrelay.experiments.reconciliation import ReconciliationReport
+from trackrelay.operator_status import (
+    PeriodicStatus,
+    operator_failure,
+    operator_status,
+    status_activity,
+)
 from trackrelay.runtime_metrics import RuntimeMetricsSnapshot
 
 NonNegativeFloat = Annotated[float, Field(ge=0)]
@@ -861,6 +867,10 @@ def _aligned_metric_load_start(
         definition.metric_period_seconds
     )
     if seconds_into_period > definition.metric_start_alignment_tolerance_seconds:
+        operator_status(
+            "Waiting for UTC metric boundary: "
+            f"{definition.metric_period_seconds - seconds_into_period:.0f}s"
+        )
         sleeper(definition.metric_period_seconds - seconds_into_period)
         candidate = now()
         seconds_into_period = candidate.astimezone(UTC).timestamp() % (
@@ -944,6 +954,14 @@ def execute_elasticity_workload(
             now=now,
             sleeper=sleeper,
         )
+        treatment_label = (
+            "Fixed" if treatment is ElasticityTreatment.FIXED else "Elastic"
+        )
+        operator_status(
+            f"{treatment_label} workload starting: {definition.duration_seconds}s, "
+            f"{definition.expected_request_count} scheduled events"
+        )
+        load_progress = PeriodicStatus()
         with (evidence_root / "k6.log").open("w", encoding="utf-8") as log_file:
             process = Popen(
                 command,
@@ -961,7 +979,7 @@ def execute_elasticity_workload(
                         raise AwsFixedControlError(
                             "elasticity workload driver timed out"
                         )
-                    _attempt_observation(
+                    observation = _attempt_observation(
                         collector,
                         evidence_root=evidence_root,
                         observations=observations,
@@ -969,6 +987,18 @@ def execute_elasticity_workload(
                         observed_at=observed_at,
                         load_started_at=load_started_at,
                         load_ended_at=None,
+                    )
+                    elapsed = (observed_at - load_started_at).total_seconds()
+                    details = (
+                        f"step={observation.step_name} rate={observation.offered_rate_per_second}/s "
+                        f"workers={observation.worker_running_count}/{observation.worker_desired_count} "
+                        f"queue={observation.source_queue_work}"
+                        if observation is not None
+                        else "observation unavailable (recorded in evidence)"
+                    )
+                    load_progress.update(
+                        elapsed,
+                        f"{treatment_label} workload: {elapsed:.0f}/{definition.duration_seconds}s; {details}",
                     )
                     try:
                         k6_exit_code = process.wait(
@@ -986,11 +1016,16 @@ def execute_elasticity_workload(
                         process.kill()
                         process.wait()
         load_ended_at = now()
+        operator_status(
+            f"{treatment_label} workload ended: k6 exit={k6_exit_code}; waiting for drain "
+            f"(limit {post_load_timeout_seconds:.0f}s, stable-empty target {empty_stability_seconds:.0f}s)"
+        )
         completion = client.post(f"/api/v1/test-runs/{manifest.test_run_id}/complete")
         completion.raise_for_status()
 
         stable_since: datetime | None = None
         drain_stability_confirmed = False
+        drain_progress = PeriodicStatus()
         while (now() - load_ended_at).total_seconds() <= post_load_timeout_seconds:
             observed_at = now()
             observation = _attempt_observation(
@@ -1010,9 +1045,33 @@ def execute_elasticity_workload(
                 observed_at - stable_since
             ).total_seconds() >= empty_stability_seconds:
                 drain_stability_confirmed = True
+                operator_status(f"{treatment_label}: stable drain confirmed")
                 break
+            elapsed = (observed_at - load_ended_at).total_seconds()
+            stable_seconds = (
+                (observed_at - stable_since).total_seconds() if stable_since else 0
+            )
+            details = (
+                f"completed={observation.completed_delivery_events}/{observation.database_persisted_events} "
+                f"queue={observation.source_queue_work} dlq={observation.dead_letter_queue_messages} "
+                f"workers={observation.worker_running_count}/{observation.worker_desired_count}"
+                if observation is not None
+                else "observation unavailable (recorded in evidence)"
+            )
+            drain_progress.update(
+                elapsed,
+                f"{treatment_label} drain: {elapsed:.0f}/{post_load_timeout_seconds:.0f}s; "
+                f"stable-empty={stable_seconds:.0f}/{empty_stability_seconds:.0f}s; {details}",
+            )
             sleeper(observation_interval_seconds)
 
+        if not drain_stability_confirmed:
+            operator_status(
+                f"{treatment_label}: stable drain NOT confirmed before deadline"
+            )
+        operator_status(
+            f"{treatment_label}: reconciling database and simulator receipts"
+        )
         reconciliation_response = client.post(
             f"/api/v1/test-runs/{manifest.test_run_id}/reconciliation",
             json=manifest.model_dump(mode="json"),
@@ -1020,6 +1079,11 @@ def execute_elasticity_workload(
         reconciliation_response.raise_for_status()
         reconciliation = ReconciliationReport.model_validate(
             reconciliation_response.json()
+        )
+        operator_status(
+            f"{treatment_label} reconciliation: accepted={reconciliation.accepted}, "
+            f"receipts={reconciliation.simulator_unique_events}, unaccounted={reconciliation.unaccounted}, "
+            f"invariants_passed={reconciliation.invariants_passed}"
         )
 
     try:
@@ -1277,13 +1341,14 @@ def run_fixed_control_session(
             definition=definition,
             runner=runner,
         )
-        cloudwatch = metric_collector(
-            session,
-            test_run_id=result.test_run_id,
-            window_started_at=result.load_started_at,
-            window_ended_at=result.load_ended_at,
-            runner=runner,
-        )
+        with status_activity("Fixed control: collecting CloudWatch evidence"):
+            cloudwatch = metric_collector(
+                session,
+                test_run_id=result.test_run_id,
+                window_started_at=result.load_started_at,
+                window_ended_at=result.load_ended_at,
+                runner=runner,
+            )
         qualification = evaluate_fixed_control_qualification(result, cloudwatch)
         summary = FixedControlSummary(
             measurement=result,
@@ -1319,8 +1384,10 @@ def run_fixed_control_session(
                 "fixed-control candidate was rejected: "
                 + ", ".join(qualification.rejection_reasons)
             )
+        operator_status("Fixed control qualified; retaining stack for reset")
         return summary
     except BaseException as workflow_error:
+        operator_failure("Phase fixed; beginning cleanup", workflow_error)
         cleanup_errors = []
         try:
             destroyer(session)

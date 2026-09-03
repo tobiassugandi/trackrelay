@@ -50,6 +50,56 @@ experiment. SIGINT/SIGTERM enter the cleanup path. SIGKILL, machine loss, repeat
 interrupts during cleanup, or lost AWS access can prevent cleanup from finishing.
 The manual recovery commands below remain essential.
 
+### Terminal progress and evidence
+
+`trackrelay-aws-elasticity-session` (including `make aws-elasticity-session`)
+prints low-volume, timestamped progress to stderr by default. Lines flush
+immediately, including when redirected. Timestamps include the local UTC offset;
+CloudWatch bucket alignment still uses UTC. Stdout remains the final report
+conclusion, and errors retain a nonzero exit status.
+
+The progress stream shows:
+
+- Six phase starts/completions and elapsed times, plus deployment substeps.
+- The current named operation and elapsed time after roughly a minute of silence
+  during blocking Terraform/ECS/image operations. This is elapsed time, not an
+  estimated completion time or proof that the AWS operation is healthy.
+- Roughly one line per minute during load/drain, using existing observations:
+  step, rate, running/desired workers, queue work, and stable-empty duration.
+  Failed observations say unavailable, not zero or a stale last-known value.
+- CloudWatch attempt counts and publication retries; reset/purge waits.
+- Failure phase/reason before cleanup, diagnostic capture, Terraform destroy,
+  late-log absence samples, native verification, and the evidence directory.
+
+Example lines (illustrative, not cloud evidence):
+
+```text
+[18:55:38+0700] Starting: Phase 3/6: fixed-control treatment
+[19:00:00+0700] Fixed workload: 240/660s; step=fall-10 rate=10/s workers=1/1 queue=1842
+[19:07:03+0700] Fixed workload ended: k6 exit=0; waiting for drain (limit 1200s, stable-empty target 180s)
+[19:11:28+0700] Starting: Cleanup: capturing ECS diagnostics
+[19:18:17+0700] Container Insights cleanup: check 6/13; absent sample 5/5
+[19:18:31+0700] Native absence confirmed: 30/30 categories zero
+```
+
+Add `--quiet` to the direct `uv run --locked trackrelay-aws-elasticity-session`
+command to suppress progress. It does not suppress final errors/conclusions,
+change artifact capture, bypass approvals, or change teardown/qualification.
+Redirect stderr if you want a separate operator log; raw AWS, Terraform and k6
+output remains captured as before and is never forwarded by the progress helper.
+
+Progress is operator convenience only. `session.json` and retained artifacts
+remain authoritative; terminal lines cannot substitute for missing metrics or
+receipts. Output failures such as a broken pipe disable the progress sink rather
+than failing the experiment or preventing cleanup. No extra cloud queries are
+made for progress.
+
+Library callers remain silent by default. Tests and supervised Python callers
+can inject a fast `Callable[[str], None]` across nested controllers using
+`trackrelay.operator_status.progress_output(reporter)`. Use
+`repeat_interval_seconds=0` in deterministic tests to disable the background
+elapsed-time ticker. The CLI cancels the ticker on success, failure, or interrupt.
+
 ## 1. Local preflight, before provisioning
 
 Run from the repository root with Python 3.12, uv, Terraform, Docker, AWS CLI,

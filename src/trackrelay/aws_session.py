@@ -22,6 +22,7 @@ from trackrelay.experiments.vertical_scaling import (
     ALLOWED_INSTANCE_TYPES,
     ECONOMICAL_BASELINE_INSTANCE_TYPE,
 )
+from trackrelay.operator_status import operator_status, status_activity
 
 SESSION_ID_PATTERN = compile_pattern(r"^cloud-session-[1234]-[0-9]{8}T[0-9]{6}Z$")
 CommandRunner = Callable[[Sequence[str]], CompletedProcess[str]]
@@ -314,32 +315,34 @@ def destroy_session(
     manifest = load_manifest(session) if session.manifest_path.exists() else None
     session.evidence_dir.mkdir(parents=True, exist_ok=True)
     destroy_plan = session.evidence_dir / "terraform-destroy.tfplan"
-    plan_result = runner(
-        session.terraform_command(
-            "plan",
-            "-destroy",
-            "-input=false",
-            f"-out={destroy_plan.resolve()}",
-            *session.terraform_variables(),
+    with status_activity("Cleanup: preparing Terraform destroy plan"):
+        plan_result = runner(
+            session.terraform_command(
+                "plan",
+                "-destroy",
+                "-input=false",
+                f"-out={destroy_plan.resolve()}",
+                *session.terraform_variables(),
+            )
         )
-    )
-    require_success(
-        result=plan_result,
-        action="Terraform destroy plan",
-        log_path=session.evidence_dir / "terraform-destroy-plan.log",
-    )
-    apply_result = runner(
-        session.terraform_command(
-            "apply",
-            "-input=false",
-            destroy_plan.resolve().as_posix(),
+        require_success(
+            result=plan_result,
+            action="Terraform destroy plan",
+            log_path=session.evidence_dir / "terraform-destroy-plan.log",
         )
-    )
-    require_success(
-        result=apply_result,
-        action="Terraform destroy",
-        log_path=session.evidence_dir / "terraform-destroy.log",
-    )
+    with status_activity("Cleanup: applying Terraform destroy plan"):
+        apply_result = runner(
+            session.terraform_command(
+                "apply",
+                "-input=false",
+                destroy_plan.resolve().as_posix(),
+            )
+        )
+        require_success(
+            result=apply_result,
+            action="Terraform destroy",
+            log_path=session.evidence_dir / "terraform-destroy.log",
+        )
 
     if manifest is not None:
         manifest.update(
@@ -369,13 +372,17 @@ def destroy_session(
         if state_result.stdout.strip():
             raise AwsSessionError("refusing telemetry cleanup with managed resources")
         try:
-            telemetry_cleaner(
-                profile=session.profile,
-                region=session.region,
-                session_id=session.session_id,
-                runner=runner,
-                evidence_path=session.evidence_dir / "container-insights-cleanup.json",
-            )
+            with status_activity(
+                "Cleanup: waiting for late Container Insights absence"
+            ):
+                telemetry_cleaner(
+                    profile=session.profile,
+                    region=session.region,
+                    session_id=session.session_id,
+                    runner=runner,
+                    evidence_path=session.evidence_dir
+                    / "container-insights-cleanup.json",
+                )
         except AwsTeardownCheckError as error:
             raise AwsSessionError(str(error)) from error
 
@@ -389,6 +396,7 @@ def verify_destroyed(
     """Verify empty state plus generic and native AWS inventories."""
     manifest = load_manifest(session) if session.manifest_path.exists() else None
     session.evidence_dir.mkdir(parents=True, exist_ok=True)
+    operator_status("Teardown verification: checking Terraform state")
     state_result = runner(session.terraform_command("state", "list"))
     state_log_path = session.evidence_dir / "terraform-state-after-destroy.log"
     no_state_exists = (
@@ -406,6 +414,7 @@ def verify_destroyed(
     if state_result.stdout.strip():
         raise AwsSessionError("Terraform state still contains managed resources")
 
+    operator_status("Teardown verification: checking tagged-resource inventory")
     inventory_result = runner(
         (
             "aws",
@@ -442,12 +451,15 @@ def verify_destroyed(
         encoding="utf-8",
     )
     try:
-        native_counts = native_inventory(
-            profile=session.profile,
-            region=session.region,
-            session_id=session.session_id,
-            runner=runner,
-        )
+        with status_activity(
+            "Teardown verification: checking service-native inventory"
+        ):
+            native_counts = native_inventory(
+                profile=session.profile,
+                region=session.region,
+                session_id=session.session_id,
+                runner=runner,
+            )
     except AwsTeardownCheckError as error:
         raise AwsSessionError(str(error)) from error
     (session.evidence_dir / "aws-native-inventory-after-destroy.json").write_text(
@@ -472,6 +484,9 @@ def verify_destroyed(
             }
         )
         write_manifest(session, manifest)
+    operator_status(
+        f"Native absence confirmed: {len(native_counts)}/{len(native_counts)} categories zero"
+    )
 
 
 def add_shared_arguments(parser: ArgumentParser) -> None:

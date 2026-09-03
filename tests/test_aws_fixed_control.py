@@ -41,6 +41,7 @@ from trackrelay.experiments.elasticity import (
     ElasticityTreatment,
 )
 from trackrelay.experiments.reconciliation import ReconciliationReport
+from trackrelay.operator_status import progress_output
 from trackrelay.runtime_metrics import DatabasePoolMetrics, RuntimeMetricsSnapshot
 
 SESSION_ID = "cloud-session-4-20260902T090000Z"
@@ -548,10 +549,14 @@ def test_execution_uses_definition_and_confirms_stable_drain(
         started_at + timedelta(seconds=seconds)
         for seconds in (0, 60, 120, 180, 240, 300, 360, 420, 480)
     )
-    with httpx.Client(
-        base_url=API_URL,
-        transport=httpx.MockTransport(handler),
-    ) as client:
+    messages = []
+    with (
+        progress_output(messages.append, repeat_interval_seconds=0),
+        httpx.Client(
+            base_url=API_URL,
+            transport=httpx.MockTransport(handler),
+        ) as client,
+    ):
         execute = (
             execute_fixed_control
             if treatment is ElasticityTreatment.FIXED
@@ -585,6 +590,19 @@ def test_execution_uses_definition_and_confirms_stable_drain(
     assert result.measurement_complete is True
     assert result.worker_pressure_observed is False
     assert (evidence_root / "result.json").is_file()
+    label = "Fixed" if treatment is ElasticityTreatment.FIXED else "Elastic"
+    assert any(
+        message.startswith(f"{label} workload:")
+        and "workers=1/1" in message
+        and "queue=0" in message
+        for message in messages
+    )
+    assert any(
+        message.startswith(f"{label} drain:") and "stable-empty=" in message
+        for message in messages
+    )
+    assert f"{label}: stable drain confirmed" in messages
+    assert any(message.startswith(f"{label} reconciliation:") for message in messages)
 
 
 def test_fixed_control_success_leaves_stack_for_reset(tmp_path: Path) -> None:

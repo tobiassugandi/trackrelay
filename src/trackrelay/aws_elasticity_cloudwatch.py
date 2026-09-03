@@ -27,6 +27,7 @@ from trackrelay.aws_async_deployment import (
     terraform_output,
 )
 from trackrelay.aws_session import AwsSession
+from trackrelay.operator_status import operator_status
 
 NonNegativeFloat = Annotated[float, Field(ge=0)]
 Now = Callable[[], datetime]
@@ -502,6 +503,7 @@ def collect_elasticity_cloudwatch_evidence(
         )
     dimensions = raw_dimensions
     query_document = build_elasticity_metric_queries(dimensions)
+    operator_status("CloudWatch: checking dashboard and native metric window")
     dashboard_result = invoke(
         runner,
         (
@@ -561,6 +563,7 @@ def collect_elasticity_cloudwatch_evidence(
     )
     last_error: IncompleteElasticityCloudWatchError | None = None
     for attempt in range(1, maximum_attempts + 1):
+        operator_status(f"CloudWatch collection: attempt {attempt}/{maximum_attempts}")
         with NamedTemporaryFile(
             mode="w", encoding="utf-8", suffix=".json"
         ) as query_file:
@@ -602,6 +605,9 @@ def collect_elasticity_cloudwatch_evidence(
             (evidence_root / "collection-status.json").write_text(
                 dumps({"complete": True, "attempt": attempt}) + "\n", encoding="utf-8"
             )
+            operator_status(
+                "CloudWatch evidence complete: all required native buckets present"
+            )
             return evidence
         except IncompleteElasticityCloudWatchError as error:
             last_error = error
@@ -620,6 +626,9 @@ def collect_elasticity_cloudwatch_evidence(
                 encoding="utf-8",
             )
             if attempt < maximum_attempts:
+                operator_status(
+                    f"CloudWatch: {error}; retrying in {retry_interval_seconds:g}s"
+                )
                 sleeper(retry_interval_seconds)
     raise AwsElasticityCloudWatchError(
         "CloudWatch elasticity evidence remained incomplete: "

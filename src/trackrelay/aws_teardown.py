@@ -8,6 +8,8 @@ from pathlib import Path
 from subprocess import CompletedProcess
 from time import sleep
 
+from trackrelay.operator_status import operator_status
+
 CommandRunner = Callable[[Sequence[str]], CompletedProcess[str]]
 
 
@@ -36,6 +38,7 @@ def cleanup_container_insights(
     This is an explicitly destructive teardown step, never part of verification.
     """
     inventory = native_inventory or inventory_rehost_resources
+    operator_status("Container Insights cleanup: checking native stack absence")
     counts = inventory(
         profile=profile, region=region, session_id=session_id, runner=runner
     )
@@ -90,6 +93,10 @@ def cleanup_container_insights(
             }
             observations.append(observation)
             if count:
+                operator_status(
+                    f"Container Insights cleanup: check {check + 1}/{maximum_checks}; "
+                    "performance group present, deleting exact session group"
+                )
                 absent = 0
                 if count != 1:
                     raise AwsTeardownCheckError("invalid exact telemetry group count")
@@ -106,6 +113,10 @@ def cleanup_container_insights(
                 observation["delete_succeeded"] = result.returncode == 0
             else:
                 absent += 1
+                operator_status(
+                    f"Container Insights cleanup: check {check + 1}/{maximum_checks}; "
+                    f"absent sample {absent}/{quiet_checks}"
+                )
                 if absent >= quiet_checks:
                     evidence["stable_absence"] = True
                     return

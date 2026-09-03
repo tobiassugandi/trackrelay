@@ -32,8 +32,21 @@ from trackrelay.aws_session import (
     verify_destroyed,
     write_manifest,
 )
+from trackrelay.operator_status import (
+    operator_failure,
+    operator_status,
+    progress_output,
+    status_activity,
+)
 
 SessionAction = Callable[..., object]
+PHASE_LABELS = {
+    "deployment": "async deployment",
+    "fixed": "fixed-control treatment",
+    "reset": "experiment reset",
+    "transition": "worker-autoscaling transition",
+    "elastic": "elastic treatment",
+}
 
 
 class ElasticitySessionError(RuntimeError):
@@ -87,12 +100,18 @@ class _CleanupOwner:
             if session != self.session:
                 raise AwsSessionError("cleanup session identity changed")
             try:
-                self.diagnostic_collector(session, runner=self.runner)
+                with status_activity("Cleanup: capturing ECS diagnostics"):
+                    self.diagnostic_collector(session, runner=self.runner)
             except BaseException as error:  # noqa: BLE001 - even failed diagnostics must not block teardown
                 self.diagnostic_errors.append(error)
-            self.destroyer(session)
+                operator_failure("Diagnostics; continuing teardown", error)
+            with status_activity("Cleanup: destroying AWS resources"):
+                self.destroyer(session)
         except BaseException as error:
             self.errors.append(error)
+            operator_failure(
+                "Cleanup destroy; native verification will still run", error
+            )
             raise
 
     def verify(self, session: AwsSession) -> None:
@@ -102,11 +121,16 @@ class _CleanupOwner:
         try:
             if session != self.session:
                 raise AwsSessionError("cleanup session identity changed")
-            self.verifier(session)
-            if load_manifest(session).get("status") != "teardown_verified":
-                raise AwsSessionError("native teardown was not journaled as verified")
+            with status_activity("Cleanup: native absence verification"):
+                self.verifier(session)
+                if load_manifest(session).get("status") != "teardown_verified":
+                    raise AwsSessionError(
+                        "native teardown was not journaled as verified"
+                    )
+            operator_status("Teardown verified")
         except BaseException as error:
             self.errors.append(error)
+            operator_failure("Cleanup verification; teardown is NOT verified", error)
             raise
 
     def finish(self) -> None:
@@ -208,6 +232,9 @@ def run_elasticity_session(
     validate_elasticity_session_approval(
         session, **approval, monthly_budget_usd=monthly_budget_usd, runner=runner
     )
+    operator_status(f"Session {session.session_id} starting; approvals validated")
+    operator_status(f"Evidence directory: {session.evidence_dir.resolve()}")
+    operator_status(f"Live journal: {session.manifest_path.resolve()}")
     cleanup = _CleanupOwner(
         session, destroyer, teardown_verifier, diagnostic_collector, runner
     )
@@ -216,40 +243,49 @@ def run_elasticity_session(
     active_phase = "foundation"
     try:
         _journal(session, "foundation", completed)
-        foundation_applier(
-            session,
-            approved_session_id=approved_session_id,
-            approved_cost_ceiling_usd=approved_cost_ceiling_usd,
-            monthly_budget_usd=monthly_budget_usd,
-            runner=runner,
-        )
-        if load_manifest(session).get("status") != "applied":
-            raise AwsSessionError(
-                "foundation apply did not reach its required checkpoint"
+        with status_activity("Phase 1/6: foundation apply"):
+            foundation_applier(
+                session,
+                approved_session_id=approved_session_id,
+                approved_cost_ceiling_usd=approved_cost_ceiling_usd,
+                monthly_budget_usd=monthly_budget_usd,
+                runner=runner,
             )
+            if load_manifest(session).get("status") != "applied":
+                raise AwsSessionError(
+                    "foundation apply did not reach its required checkpoint"
+                )
         completed.append("foundation")
-        for name, action, expected_status in (
-            ("deployment", deployer, "async_deployed"),
-            ("fixed", fixed_runner, "fixed_control_qualified"),
-            ("reset", reset_runner, "experiment_reset_verified"),
-            ("transition", transition_runner, "worker_autoscaling_verified"),
-            ("elastic", elastic_runner, "teardown_verified"),
+        for number, (name, action, expected_status) in enumerate(
+            (
+                ("deployment", deployer, "async_deployed"),
+                ("fixed", fixed_runner, "fixed_control_qualified"),
+                ("reset", reset_runner, "experiment_reset_verified"),
+                ("transition", transition_runner, "worker_autoscaling_verified"),
+                ("elastic", elastic_runner, "teardown_verified"),
+            ),
+            start=2,
         ):
             active_phase = name
             _journal(session, name, completed)
-            action(
-                session,
-                **approval,
-                destroyer=cleanup.destroy,
-                teardown_verifier=cleanup.verify,
-            )
-            if load_manifest(session).get("status") != expected_status:
-                raise AwsSessionError(f"{name} did not reach its required checkpoint")
+            with status_activity(f"Phase {number}/6: {PHASE_LABELS[name]}"):
+                action(
+                    session,
+                    **approval,
+                    destroyer=cleanup.destroy,
+                    teardown_verifier=cleanup.verify,
+                )
+                if load_manifest(session).get("status") != expected_status:
+                    raise AwsSessionError(
+                        f"{name} did not reach its required checkpoint"
+                    )
             completed.append(name)
     except BaseException as error:  # noqa: BLE001 - include interrupts and journal failures
         workflow_error = error
+        operator_failure(f"Session phase {active_phase}", error)
     finally:
         cleanup.finish()
+        operator_status(f"Evidence directory: {session.evidence_dir.resolve()}")
     # Finalize the journal before reporting: the report hashes session.json.
     # Cleanup failures must not skip this write and hide the initiating failure.
     try:
@@ -278,9 +314,11 @@ def run_elasticity_session(
         and elastic_evidence.get("summary") == "elasticity/elastic/summary.json"
     ):
         try:
-            report = reporter(session.evidence_dir)
+            with status_activity("Generating offline comparison report"):
+                report = reporter(session.evidence_dir)
         except BaseException as error:  # noqa: BLE001 - AWS is already verified absent
             report_error = error
+            operator_failure("Offline report; AWS teardown already verified", error)
     if workflow_error is not None or report_error is not None:
         raise ElasticitySessionError(
             workflow_error=workflow_error, report_error=report_error
@@ -299,6 +337,11 @@ def build_parser() -> ArgumentParser:
     parser.add_argument("--approved-cost-ceiling-usd", required=True)
     parser.add_argument("--approved-unconditional-teardown-session-id", required=True)
     parser.add_argument("--monthly-budget-usd", required=True)
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress operator progress on stderr; retain final conclusion/errors and evidence.",
+    )
     return parser
 
 
@@ -311,13 +354,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     signal(SIGTERM, _terminate_after_cleanup)
     try:
         arguments = build_parser().parse_args(argv)
-        report = run_elasticity_session(
-            session_from_arguments(arguments),
-            approved_session_id=arguments.approved_session_id,
-            approved_cost_ceiling_usd=arguments.approved_cost_ceiling_usd,
-            approved_unconditional_teardown_session_id=arguments.approved_unconditional_teardown_session_id,
-            monthly_budget_usd=arguments.monthly_budget_usd,
-        )
+        with progress_output(None) if arguments.quiet else progress_output():
+            report = run_elasticity_session(
+                session_from_arguments(arguments),
+                approved_session_id=arguments.approved_session_id,
+                approved_cost_ceiling_usd=arguments.approved_cost_ceiling_usd,
+                approved_unconditional_teardown_session_id=arguments.approved_unconditional_teardown_session_id,
+                monthly_budget_usd=arguments.monthly_budget_usd,
+            )
         print(report.conclusion)
     except (AwsSessionError, ElasticitySessionError, KeyboardInterrupt) as error:
         raise SystemExit(f"AWS elasticity session failed: {error}") from error

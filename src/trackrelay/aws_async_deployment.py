@@ -25,6 +25,11 @@ from trackrelay.aws_session import (
     write_command_log,
     write_manifest,
 )
+from trackrelay.operator_status import (
+    operator_failure,
+    operator_status,
+    status_activity,
+)
 
 ProcessRunner = Callable[
     [Sequence[str], str | None],
@@ -47,9 +52,7 @@ TASK_DEFINITION_ARN_PATTERN = compile_pattern(
     r"^arn:aws:ecs:[a-z0-9-]+:[0-9]{12}:task-definition/"
     r"trackrelay-[0-9a-f]{8}-migration:[1-9][0-9]*$"
 )
-TASK_ARN_PATTERN = compile_pattern(
-    r"^arn:aws:ecs:[a-z0-9-]+:[0-9]{12}:task/[^\s]+$"
-)
+TASK_ARN_PATTERN = compile_pattern(r"^arn:aws:ecs:[a-z0-9-]+:[0-9]{12}:task/[^\s]+$")
 SERVICE_NAME_PATTERN = compile_pattern(
     r"^trackrelay-[0-9a-f]{8}-(api|simulator|worker)$"
 )
@@ -134,9 +137,7 @@ def validate_async_deployment_approval(
 ) -> dict[str, object]:
     """Require an exact async-session approval before any workflow side effect."""
     if not session.session_id.startswith(("cloud-session-3-", "cloud-session-4-")):
-        raise AwsSessionError(
-            "asynchronous deployment must use cloud session 3 or 4"
-        )
+        raise AwsSessionError("asynchronous deployment must use cloud session 3 or 4")
     if session.deployment_mode != "async":
         raise AwsSessionError("asynchronous deployment requires async mode")
     if approved_session_id != session.session_id:
@@ -247,9 +248,7 @@ def publish_async_images(
             runner=runner,
         )
         if not isinstance(repository_url, str):
-            raise AwsAsyncDeploymentError(
-                f"Terraform output {output_name} is invalid"
-            )
+            raise AwsAsyncDeploymentError(f"Terraform output {output_name} is invalid")
         validate_repository_url(repository_url, region=session.region)
         repositories[role] = repository_url
     registry_hosts = {url.split("/", maxsplit=1)[0] for url in repositories.values()}
@@ -350,8 +349,7 @@ def publish_async_images(
 
 def _validate_image_digests(image_digests: dict[str, str]) -> None:
     if set(image_digests) != set(IMAGE_ROLES) or not all(
-        isinstance(digest, str)
-        and IMAGE_DIGEST_PATTERN.fullmatch(digest) is not None
+        isinstance(digest, str) and IMAGE_DIGEST_PATTERN.fullmatch(digest) is not None
         for digest in image_digests.values()
     ):
         raise AwsAsyncDeploymentError("all three immutable image digests are required")
@@ -388,9 +386,7 @@ def apply_async_phase(
         raise AwsAsyncDeploymentError("invalid asynchronous Terraform phase")
     manifest, _revision = require_clean_approved_revision(session, runner=runner)
     expected_status = (
-        "async_images_published"
-        if phase == "runtime"
-        else "async_migration_succeeded"
+        "async_images_published" if phase == "runtime" else "async_migration_succeeded"
     )
     if manifest.get("status") != expected_status:
         raise AwsAsyncDeploymentError(
@@ -585,7 +581,9 @@ def run_async_migration(
     try:
         result = loads(result_text)
     except JSONDecodeError as error:
-        raise AwsAsyncDeploymentError("ECS returned an invalid migration result") from error
+        raise AwsAsyncDeploymentError(
+            "ECS returned an invalid migration result"
+        ) from error
     if (
         not isinstance(result, dict)
         or result.get("last_status") != "STOPPED"
@@ -656,8 +654,7 @@ def wait_for_async_services(
         or not isinstance(service_names, list)
         or len(service_names) != 3
         or not all(
-            isinstance(name, str)
-            and SERVICE_NAME_PATTERN.fullmatch(name) is not None
+            isinstance(name, str) and SERVICE_NAME_PATTERN.fullmatch(name) is not None
             for name in service_names
         )
         or len(set(service_names)) != 3
@@ -756,6 +753,9 @@ def wait_for_async_services(
         raise AwsAsyncDeploymentError(
             "fixed services did not converge to their approved capacity"
         )
+    operator_status(
+        "ECS converged: API 2/2, worker 1/1, simulator 1/1; no pending tasks"
+    )
     converged_at = now or datetime.now(UTC)
     manifest.update(
         {
@@ -899,30 +899,37 @@ def deploy_async_stack(
     workflow_error: BaseException | None = None
     try:
         _arm_async_deployment(session, manifest)
-        image_digests = publisher(session)
-        phase_applier(
-            session,
-            phase="runtime",
-            image_digests=image_digests,
-            services_enabled=False,
-        )
-        migrator(session)
-        phase_applier(
-            session,
-            phase="services",
-            image_digests=image_digests,
-            services_enabled=True,
-        )
-        convergence_waiter(session)
+        with status_activity("Publishing immutable API, worker and simulator images"):
+            image_digests = publisher(session)
+        with status_activity("Applying runtime infrastructure"):
+            phase_applier(
+                session,
+                phase="runtime",
+                image_digests=image_digests,
+                services_enabled=False,
+            )
+        with status_activity("Running database migration"):
+            migrator(session)
+        with status_activity("API, worker and simulator service startup"):
+            phase_applier(
+                session,
+                phase="services",
+                image_digests=image_digests,
+                services_enabled=True,
+            )
+        with status_activity("Waiting for ECS fixed-service convergence"):
+            convergence_waiter(session)
     except BaseException as error:  # noqa: BLE001 - teardown must follow interrupts
         workflow_error = error
+        operator_failure("Phase deployment; beginning cleanup", error)
 
     if workflow_error is None:
         return
 
     preparation_errors: list[BaseException] = []
     try:
-        migration_task_stopper(session)
+        with status_activity("Cleanup: stopping migration tasks"):
+            migration_task_stopper(session)
     except BaseException as error:  # noqa: BLE001 - still destroy and verify
         preparation_errors.append(error)
     cleanup_errors: list[BaseException] = []
@@ -939,9 +946,7 @@ def deploy_async_stack(
         message = (
             "asynchronous deployment failed with "
             f"{type(workflow_error).__name__}: {workflow_error}; cleanup failed: "
-            + "; ".join(
-                f"{type(error).__name__}: {error}" for error in cleanup_errors
-            )
+            + "; ".join(f"{type(error).__name__}: {error}" for error in cleanup_errors)
         )
         raise AwsAsyncDeploymentCleanupError(
             message,

@@ -45,6 +45,7 @@ from trackrelay.aws_session import (
     verify_destroyed,
     write_manifest,
 )
+from trackrelay.operator_status import operator_status, progress_output
 
 
 class Rehearsal:
@@ -489,8 +490,9 @@ def test_verifier_must_record_absence_before_reporting(tmp_path):
 
 
 @mark.parametrize("failure", (False, True))
+@mark.parametrize("quiet", (False, True))
 def test_cli_passes_approvals_and_restores_sigterm_handler(
-    tmp_path, monkeypatch, capsys, failure
+    tmp_path, monkeypatch, capsys, failure, quiet
 ):
     rehearsal = Rehearsal(tmp_path)
     calls = []
@@ -504,6 +506,7 @@ def test_cli_passes_approvals_and_restores_sigterm_handler(
     )
 
     def simulated_session(session, **kwargs):
+        operator_status("synthetic phase status")
         assert session == rehearsal.session
         assert kwargs == {
             "approved_session_id": session.session_id,
@@ -543,14 +546,120 @@ def test_cli_passes_approvals_and_restores_sigterm_handler(
         "--monthly-budget-usd",
         "25",
     ]
+    if quiet:
+        arguments.append("--quiet")
     if failure:
         with raises(SystemExit, match="AWS elasticity session failed"):
             main(arguments)
-        assert not capsys.readouterr().out
     else:
         assert main(arguments) == 0
-        assert "Synthetic CLI result" in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert bool(captured.out) is not failure
+    if not failure:
+        assert "Synthetic CLI result" in captured.out
+    assert ("synthetic phase status" in captured.err) is not quiet
     assert calls == [
         (SIGTERM, _terminate_after_cleanup),
         (SIGTERM, previous_handler),
     ]
+
+
+def test_progress_rehearsal_reports_phases_and_verified_cleanup_in_order(tmp_path):
+    rehearsal = Rehearsal(tmp_path)
+    messages = []
+    with progress_output(messages.append, repeat_interval_seconds=0):
+        report = rehearsal.run()
+    assert report.elasticity_demonstrated
+    starts = [message for message in messages if message.startswith("Starting: Phase")]
+    assert starts == [
+        "Starting: Phase 1/6: foundation apply",
+        "Starting: Phase 2/6: async deployment",
+        "Starting: Phase 3/6: fixed-control treatment",
+        "Starting: Phase 4/6: experiment reset",
+        "Starting: Phase 5/6: worker-autoscaling transition",
+        "Starting: Phase 6/6: elastic treatment",
+    ]
+    positions = [
+        messages.index(message)
+        for message in [
+            "Starting: Cleanup: capturing ECS diagnostics",
+            "Starting: Cleanup: destroying AWS resources",
+            "Starting: Cleanup: native absence verification",
+            "Teardown verified",
+            "Starting: Generating offline comparison report",
+        ]
+    ]
+    assert positions == sorted(positions)
+    assert any(message.startswith("Evidence directory:") for message in messages)
+    assert any(message.startswith("Live journal:") for message in messages)
+    assert not any("FAILED" in message for message in messages)
+
+
+@mark.parametrize("cleanup_failure", [None, "both"])
+def test_progress_reports_fixed_failure_before_cleanup_and_never_fakes_verification(
+    tmp_path, cleanup_failure
+):
+    rehearsal = Rehearsal(
+        tmp_path, failure="fixed-metrics", cleanup_failure=cleanup_failure
+    )
+    messages = []
+    with (
+        progress_output(messages.append, repeat_interval_seconds=0),
+        raises(ElasticitySessionError),
+    ):
+        rehearsal.run()
+    failure = next(
+        i
+        for i, message in enumerate(messages)
+        if message.startswith("FAILED: Phase fixed")
+    )
+    assert failure < messages.index("Starting: Cleanup: capturing ECS diagnostics")
+    assert ("Teardown verified" in messages) is (cleanup_failure is None)
+    assert not any("Generating offline" in message for message in messages)
+    assert "reset" not in rehearsal.actions
+    assert rehearsal.actions.count("destroy") == rehearsal.actions.count("verify") == 1
+    if cleanup_failure:
+        assert not any(
+            message.startswith("Completed: Cleanup: applying Terraform")
+            for message in messages
+        )
+
+
+def test_broken_progress_sink_does_not_change_full_session_actions_or_result(tmp_path):
+    silent = Rehearsal(tmp_path / "silent")
+    silent_report = silent.run()
+    broken = Rehearsal(tmp_path / "broken")
+
+    def sink(message):
+        raise BrokenPipeError("closed stderr")
+
+    with progress_output(sink, repeat_interval_seconds=0):
+        report = broken.run()
+    assert broken.actions == silent.actions
+    assert report.elasticity_demonstrated == silent_report.elasticity_demonstrated
+    assert load_manifest(broken.session)["status"] == "teardown_verified"
+
+
+def test_progress_enabled_still_preserves_raw_outputs_without_printing_them(tmp_path):
+    rehearsal = Rehearsal(tmp_path)
+    original = rehearsal.command_runner
+    secret = "SYNTHETIC_PRIVATE_SUBPROCESS_OUTPUT"
+
+    def runner(arguments):
+        result = original(arguments)
+        if "apply" in arguments:
+            return CompletedProcess(arguments, result.returncode, secret, secret)
+        return result
+
+    rehearsal.command_runner = runner
+    messages = []
+    with progress_output(messages.append, repeat_interval_seconds=0):
+        report = rehearsal.run()
+    assert report.elasticity_demonstrated
+    assert secret not in "\n".join(messages)
+    assert (
+        secret in (rehearsal.session.evidence_dir / "terraform-apply.log").read_text()
+    )
+    assert (
+        secret in (rehearsal.session.evidence_dir / "terraform-destroy.log").read_text()
+    )

@@ -13,6 +13,7 @@ from trackrelay.aws_teardown import (
     cleanup_container_insights,
     inventory_rehost_resources,
 )
+from trackrelay.operator_status import progress_output
 
 PROFILE = "trackrelay-admin"
 REGION = "ap-southeast-3"
@@ -46,20 +47,25 @@ def test_telemetry_cleanup_deletes_exact_name_and_waits_out_late_recreation(tmp_
         )
 
     output = tmp_path / "cleanup.json"
-    cleanup_container_insights(
-        profile=PROFILE,
-        region=REGION,
-        session_id=SESSION_ID,
-        runner=runner,
-        evidence_path=output,
-        sleeper=waits.append,
-        native_inventory=lambda **kw: {
-            "ecs_clusters": 0,
-            "ecs_services": 0,
-            "ecs_tasks": 0,
-            "container_insights_log_groups": 1,
-        },
-    )
+    messages = []
+    with progress_output(messages.append, repeat_interval_seconds=0):
+        cleanup_container_insights(
+            profile=PROFILE,
+            region=REGION,
+            session_id=SESSION_ID,
+            runner=runner,
+            evidence_path=output,
+            sleeper=waits.append,
+            native_inventory=lambda **kw: {
+                "ecs_clusters": 0,
+                "ecs_services": 0,
+                "ecs_tasks": 0,
+                "container_insights_log_groups": 1,
+            },
+        )
+    assert messages[-1] == "Container Insights cleanup: check 9/13; absent sample 5/5"
+    assert sum("absent sample 1/5" in message for message in messages) == 2
+    assert not any(group in message for message in messages)
     deletes = [call for call in calls if "delete-log-group" in call]
     assert len(deletes) == 2
     assert all(call[-2:] == ("--log-group-name", group) for call in deletes)

@@ -44,6 +44,7 @@ from trackrelay.aws_session import (
     write_command_log,
     write_manifest,
 )
+from trackrelay.operator_status import operator_failure
 from trackrelay.services.experiment_reset import ExperimentStateSnapshot
 
 NonNegativeInteger = Annotated[int, Field(ge=0)]
@@ -1134,6 +1135,7 @@ def run_elasticity_transition_session(
         write_manifest(session, manifest)
         return evidence
     except BaseException as workflow_error:
+        operator_failure("Phase transition; beginning cleanup", workflow_error)
         cleanup_errors = []
         try:
             destroyer(session)

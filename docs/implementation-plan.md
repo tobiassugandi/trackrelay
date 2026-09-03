@@ -768,6 +768,11 @@ A fresh saved plan and explicit approval are required for any new attempt.
   resource categories absent, retain nested errors and partial CloudWatch data,
   handle late log recreation, and harden/test the HTTP health probe without
   relaxing experiment acceptance criteria.
+- [x] Add low-volume operator progress to the combined session CLI: flushed
+  timestamped stderr, phase/subphase elapsed time, existing load/drain counts,
+  CloudWatch retries, explicit cleanup/verification, and evidence paths. Keep
+  raw output captured, provide `--quiet`, and make progress sink failures
+  non-fatal. Regression-test output ordering and unchanged teardown/results.
 - [ ] Define a sustainable end-to-end load using ingestion SLOs plus bounded backlog, completion, drain-deadline, and correctness guardrails; API latency alone is insufficient.
 - [ ] Freeze the fixed-control configuration and aligned time series in `results/aws-fixed-control/`.
 - [ ] Leave the deployment unchanged and continue directly into Stage 9.7; do not tear it down or redeploy it between treatments.

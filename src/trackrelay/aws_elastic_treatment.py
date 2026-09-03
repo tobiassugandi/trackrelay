@@ -64,6 +64,11 @@ from trackrelay.experiments.elasticity import (
     ELASTICITY_WORKLOAD_DEFINITION,
     ElasticityTreatment,
 )
+from trackrelay.operator_status import (
+    operator_failure,
+    operator_status,
+    status_activity,
+)
 
 
 class AwsElasticTreatmentError(RuntimeError):
@@ -501,7 +506,10 @@ def run_elastic_treatment_session(
             "evidence_root": root,
             "runner": runner,
         }
-        environment_verifier(session, phase="before", **environment_arguments)
+        with status_activity(
+            "Elastic treatment: verifying unchanged pre-load environment"
+        ):
+            environment_verifier(session, phase="before", **environment_arguments)
         result = treatment_runner(
             session,
             treatment=ElasticityTreatment.ELASTIC,
@@ -522,13 +530,14 @@ def run_elastic_treatment_session(
             raise AwsElasticTreatmentError(
                 "elastic workload, run identity, or timing changed"
             )
-        cloudwatch = metric_collector(
-            session,
-            test_run_id=result.test_run_id,
-            window_started_at=result.load_started_at,
-            window_ended_at=result.load_ended_at,
-            runner=runner,
-        )
+        with status_activity("Elastic treatment: collecting CloudWatch evidence"):
+            cloudwatch = metric_collector(
+                session,
+                test_run_id=result.test_run_id,
+                window_started_at=result.load_started_at,
+                window_ended_at=result.load_ended_at,
+                runner=runner,
+            )
         summary = ElasticTreatmentSummary(
             fixed_test_run_id=fixed.measurement.test_run_id,
             policy=transition.policy,
@@ -545,7 +554,10 @@ def run_elastic_treatment_session(
         (root / "summary.json").write_text(
             summary.model_dump_json(indent=2, round_trip=True) + "\n", encoding="utf-8"
         )
-        environment_verifier(session, phase="after", **environment_arguments)
+        with status_activity(
+            "Elastic treatment: verifying unchanged post-load environment"
+        ):
+            environment_verifier(session, phase="after", **environment_arguments)
         manifest = load_manifest(session)
         manifest["elastic_treatment"] = {
             **manifest["elastic_treatment"],
@@ -565,9 +577,11 @@ def run_elastic_treatment_session(
                 "elastic treatment rejected: "
                 + ", ".join(summary.qualification.rejection_reasons)
             )
+        operator_status("Elastic treatment qualified; beginning unconditional teardown")
         return summary
     except BaseException as error:
         workflow_error = error
+        operator_failure("Phase elastic; beginning cleanup", error)
         raise
     finally:
         cleanup_errors = []

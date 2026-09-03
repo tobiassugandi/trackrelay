@@ -532,6 +532,7 @@ REQUIRED_NATIVE_INVENTORY = frozenset(
         "active_ecs_task_definitions",
         "service_discovery_namespaces",
         "cloudwatch_log_groups",
+        "container_insights_log_groups",
         "cloudwatch_dashboards",
         "application_autoscaling_targets",
         "application_autoscaling_policies",

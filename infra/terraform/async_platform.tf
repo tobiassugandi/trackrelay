@@ -50,6 +50,10 @@ check "async_services_require_runtime" {
 resource "aws_ecs_cluster" "async" {
   count = local.async_enabled ? 1 : 0
 
+  # Own the telemetry group before any cluster task can create it implicitly.
+  # Reversing this dependency removes the group after cluster teardown.
+  depends_on = [aws_cloudwatch_log_group.async_performance]
+
   name = "${local.name_prefix}-async"
 
   setting {
@@ -66,6 +70,14 @@ resource "aws_cloudwatch_log_group" "async" {
   for_each = local.async_log_groups
 
   name              = "/trackrelay/${local.resource_suffix}/${each.key}"
+  retention_in_days = 1
+  skip_destroy      = false
+}
+
+resource "aws_cloudwatch_log_group" "async_performance" {
+  count = local.async_enabled ? 1 : 0
+
+  name              = "/aws/ecs/containerinsights/${local.name_prefix}-async/performance"
   retention_in_days = 1
   skip_destroy      = false
 }

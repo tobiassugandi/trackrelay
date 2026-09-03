@@ -9,11 +9,12 @@ This runbook is not cloud authorization or a measured result. Session 4 still
 requires explicit approval of the session ID, region, complete staged resource
 list, expected duration, cost ceiling, and unconditional teardown.
 
-**2026-09-03 preflight hold:** the [resource/cost review](aws-elasticity-cost-review.md)
-found that Container Insights performance log groups are not covered by the
-current Terraform lifecycle or native log-group inventory. Resolve that gap
-before preparing or approving a session-4 plan. No session-4 resources have
-been provisioned.
+**2026-09-03 lifecycle correction:** Container Insights performance logs now
+have a separate Terraform-owned group, created before the cluster and deleted
+after it. Native verification checks this namespace independently of application
+logs, and comparison reports require that new inventory entry. See the
+[resource/cost review](aws-elasticity-cost-review.md) for the discovery and cleanup
+audit. No session-4 resources have been provisioned.
 
 ## Workflow and ownership
 
@@ -143,7 +144,8 @@ Later controllers retain their own exact plans and immutable image digests.
 Also include the VPC, subnets, routing and security groups, internet-facing ALB
 and target group, ECS cluster, three ECR repositories, one-off migration task,
 four task definitions, private simulator service discovery, database secret,
-IAM resources, four log groups, Container Insights, and the seven-widget
+IAM resources, four application log groups plus one Container Insights
+performance log group, Container Insights, and the seven-widget
 CloudWatch dashboard. API ingress remains the reviewed `/32`. Public task IPs
 provide outbound access; the design does not use a NAT gateway. The legacy
 `REHOST_INSTANCE_TYPE=t3.small` input remains an identity field in async mode;

@@ -89,7 +89,8 @@ The verifier must cover every service used by the session. At minimum, when pres
 - RDS instances or clusters, manual snapshots, and retained automated backups;
 - ECR repositories and stored images;
 - SQS queues and dead-letter queues;
-- CloudWatch log groups, alarms, and dashboards;
+- CloudWatch application log groups, separately located Container Insights
+  performance log groups, alarms, and dashboards;
 - Secrets Manager secrets, including secrets pending deletion; and
 - any additional resource type introduced by the approved Terraform plan.
 

@@ -439,6 +439,8 @@ def test_generation_reads_saved_files_without_external_commands(tmp_path, monkey
         "status",
         "inventory-missing",
         "inventory-positive",
+        "inventory-legacy-logs",
+        "inventory-insights-positive",
         "state",
         "plan-hash",
         "plan-exit",
@@ -462,6 +464,10 @@ def test_loader_refuses_unverified_or_mixed_session_evidence(tmp_path, failure):
         data = dict.fromkeys(REQUIRED_NATIVE_INVENTORY, 0)
         if failure == "inventory-missing":
             del data["application_autoscaling_targets"]
+        elif failure == "inventory-legacy-logs":
+            del data["container_insights_log_groups"]
+        elif failure == "inventory-insights-positive":
+            data["container_insights_log_groups"] = 1
         else:
             data["ecs_tasks"] = 1
         (root / "aws-native-inventory-after-destroy.json").write_text(dumps(data))

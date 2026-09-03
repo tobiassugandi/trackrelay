@@ -7,6 +7,7 @@ from subprocess import CompletedProcess
 
 from pytest import mark, raises
 
+from tests.test_aws_teardown import absent_resource_runner
 from trackrelay.aws_session import (
     AwsSession,
     AwsSessionError,
@@ -513,3 +514,27 @@ def test_verification_rejects_resources_found_by_native_checks(
             runner=runner,
             native_inventory=native_inventory,
         )
+
+
+def test_real_native_verification_cannot_certify_leftover_insights_logs(tmp_path):
+    session = make_session(tmp_path)
+    create_saved_plan(session)
+
+    def runner(arguments):
+        call = tuple(arguments)
+        if call[0] == "terraform":
+            return completed(call)
+        if "get-resources" in call:
+            return completed(call, stdout='{"ResourceTagMappingList": []}')
+        if any(arg.startswith("/aws/ecs/containerinsights/") for arg in call):
+            return completed(call, stdout="1\n")
+        return absent_resource_runner(call)
+
+    with raises(AwsSessionError, match="container_insights_log_groups"):
+        verify_destroyed(session, runner=runner)
+    assert load_manifest(session)["status"] != "teardown_verified"
+    inventory = loads(
+        (session.evidence_dir / "aws-native-inventory-after-destroy.json").read_text()
+    )
+    assert inventory["container_insights_log_groups"] == 1
+    assert inventory["cloudwatch_log_groups"] == 0

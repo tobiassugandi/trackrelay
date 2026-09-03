@@ -1,7 +1,7 @@
 # Session 4 resource and cost review — 2026-09-03
 
-Status: **preflight blocked by a teardown coverage gap; not approved to provision**.
-No session-4 plan or infrastructure was created during this review. This is an
+Status: **teardown gap corrected and approved cleanup verified; cloud approval outstanding**.
+No session-4 infrastructure was created during this review. This is an
 estimate in USD, not a bill, a hard spending cap, or an elasticity result.
 
 ## Proposed operating envelope
@@ -15,8 +15,7 @@ estimate in USD, not a bill, a hard spending cap, or an elasticity result.
   service discovery, and the networking/IAM/observability resources listed in
   the [operator runbook](aws-elasticity-runbook.md).
 - Original Container Insights (`enabled`, not `enhanced`). Four application
-  log groups are currently managed. Its additional performance-log group must
-  also become Terraform-owned before this proposal can proceed.
+  log groups and the additional performance-log group are Terraform-owned.
 - Expected operator window: **60–90 minutes**, an engineering estimate rather
   than an AWS completion guarantee. Scheduled traffic totals 22 minutes; stable
   drain, reset, alignment, publication, deployment, and teardown add time.
@@ -27,7 +26,7 @@ estimate in USD, not a bill, a hard spending cap, or an elasticity result.
 - Rounded planning estimate: **$3 before tax**, with a proposed **$5 session
   ceiling** including contingency. Approval remains outstanding and must bind
   to a fresh session ID, saved plan/revision, `/32`, and unconditional teardown
-  after the blocker below is resolved.
+  after a fresh plan is prepared and reviewed.
 
 The runner validates an approved ceiling against the configured monthly budget
 but does not enforce live dollar or wall-clock limits. The operator must watch
@@ -136,14 +135,14 @@ groups belonging to earlier session-3 runs. AWS reported zero stored bytes and
 one-day retention on both. Their exact paths and session mapping are retained
 in ignored local preflight evidence, not copied into this public pricing note.
 
-The cause is visible in the repository:
+The original cause, corrected by the follow-up implementation:
 
-- `async_platform.tf` currently owns only `/trackrelay/<suffix>/...` application
+- `async_platform.tf` previously owned only `/trackrelay/<suffix>/...` application
   groups.
-- `inventory_rehost_resources` counts only that same application-log prefix.
+- `inventory_rehost_resources` previously counted only that application-log prefix.
 - Container Insights automatically creates a different group,
   `/aws/ecs/containerinsights/<cluster-name>/performance`, which those checks
-  miss. [AWS performance-log reference](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Container-Insights-reference-performance-logs-ECS.html).
+  missed. [AWS performance-log reference](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Container-Insights-reference-performance-logs-ECS.html).
 
 Consequently the earlier `teardown_verified` status did **not** establish
 absence of these performance groups. This finding does not invalidate the
@@ -151,20 +150,34 @@ recorded integration/correctness measurements, but does qualify the earlier
 claim that every session resource had been removed. Historical raw evidence
 has not been rewritten.
 
-Before preparing a session-4 plan:
+### Follow-up correction and approved cleanup
 
-1. Make the exact performance group Terraform-owned with bounded retention and
-   deletion on teardown; ensure it exists before any task can emit telemetry.
-2. Extend native verification to check that separate group and add regression
-   tests proving it cannot report absence while the group remains. Preserve
-   compatibility with historical inventories without pretending they covered
-   a resource category that was never queried.
-3. Obtain permission before deleting the two old groups; recheck their exact
-   identities and contents/retention and retain a cleanup audit. Deletion of
-   any log events is not recoverable through the normal Logs API.
-4. Run local tests, commit, prepare a fresh read-only plan, and present its
-   exact identity, ingress, revision/hash, full resources, $5 proposed ceiling,
-   operating window, and teardown command for explicit cloud approval.
+The user explicitly approved the fix and deletion of those two groups. The
+follow-up implemented a Terraform-owned, one-day performance log group with a
+cluster dependency that orders creation before telemetry and deletion after
+cluster teardown. Native inventory now reports a separate
+`container_insights_log_groups` count. The application-log count retains its
+original meaning; old inventories are not backfilled with assumed zeros.
+The session-4 report requires the new count and refuses missing or nonzero
+values.
 
-No infrastructure, logging configuration, or previous-session resource was
-changed as part of this review.
+Before deletion, the exact group names and creation timestamps were rechecked
+against their session hashes. Both ECS clusters were `INACTIVE`, with no active
+services or pending/running tasks. The groups reported zero stored bytes and
+one-day retention; stream metadata showed only older session events. The two
+approved groups were deleted, and their absence verified at 10:30 UTC on
+2026-09-03. Any remaining events were deleted irreversibly with the groups.
+
+The strengthened native inventory then reported all **30** resource categories
+zero for both sessions at 10:31 UTC, and Terraform state was empty. New audit
+files are retained under
+`results/aws-elasticity-preflight/20260903T101827Z/`; the original session-3
+manifests and measurements remain unchanged. Local verification passed 539
+Python tests (15 database integration tests deselected), 17 mocked-provider
+Terraform tests, and lint, including lifecycle ordering and fail-closed
+inventory/report regression tests.
+
+The next gate is a fresh read-only session-4 plan and explicit approval of its
+identity, ingress, revision/hash, resources, $5 proposed ceiling, operating
+window, and unconditional teardown. Cleanup authorization did not authorize
+provisioning or experiment spend.

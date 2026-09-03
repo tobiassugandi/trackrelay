@@ -1,9 +1,11 @@
 """Tests for service-native TrackRelay teardown checks."""
 
 from collections.abc import Sequence
+from hashlib import sha256
 from subprocess import CompletedProcess
 
-from pytest import raises
+from jmespath import search
+from pytest import mark, raises
 
 from trackrelay.aws_teardown import (
     AwsTeardownCheckError,
@@ -77,6 +79,7 @@ def test_inventory_proves_every_resource_type_absent() -> None:
         "cloudwatch_dashboards": 0,
         "cloudwatch_log_groups": 0,
         "cloudwatch_metric_alarms": 0,
+        "container_insights_log_groups": 0,
         "ebs_volumes": 0,
         "ec2_instances": 0,
         "ecr_repositories": 0,
@@ -195,8 +198,65 @@ def test_inventory_counts_remaining_async_platform_resources() -> None:
     assert counts["ecs_clusters"] == 1
     assert counts["cloudwatch_dashboards"] == 1
     assert counts["cloudwatch_log_groups"] == 1
+    assert counts["container_insights_log_groups"] == 1
     assert counts["iam_roles"] == 1
-    assert sum(counts.values()) == 6
+    assert sum(counts.values()) == 7
+
+
+@mark.parametrize("remaining", (False, True))
+def test_container_insights_inventory_is_separate_and_session_scoped(remaining):
+    suffix = sha256(SESSION_ID.encode()).hexdigest()[:8]
+    prefix = f"/aws/ecs/containerinsights/trackrelay-{suffix}-async/"
+    names = [
+        f"/aws/ecs/containerinsights/trackrelay-{suffix}-async-other/performance",
+        "/aws/ecs/containerinsights/another-cluster/performance",
+    ]
+    if remaining:
+        names.append(prefix + "performance")
+    queries = []
+
+    def runner(arguments):
+        call = tuple(arguments)
+        if "describe-log-groups" in call:
+            selected_prefix = call[call.index("--log-group-name-prefix") + 1]
+            query = call[call.index("--query") + 1]
+            queries.append(selected_prefix)
+            data = {
+                "logGroups": [
+                    {"logGroupName": name}
+                    for name in names
+                    if name.startswith(selected_prefix)
+                ]
+            }
+            return completed(call, stdout=str(search(query, data)))
+        return absent_resource_runner(call)
+
+    counts = inventory_rehost_resources(
+        profile=PROFILE, region=REGION, session_id=SESSION_ID, runner=runner
+    )
+    assert queries == [f"/trackrelay/{suffix}/", prefix]
+    assert counts["cloudwatch_log_groups"] == 0
+    assert counts["container_insights_log_groups"] == int(remaining)
+    assert sum(counts.values()) == int(remaining)
+
+
+@mark.parametrize("result", ("denied", "invalid"))
+def test_container_insights_check_errors_are_not_treated_as_absence(result):
+    def runner(arguments):
+        call = tuple(arguments)
+        if any(arg.startswith("/aws/ecs/containerinsights/") for arg in call):
+            return completed(
+                call,
+                returncode=254 if result == "denied" else 0,
+                stderr="AccessDeniedException" if result == "denied" else "",
+                stdout="" if result == "denied" else "unknown",
+            )
+        return absent_resource_runner(call)
+
+    with raises(AwsTeardownCheckError, match="container_insights_log_groups"):
+        inventory_rehost_resources(
+            profile=PROFILE, region=REGION, session_id=SESSION_ID, runner=runner
+        )
 
 
 def test_inventory_counts_remaining_worker_autoscaling_resources() -> None:

@@ -742,16 +742,20 @@ native AWS inventory count was zero.
   not execution against AWS.
 
 The remaining checkboxes describe authorization and actual cloud execution.
-The eight-worker resource envelope is documented; regional pricing, budget
-headroom, expected operating window, and the explicit session-4 approval still
-need review. Cloud session 4 has not been provisioned or measured.
+The eight-worker resource envelope, current regional prices, and proposed
+60–90-minute operating window are documented in the cost review. The proposed
+ceiling is $5 against the $25 monthly budget; a fresh saved plan and explicit
+session-4 approval are still required. Cloud session 4 has not been provisioned
+or measured.
 
-- [ ] Close the Container Insights performance-log lifecycle/inventory gap
-  found during the 2026-09-03 read-only preflight. Two older session-3 groups
-  remain outside the application's log prefix despite the recorded teardown
-  status. See `docs/aws-elasticity-cost-review.md`; do not prepare the session-4
-  plan until the fix and regression tests are complete. Removal of the old
-  groups requires a separate explicit cleanup decision.
+- [x] Close the Container Insights performance-log lifecycle/inventory gap
+  found during the 2026-09-03 read-only preflight. Terraform now owns the
+  bounded performance log group before cluster creation; native verification
+  and session-4 reporting require its separate absence check. Regression tests
+  cover lifecycle ordering, leftovers, query errors, and historical inventories
+  missing that check. With explicit user approval, delete the two old groups
+  and verify all 30 native categories zero for both sessions without changing
+  historical measurements. See `docs/aws-elasticity-cost-review.md`.
 
 - [ ] **You:** Explicitly authorize cloud session 4 after reviewing its resource list, region, expected experiment duration, cost ceiling, and teardown command.
 - [ ] Provision the final experiment environment once and record its immutable application and infrastructure versions.

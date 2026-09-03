@@ -321,6 +321,24 @@ def inventory_rehost_resources(
         ),
         runner=runner,
     )
+    # Keep this separate from application logs: older inventories never queried
+    # the automatically created Container Insights namespace.
+    insights_prefix = f"/aws/ecs/containerinsights/{name_prefix}-async/"
+    counts["container_insights_log_groups"] = count_query(
+        name="container_insights_log_groups",
+        command=(
+            *prefix,
+            "logs",
+            "describe-log-groups",
+            "--log-group-name-prefix",
+            insights_prefix,
+            "--query",
+            f"length(logGroups[?starts_with(logGroupName, '{insights_prefix}')])",
+            "--output",
+            "text",
+        ),
+        runner=runner,
+    )
     dashboard_name = f"{name_prefix}-async"
     dashboard_query = f"length(DashboardEntries[?DashboardName=='{dashboard_name}'])"
     counts["cloudwatch_dashboards"] = count_query(

@@ -20,7 +20,8 @@ Across those mutually exclusive modes, the module contains:
 - one public Application Load Balancer restricted to the approved benchmark
   `/32`, with readiness-based IP targets and no deletion protection;
 - one Container-Insights-enabled ECS cluster plus destroyable one-day log groups
-  for API, migration, simulator, and worker tasks;
+  for API, migration, simulator, and worker tasks, and a separate performance
+  log group created before the cluster and removed after it;
 - separate API, worker, simulator, and migration task roles, a common execution
   role, role-specific SQS policies, and access to only the RDS-managed secret;
 - all-or-none digest-pinned Linux x86_64 Fargate definitions with a non-root,

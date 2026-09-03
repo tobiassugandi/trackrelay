@@ -364,6 +364,17 @@ run "async_platform_has_bounded_logs_and_least_privilege_roles" {
 
   assert {
     condition = (
+      length(aws_cloudwatch_log_group.async_performance) == 1
+      && aws_cloudwatch_log_group.async_performance[0].name
+      == "/aws/ecs/containerinsights/${local.name_prefix}-async/performance"
+      && aws_cloudwatch_log_group.async_performance[0].retention_in_days == 1
+      && !aws_cloudwatch_log_group.async_performance[0].skip_destroy
+    )
+    error_message = "Container Insights performance logs must be session-owned, bounded, and destroyed."
+  }
+
+  assert {
+    condition = (
       jsondecode(local.ecs_task_assume_role_policy).Statement[0].Principal.Service
       == "ecs-tasks.amazonaws.com"
       && aws_iam_role_policy_attachment.ecs_execution[0].policy_arn

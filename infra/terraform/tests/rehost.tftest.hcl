@@ -38,6 +38,11 @@ run "rds_is_private_small_and_disposable" {
   command = plan
 
   assert {
+    condition     = length(aws_cloudwatch_log_group.async_performance) == 0
+    error_message = "Rehost mode must not create an asynchronous telemetry log group."
+  }
+
+  assert {
     condition     = length(aws_subnet.database) == 2
     error_message = "The RDS subnet group must span two private subnets."
   }

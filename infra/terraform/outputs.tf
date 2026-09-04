@@ -106,6 +106,8 @@ output "worker_autoscaling_policy" {
     resource_id                   = aws_appautoscaling_target.async_worker[0].resource_id
     scale_in_cooldown_seconds     = local.worker_autoscaling_policy.scale_in_cooldown_seconds
     scale_in_evaluation_periods   = local.worker_autoscaling_policy.scale_in_evaluation_periods
+    scale_in_period_seconds       = local.worker_autoscaling_policy.scale_in_period_seconds
+    scale_in_quiet_seconds        = local.worker_autoscaling_policy.scale_in_quiet_seconds
     scale_in_messages_per_minute  = local.worker_autoscaling_policy.scale_in_messages_per_minute
     scale_in_queue_work_threshold = local.worker_autoscaling_policy.scale_in_queue_work_threshold
     scale_in_policy_name          = aws_appautoscaling_policy.async_worker_scale_in[0].name

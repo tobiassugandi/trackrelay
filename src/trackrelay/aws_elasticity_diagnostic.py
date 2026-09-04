@@ -105,8 +105,12 @@ class ElasticityDiagnosticSummary(BaseModel):
     def require_diagnostic_provenance(self) -> "ElasticityDiagnosticSummary":
         if (
             self.measurement.definition.name
-            not in ("aws-elasticity-candidate-v3", "aws-elasticity-candidate-v4")
-            or self.transition.policy.policy_version not in (3, 4)
+            not in (
+                "aws-elasticity-candidate-v3",
+                "aws-elasticity-candidate-v4",
+                "aws-elasticity-demo-v5",
+            )
+            or self.transition.policy.policy_version not in (3, 4, 5)
             or self.measurement.load_started_at < self.transition.verified_at
         ):
             raise ValueError(
@@ -192,7 +196,7 @@ def run_elastic_diagnostic_treatment(
         raise AwsSessionError("elastic diagnostic requires verified worker autoscaling")
     if (
         definition != ELASTICITY_WORKLOAD_DEFINITION
-        or transition.policy.policy_version not in (3, 4)
+        or transition.policy.policy_version not in (3, 4, 5)
     ):
         raise AwsSessionError(
             "elastic diagnostic requires the frozen workload and policy"

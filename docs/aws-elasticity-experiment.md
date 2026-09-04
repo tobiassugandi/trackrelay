@@ -31,36 +31,25 @@ below 1%, complete request scheduling, every accepted event, zero duplicate
 business effects, correct final shipment states, an empty DLQ, and the frozen
 drain contract. API latency alone cannot establish sustainable end-to-end load.
 
-## Candidate workload v4
+## Demo workload v5
 
-`aws-elasticity-candidate-v4` is now defined in code and consumed from a saved
-JSON definition by `load/elasticity-steps.js`:
+The authoritative prospective rules are in the
+[v5 workload and measurement contract](aws-elasticity-v5-contract.md).
+`aws-elasticity-demo-v5` schedules **5,730 unique events over 630 seconds**:
+rates `1/5/10/25/10/5/1` for `30/30/30/180/30/30/300` seconds.
+It shortens duration, not peak demand. Both paired treatments use this definition.
 
-| Step | Offered rate | Duration | Scheduled events |
-| --- | ---: | ---: | ---: |
-| baseline | 1 event/s | 60 s | 60 |
-| rise-5 | 5 events/s | 120 s | 600 |
-| rise-10 | 10 events/s | 120 s | 1,200 |
-| peak-25 | 25 events/s | 300 s | 7,500 |
-| fall-10 | 10 events/s | 60 s | 600 |
-| fall-5 | 5 events/s | 60 s | 300 |
-| recovery | 1 event/s | 540 s | 540 |
-
-The complete waveform schedules 10,800 unique `CREATED` events over 1,260 seconds.
-Every plateau aligns to CloudWatch's 60-second native metric period. The final
-nine-minute low-rate window exists to observe backlog recovery and, in the
-elastic treatment, return to the minimum worker count.
-
-Workload v4 changes only recovery duration relative to v3. New runs use policy
-v4 (high-resolution scale-out), while every acceptance bound remains fixed.
-The extra two minutes provide observation margin
-after the first v3 diagnostic retained only 45 seconds at one worker. Historical
-v3 remains readable and is not reclassified using the new window.
+The client ingestion gate is each phase p95 <500 ms and errors <1%, checked from
+k6 summaries and complete raw per-request records. Ten-second displays include
+sample counts. Native minute ALB p95 remains visible corroboration; historical
+v2/v3/v4 keep their frozen native-latency gate. No earlier failure is reclassified.
+The five-minute recovery must contain at least 60 observed seconds at one worker,
+and the peak must contain at least 60 observed seconds at eight workers.
 
 The controller waits until the next UTC minute boundary when necessary and
 launches within a one-second tolerance. With the driver image prevalidated and
-already present, this minimizes edge-bucket ambiguity and keeps the 60-second
-transitions consistently offset from native boundaries.
+already present, this minimizes edge-bucket ambiguity and retains a reproducible offset from native boundaries. Thirty-second transitions
+can share a native bucket; native points must not be assigned to a single phase.
 The saved definition remains authoritative for offered load; CloudWatch points
 retain their actual UTC bucket timestamps rather than being relabelled as
 single-step measurements.
@@ -178,9 +167,9 @@ Only a manifest in `fixed_control_qualified` state can enter the reset. The
 controller revalidates the approved clean revision, all fixed ECS capacities,
 the API and queue endpoints, a stable one-of-one worker service, and the
 absence of an ECS scalable target. It also requires the live application state
-to describe exactly the qualified fixed run: one test-run row, all 10,800
+to describe exactly the qualified fixed run: one test-run row, all 5,730
 events, shipments, durable outbox entries, at least one delivery attempt per
-event, 10,800 simulator receipts, a healthy simulator, and empty source and
+event, 5,730 simulator receipts, a healthy simulator, and empty source and
 dead-letter queues.
 
 For an authorized live session, run:
@@ -217,39 +206,26 @@ against a partially changed stack.
 
 ## Worker-autoscaling transition
 
-The elastic treatment uses frozen policy v4. Both API replicas publish global
-database-derived accepted arrivals/second and outstanding logical events every
-ten seconds to `TrackRelay/Elasticity`, with one-second storage resolution.
-`ArrivalRate` **Maximum** at least 3 events/s for two ten-second periods sets
-the worker service to eight tasks. Maximum avoids double-counting the shared
-snapshot across replicas. The publisher runs in both treatments; its separate
-bounded database pool, AWS timeouts, namespace-scoped IAM permission and image
-are established before the policy-only transition. Missing samples are not
-fabricated as zeroes, and missing scale-out data is non-breaching.
-Returning to one still requires both fewer than 120 native SQS messages sent per minute
-(below 2 events/s) and fewer than ten unfinished messages across visible,
-in-flight, and delayed queue work for three consecutive periods. Both
-directions use exact-capacity adjustments and a 60-second cooldown. Missing
-data does not trigger either direction because every sparse operand is filled
-inside the explicit metric-math expression and the alarm itself treats missing
-data as non-breaching.
+The elastic treatment uses frozen policy v5. Two API replicas publish global
+accepted arrivals and unfinished/completed events every ten seconds. Maximum
+`ArrivalRate` >=3/s for two ten-second buckets requests exactly eight workers.
+Maximum avoids double-counting shared database snapshots.
 
-This is an experiment policy, not a general production recommendation. Its
-purpose is to make acquisition and release obvious within the fixed waveform:
-two short arrival-demand buckets can trigger expansion before backlog grows,
-while the nine-minute recovery step contains the three low-demand,
-low-queue-work buckets required for safe contraction. The
-maximum adds at most seven 0.25-vCPU/0.5-GiB Fargate workers—1.75 vCPU and
-3.5 GiB above the fixed control—only while the alarm-driven service desires
-them. It adds one scalable target, two scaling policies, and two CloudWatch
-alarms; API, simulator, RDS, SQS, task definitions, images, and the minimum
-worker count remain unchanged. Native 60-second reporting and all acceptance
-gates remain unchanged. High-resolution signal data, alarm histories and scaling
-activities are auxiliary evidence under `diagnostics/scaling/TEST_RUN_ID/`.
-Policy v3's 300-message/minute SQS scale-out and all historical evidence remain
-readable; only fresh runs may test policy v4. This is not a production-scale
-telemetry design: the database counting queries add work and the accepted-rate
-signal cannot by itself diagnose an overloaded ingestion tier.
+For contraction, each publisher tracks a fresh `QuietSeconds` timer: rate <2/s,
+unfinished events <10, and the sum of all three SQS work counts <10. Busy or
+failed samples, restarts and gaps over 15 seconds reset it. A ten-second Minimum
+timer >=180 seconds permits return to one. Missing timer data is filled with
+zero, which cannot authorize contraction. Both directions retain 60-second
+cooldowns. This replaces the stale native-minute scale-in signal; it is not
+scheduled scaling or laptop-driven capacity control.
+
+Both treatments include identical telemetry, bounded database pools and AWS
+timeouts, queue-scoped attribute permission, and structured request/query timings.
+The transition still creates only the scalable target, two policies and two
+alarms. Other capacity, images and definitions remain unchanged. The maximum adds
+seven 0.25-vCPU/0.5-GiB workers. Native evidence retains its real resolution.
+See the v5 contract for latency population, raw timing retention, conservative
+completion-window rules, and the new expanded-peak observation gate.
 
 After the reset succeeds, run:
 
@@ -326,7 +302,7 @@ The pre-data elastic contract adds these explicit qualification bounds:
 - Desired and running workers must remain within 1–8. Both live samples and
   native metrics must show expansion before recovery; a desired count of eight
   without actual running workers does not pass.
-- During the nine-minute low-rate recovery, the sampled one-worker suffix must
+- During the five-minute low-rate recovery, the sampled one-worker suffix must
   last at least 60 seconds and reach within 30 seconds of the waveform's end.
   The last complete native recovery minute must also show one running worker.
   Returning to one only after traffic stops does not pass.
@@ -393,7 +369,7 @@ provenance refuses publication. Output is staged before publication, and an
 existing report directory is never overwritten. To regenerate after a local
 reporting change, select a fresh `ELASTICITY_REPORT_OUTPUT` directory.
 
-### Frozen short-step support method v1
+### Frozen short-step support method v2 (workload-v5 window amendment)
 
 Passing the elastic waveform and demonstrating a higher supported rate are
 separate claims. A low ingestion latency by itself establishes neither. The
@@ -404,8 +380,9 @@ report evaluates both treatments using the same pre-data method:
   from actual post-load samples, within the unchanged 1,200-second deadline.
 - For each plateau, use the first and last actual samples inside its scheduled
   window. Each edge must be covered within 30 seconds, gaps must not exceed 30
-  seconds, and the span must be at least the greater of 30 seconds and plateau
-  duration minus 60 seconds. Retain the exact sampled interval in the report.
+  seconds, and for v5 the span must be at least the greater of 10 seconds and
+  plateau duration minus 60 seconds. Historical profiles keep the 30-second
+  minimum. Retain the exact sampled interval in the report.
 - Require completed-event throughput at least equal to the offered rate over
   that interval and non-growing outstanding accepted events. Apply the same
   1,500-event/message bound and 180-second native oldest-message-age bound to

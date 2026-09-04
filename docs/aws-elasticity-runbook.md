@@ -29,14 +29,14 @@ reconciliation; that implementation defect is corrected locally. Teardown was
 recovered and verified after reauthentication. A subsequent v3 elastic-only
 diagnostic scaled 1→8→1 and delivered all 10,680 unique receipts, but failed
 reconciliation accounting, missed one native RDS CPU bucket, and retained only
-45 seconds at one worker during recovery. Candidate v4 now adds two recovery
-minutes with the same policy; reconciliation is retry-aware and metric gaps
-are reported precisely. Neither attempt is a passing comparison. New deployments
-now pair workload v4 with policy v4: ten-second custom arrival-rate telemetry
-and a two-period scale-out alarm, while keeping native reporting, conservative
-scale-in and acceptance bounds unchanged. Review the additional custom-metric,
-API-call and high-resolution-alarm costs in the diagnostic runbook. Rebuild and
-deploy fresh; do not mix policy v3 results with new-policy evidence.
+45 seconds at one worker during recovery. Candidate v4 added two recovery
+minutes; subsequent diagnostics exposed a stale scale-in alarm and a native
+latency bucket containing mixed endpoint traffic. Neither is a passing comparison.
+New deployments now use the [v5 contract](aws-elasticity-v5-contract.md):
+10½ minutes at the same 25/s peak, fresh ten-second scale-in/out telemetry,
+and complete per-request phase latency qualification. Native minute evidence
+remains visible; historical failures retain their original rules. Review the
+additional metric, alarm, SQS and log costs. Rebuild and deploy fresh.
 See the [incident record](aws-elasticity-session-4-incident.md).
 
 ## Workflow and ownership
@@ -103,7 +103,7 @@ Example lines (illustrative, not cloud evidence):
 
 ```text
 [18:55:38+0700] Starting: Phase 3/6: fixed-control treatment
-[19:00:00+0700] Fixed workload: 540/1260s; step=peak-25 rate=25/s workers=1/1 queue=1842
+[19:00:00+0700] Fixed workload: 240/630s; step=peak-25 rate=25/s workers=1/1 queue=1842
 [19:07:03+0700] Fixed workload ended: k6 exit=0; waiting for drain (limit 1200s, stable-empty target 180s)
 [19:11:28+0700] Starting: Cleanup: capturing ECS diagnostics
 [19:18:17+0700] Container Insights cleanup: check 6/13; absent sample 5/5
@@ -160,7 +160,7 @@ phase failures, interrupts, qualification rejection, cleanup failure, and report
 failure. Its synthetic outcomes are not cloud measurements.
 
 After changing the driver, also exercise real k6 timing with the complete
-21-minute, 10,800-event waveform against a local-only HTTP receiver:
+10½-minute, 5,730-event waveform against a local-only HTTP receiver:
 
 ```shell
 make elasticity-driver-http-check \
@@ -170,7 +170,7 @@ make elasticity-driver-http-check \
 This uses a loopback receiver and a disposable, uniquely named k6 container
 (Docker Desktop on macOS; host networking on Linux). The receiver returns 201
 for the first submission and 200 for duplicates. The check requires exactly
-10,800 requests and unique events, all per-step counts/checks, and k6 exit zero.
+5,730 requests and unique events, all per-step counts/checks, and k6 exit zero.
 It retains inputs, raw k6 output/summary, and `local-driver-result.json` in a
 fresh directory, never contacts AWS, and does not measure application capacity.
 
@@ -286,12 +286,12 @@ overlap can temporarily add tasks.
 
 The workload is **events per second**, unlike session 3's finite batches:
 `1 → 5 → 10 → 25 → 10 → 5 → 1`, with durations
-`60 → 120 → 120 → 300 → 60 → 60 → 540` seconds. Each treatment sends 10,800
-events over 21 minutes; both send 21,600 over 42 minutes of scheduled load. Each also requires
+`30 → 30 → 30 → 180 → 30 → 30 → 300` seconds. Each treatment sends 5,730
+events over 10½ minutes; both send 11,460 over 21 minutes of scheduled load. Each also requires
 at least 180 seconds of confirmed post-load drain, with an unchanged 20-minute
 post-load deadline. Allow additional time for image publication, provisioning,
 migration, UTC-minute alignment, metric publication, reset, transition, and
-teardown. Agree a full wall-clock operating window with contingency; 42 minutes
+teardown. Agree a full wall-clock operating window with contingency; 21 minutes
 is not the expected session duration or a cost bound.
 
 Before approving, price the complete topology in the selected region, including

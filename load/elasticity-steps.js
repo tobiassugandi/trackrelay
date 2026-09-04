@@ -138,6 +138,7 @@ export default function () {
         name: "POST partner event",
         offered_rate: String(step.offered_rate_per_second),
         step: step.name,
+        ...(workload.name === "aws-elasticity-demo-v5" ? {sample_sequence: String(iteration)} : {}),
       },
     },
   );

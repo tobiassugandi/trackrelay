@@ -181,6 +181,36 @@ def evaluate_elastic_treatment(
     )
     if not scale_out:
         reasons.append("scale_out_not_observed_during_demand")
+    if definition.name == "aws-elasticity-demo-v5":
+        peak_name = max(
+            definition.steps, key=lambda step: step.offered_rate_per_second
+        ).name
+        stable = []
+        longest = 0.0
+        for item in load_observations:
+            if (
+                item.step_name == peak_name
+                and item.worker_running_count == maximum
+                and item.worker_desired_count == maximum
+                and item.worker_pending_count == 0
+            ):
+                if (
+                    stable
+                    and item.seconds_after_load_started
+                    - stable[-1].seconds_after_load_started
+                    > contract.maximum_observation_gap_seconds
+                ):
+                    stable = []
+                stable.append(item)
+                longest = max(
+                    longest,
+                    item.seconds_after_load_started
+                    - stable[0].seconds_after_load_started,
+                )
+            else:
+                stable = []
+        if longest < 60:
+            reasons.append("expanded_peak_window_too_short")
 
     # Require a continuously observed minimum-capacity suffix during recovery.
     # A return observed only after the load ends does not count as elasticity.

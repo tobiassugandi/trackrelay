@@ -34,17 +34,17 @@ def test_candidate_is_one_metric_aligned_rise_and_fall() -> None:
         1,
     )
     assert tuple(step.duration_seconds for step in definition.steps) == (
-        60,
-        120,
-        120,
+        30,
+        30,
+        30,
+        180,
+        30,
+        30,
         300,
-        60,
-        60,
-        540,
     )
-    assert definition.event_offsets == (0, 60, 660, 1860, 9360, 9960, 10260)
-    assert definition.expected_request_count == 10800
-    assert definition.duration_seconds == 1260
+    assert definition.event_offsets == (0, 30, 180, 480, 4980, 5280, 5430)
+    assert definition.expected_request_count == 5730
+    assert definition.duration_seconds == 630
     assert definition.peak_rate_per_second == 25
     assert definition.minimum_worker_count == 1
     assert definition.maximum_non_worker_utilization_percent == 70
@@ -58,7 +58,7 @@ def test_candidate_is_one_metric_aligned_rise_and_fall() -> None:
 
 
 def test_v3_remains_readable_and_v4_adds_only_recovery_margin():
-    current = ELASTICITY_WORKLOAD_DEFINITION
+    current = ElasticityWorkloadDefinition()
     previous = ElasticityWorkloadDefinition(
         name="aws-elasticity-candidate-v3",
         steps=(
@@ -204,7 +204,12 @@ def test_k6_command_mounts_the_definition_manifest_and_results() -> None:
     assert f"{manifest_path.resolve()}:/input-manifest.json:ro" in command
     assert f"{definition_path.resolve()}:/workload-definition.json:ro" in command
     assert f"{result_directory.resolve()}:/results" in command
-    assert command[-2:] == ("run", "/scripts/elasticity-steps.js")
+    assert command[-4:] == (
+        "run",
+        "--out",
+        "json=/results/k6-points.json",
+        "/scripts/elasticity-steps.js",
+    )
 
     cloud_command = build_elasticity_k6_command(
         ELASTICITY_WORKLOAD_DEFINITION,
@@ -228,8 +233,8 @@ def test_prepare_writes_self_describing_replay_inputs(tmp_path: Path) -> None:
     definition = loads(definition_path.read_text(encoding="utf-8"))
     manifest = loads(manifest_path.read_text(encoding="utf-8"))
     command = loads((output_directory / "k6-command.json").read_text(encoding="utf-8"))
-    assert definition["name"] == "aws-elasticity-candidate-v4"
-    assert definition["expected_request_count"] == 10800
+    assert definition["name"] == "aws-elasticity-demo-v5"
+    assert definition["expected_request_count"] == 5730
     assert manifest["scenario_name"] == "elasticity-fixed-control"
-    assert manifest["events_generated"] == 10800
+    assert manifest["events_generated"] == 5730
     assert command[-1] == "/scripts/elasticity-steps.js"

@@ -33,6 +33,7 @@ from trackrelay.aws_fixed_control import (
     evaluate_treatment_guardrails,
 )
 from trackrelay.experiments.elasticity import ELASTICITY_WORKLOAD_DEFINITION
+from trackrelay.experiments.request_timings import timing_windows
 
 
 class ElasticityReportError(RuntimeError):
@@ -112,7 +113,9 @@ class ElasticityComparisonReport(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[1] = 1
-    method: Literal["short-plateau-completion-v1"] = "short-plateau-completion-v1"
+    method: Literal["short-plateau-completion-v1", "short-plateau-completion-v2"] = (
+        "short-plateau-completion-v1"
+    )
     generated_at: AwareDatetime
     session_id: str
     region: str
@@ -312,7 +315,10 @@ def _step_results(
             or first.seconds_after_load_started - start > MAXIMUM_GAP_SECONDS
             or end - last.seconds_after_load_started > MAXIMUM_GAP_SECONDS
             or last.seconds_after_load_started - first.seconds_after_load_started
-            < max(30, step.duration_seconds - 2 * MAXIMUM_GAP_SECONDS)
+            < max(
+                10 if result.definition.name == "aws-elasticity-demo-v5" else 30,
+                step.duration_seconds - 2 * MAXIMUM_GAP_SECONDS,
+            )
         ):
             reasons.append("step_window_incomplete")
         else:
@@ -500,6 +506,11 @@ def build_comparison(
     else:
         conclusion += " A supported-step rate multiplier is not established."
     return ElasticityComparisonReport(
+        method=(
+            "short-plateau-completion-v2"
+            if fixed.measurement.definition.name == "aws-elasticity-demo-v5"
+            else "short-plateau-completion-v1"
+        ),
         generated_at=now(),
         session_id=session_id,
         region=region,
@@ -821,6 +832,14 @@ def render_comparison_figure(
             label="Accepted, not delivered",
         )
         latency = summary.cloudwatch.series_by_id()["alb_p95_latency"].datapoints
+        windows = timing_windows(result.request_timings, result.load_started_at)
+        if windows:
+            axes[3, column].plot(
+                [w["seconds_after_start"] for w in windows],
+                [w["p95_ms"] for w in windows],
+                color="#222222",
+                label="Ingestion p95 / 10s (raw samples)",
+            )
         for index, point in enumerate(latency):
             start = (point.interval_started_at - result.load_started_at).total_seconds()
             axes[3, column].hlines(
@@ -865,6 +884,13 @@ def render_comparison_figure(
         max(
             550,
             *(
+                w["p95_ms"]
+                for item in summaries
+                for w in timing_windows(
+                    item.measurement.request_timings, item.measurement.load_started_at
+                )
+            ),
+            *(
                 1000 * p.value
                 for item in summaries
                 for p in item.cloudwatch.series_by_id()["alb_p95_latency"].datapoints
@@ -901,6 +927,8 @@ def render_markdown(report: ElasticityComparisonReport) -> str:
         "# Fixed versus elastic workers",
         "",
         report.conclusion,
+        "",
+        f"Method: `{report.method}`.",
         "",
         "![Aligned fixed/elastic comparison](comparison.png)",
         "",
@@ -981,6 +1009,10 @@ def render_markdown(report: ElasticityComparisonReport) -> str:
                 "backlog together demonstrate observed processing support, not per-event delivery latency. "
                 "Scaling and drain times are first observed samples, not exact transition timestamps. "
                 "Native p95 values retain their true 60-second buckets; driver p95 is reported per step, never averaged."
+                " Demo v5 gates each phase on complete individual ingestion samples, p95 <500 ms and errors <1%; "
+                "native ALB p95 remains corroborating evidence, not the ingestion gate. Ten-second latency windows "
+                "are displays with variable sample counts, not independent SLO gates. For v5, the minimum sampled "
+                "completion window is max(10 seconds, plateau duration minus 60 seconds). Historical profiles retain their original gates."
             ),
             "",
             (

@@ -396,7 +396,7 @@ run "async_platform_has_bounded_logs_and_least_privilege_roles" {
   assert {
     condition = (
       jsondecode(aws_iam_role_policy.api_queue[0].policy).Statement[0].Action
-      == ["sqs:SendMessage"]
+      == ["sqs:SendMessage", "sqs:GetQueueAttributes"]
       && toset(jsondecode(aws_iam_role_policy.worker_queue[0].policy).Statement[0].Action)
       == toset(["sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:ReceiveMessage", "sqs:SendMessage"])
     )
@@ -837,7 +837,7 @@ run "worker_elasticity_policy_is_bounded_and_queue_driven" {
     condition = (
       local.worker_autoscaling_policy.minimum_capacity == 1
       && local.worker_autoscaling_policy.maximum_capacity == 8
-      && local.worker_autoscaling_policy.policy_version == 4
+      && local.worker_autoscaling_policy.policy_version == 5
       && local.worker_autoscaling_policy.scale_out_messages_per_minute == null
       && local.worker_autoscaling_policy.scale_out_period_seconds == 10
       && local.worker_autoscaling_policy.scale_out_rate_per_second == 3
@@ -845,11 +845,13 @@ run "worker_elasticity_policy_is_bounded_and_queue_driven" {
       && local.worker_autoscaling_policy.scale_in_queue_work_threshold == 10
       && local.worker_autoscaling_policy.metric_period_seconds == 60
       && local.worker_autoscaling_policy.scale_out_evaluation_periods == 2
-      && local.worker_autoscaling_policy.scale_in_evaluation_periods == 3
+      && local.worker_autoscaling_policy.scale_in_evaluation_periods == 1
+      && local.worker_autoscaling_policy.scale_in_period_seconds == 10
+      && local.worker_autoscaling_policy.scale_in_quiet_seconds == 180
       && local.worker_autoscaling_policy.scale_out_cooldown_seconds == 60
       && local.worker_autoscaling_policy.scale_in_cooldown_seconds == 60
     )
-    error_message = "Worker elasticity must retain its frozen v4 bounds, thresholds, periods, and cooldowns."
+    error_message = "Worker elasticity must retain its frozen v5 bounds, thresholds, periods, and cooldowns."
   }
 
   assert {
@@ -901,28 +903,27 @@ run "worker_elasticity_policy_is_bounded_and_queue_driven" {
     condition = (
       aws_cloudwatch_metric_alarm.async_worker_empty[0].actions_enabled
       && aws_cloudwatch_metric_alarm.async_worker_empty[0].comparison_operator == "GreaterThanOrEqualToThreshold"
-      && aws_cloudwatch_metric_alarm.async_worker_empty[0].threshold == 1
-      && aws_cloudwatch_metric_alarm.async_worker_empty[0].evaluation_periods == 3
-      && aws_cloudwatch_metric_alarm.async_worker_empty[0].datapoints_to_alarm == 3
+      && aws_cloudwatch_metric_alarm.async_worker_empty[0].threshold == 180
+      && aws_cloudwatch_metric_alarm.async_worker_empty[0].evaluation_periods == 1
+      && aws_cloudwatch_metric_alarm.async_worker_empty[0].datapoints_to_alarm == 1
       && aws_cloudwatch_metric_alarm.async_worker_empty[0].treat_missing_data == "notBreaching"
       && length(aws_cloudwatch_metric_alarm.async_worker_empty[0].alarm_actions) == 1
-      && length(aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_query) == 5
-      && one([for query in aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_query : query if query.id == "release_safe"]).expression == "IF(FILL(sent, 0) < 120, IF(FILL(visible, 0) + FILL(in_flight, 0) + FILL(delayed, 0) < 10, 1, 0), 0)"
+      && length(aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_query) == 2
+      && one([for query in aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_query : query if query.id == "release_safe"]).expression == "FILL(quiet, 0)"
       && one([for query in aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_query : query if query.id == "release_safe"]).return_data
-      && one(one([for query in aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_query : query if query.id == "sent"]).metric).metric_name == "NumberOfMessagesSent"
-      && one(one([for query in aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_query : query if query.id == "sent"]).metric).stat == "Sum"
-      && one(one([for query in aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_query : query if query.id == "visible"]).metric).metric_name == "ApproximateNumberOfMessagesVisible"
-      && one(one([for query in aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_query : query if query.id == "in_flight"]).metric).metric_name == "ApproximateNumberOfMessagesNotVisible"
-      && one(one([for query in aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_query : query if query.id == "delayed"]).metric).metric_name == "ApproximateNumberOfMessagesDelayed"
+      && one(one([for query in aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_query : query if query.id == "quiet"]).metric).metric_name == "QuietSeconds"
+      && one(one([for query in aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_query : query if query.id == "quiet"]).metric).namespace == "TrackRelay/Elasticity"
+      && one(one([for query in aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_query : query if query.id == "quiet"]).metric).period == 10
+      && one(one([for query in aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_query : query if query.id == "quiet"]).metric).stat == "Minimum"
     )
-    error_message = "Scale-in must require three low-demand, low-queue-work native SQS periods."
+    error_message = "Scale-in requires 180 seconds of fresh quiet evidence; missing data is fail-closed."
   }
 
   assert {
     condition = (
       output.worker_autoscaling_policy.minimum_capacity == 1
       && output.worker_autoscaling_policy.maximum_capacity == 8
-      && output.worker_autoscaling_policy.policy_version == 4
+      && output.worker_autoscaling_policy.policy_version == 5
       && output.worker_autoscaling_policy.scale_out_messages_per_minute == null
       && local.worker_autoscaling_policy.scale_out_period_seconds == 10
       && local.worker_autoscaling_policy.scale_out_rate_per_second == 3

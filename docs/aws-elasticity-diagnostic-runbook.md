@@ -1,4 +1,4 @@
-# Elastic-only workload-v4 / policy-v4 diagnostic
+# Elastic-only workload-v5 / policy-v5 diagnostic
 
 Use this workflow while developing autoscaling. It skips the fixed-worker load
 and between-treatment reset, but retains the full elastic workload and all
@@ -40,38 +40,32 @@ policy resources, verifies native policy wiring and emptiness again, and checks
 the unchanged environment immediately before load. It never fabricates a
 fixed-run ID or reset result.
 
-Candidate v4 sends 10,800 events over 21 minutes at
-`1 → 5 → 10 → 25 → 10 → 5 → 1` events/second, using plateaus of
-`60 → 120 → 120 → 300 → 60 → 60 → 540` seconds. Allow additional time for
-provisioning, images, migration, minute alignment, drain, metric publication and
-teardown. Drain still requires 180 continuously empty seconds within a
-20-minute post-load deadline. Skipping fixed load saves that treatment's load
-and drain plus reset; it does not make the whole session a 21-minute operation.
+New runs use the [v5 workload and measurement contract](aws-elasticity-v5-contract.md):
+**5,730 events over 10½ minutes**, still peaking at 25 events/s. Phase durations
+are `30 → 30 → 30 → 180 → 30 → 30 → 300` seconds. Provisioning, migration,
+minute alignment, drain and teardown are additional. Drain retains its
+180-second stable-empty requirement and 20-minute deadline.
 
-The workload is unchanged from candidate v4. New deployments use **policy v4**:
-each API replica publishes global database-derived `ArrivalRate` and
-`OutstandingEvents` gauges to `TrackRelay/Elasticity` every ten seconds, with
-one-second storage resolution. The alarm uses **Maximum**, never Sum across
-replicas: at least 3 accepted unique events/s for two ten-second periods requests
-eight workers. This replaces the native SQS 300-message/minute scale-out signal.
-The existing three-minute low-demand/low-queue scale-in rule, cooldowns,
-1,500-event backlog bound, 180-second age bound and observed one-worker recovery
-gate are unchanged. A ten-second alarm is not a ten-second task-start guarantee.
+Policy v5 uses ten-second telemetry in both directions: two arrival-rate buckets
+at or above 3/s request eight workers; 180 seconds of continuously sampled low
+demand and low outstanding/queue work permits return to one. Failures and stale
+samples reset that quiet timer. Scale-out and Fargate startup still have latency.
+Qualification requires at least 60 observed seconds at eight workers during
+peak, plus 60 at one worker during recovery. Backlog and correctness bounds
+remain unchanged.
 
-The publisher is also present in fixed deployments, so the guarded transition
-still creates only the five policy resources. It has its own bounded database
-pool and CloudWatch timeouts, publishes explicit zeroes on successful empty
-samples, logs failures without manufacturing zeroes, and shuts down with the API.
-Duplicate retries are not counted as new unique arrivals. This is accepted demand,
-not offered traffic: an API/database ingestion bottleneck can suppress this signal.
-Existing ingestion and non-worker headroom gates remain mandatory.
+Ingestion p95 <500 ms is checked per phase from k6 and complete raw request
+records. Native ALB minute p95 remains visible corroboration, not a v5
+ingestion-only gate. Earlier versions retain their original rules. Ten-second
+p95 displays include sample counts; they are not averaged into a phase p95.
 
-Use a fresh deployment and rebuilt API image; do not apply this change to a stack
-from an earlier run. Policy v2/v3 evidence stays readable and is not reclassified.
-The telemetry adds two custom metrics, a high-resolution alarm, PutMetricData
-calls from two API replicas, and one database connection per replica. Review those
-costs and overhead before approving another run. No cloud result is implied by
-the local implementation. See [AWS high-resolution metrics](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/publishingMetrics.html#high-resolution-metrics).
+Use a fresh deployment and rebuilt API image. Telemetry runs in both fixed and
+elastic deployments, so the transition still creates only five policy resources.
+There are six custom metrics, two high-resolution alarms, bounded database
+counting queries, SQS attribute reads and structured timing logs. Review those
+costs and overhead before approval. Accepted arrival rate can be suppressed by
+an ingestion bottleneck; ingestion and headroom gates remain mandatory.
+No local test implies a passing cloud result.
 
 Review current regional costs and remaining monthly budget before approval.
 The ceiling check is not a billing meter or dollar/time kill switch. Do not
@@ -136,8 +130,11 @@ gaps where later data already exists. Do not zero-fill or interpolate RDS CPU.
 
 Auxiliary timing evidence is collected before native metric qualification under
 `diagnostics/scaling/TEST_RUN_ID/`: `high-resolution-metrics.json` (ten-second
-Maximum gauges), `alarm-demand-high.json`, `alarm-release-safe.json`, and
-`scaling-activities.json` (including non-scaling decisions). Inspect
+gauges and server p95), `alarm-demand-high.json`, `alarm-release-safe.json`, and
+`scaling-activities.json` (including non-scaling decisions), endpoint timing logs
+and telemetry-query logs. Per-request records are in `k6-points.json` and
+`result.json`; ten-second client latency/count displays are in
+`request-timing-windows.json`. Inspect
 `collection.json` for collection failures. These are best-effort diagnostics,
 not substitutes for complete native metric evidence; raw responses can contain
 missing or not-yet-published datapoints. Compare alarm state/action timestamps,

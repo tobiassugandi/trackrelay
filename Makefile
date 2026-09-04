@@ -294,7 +294,7 @@ elasticity-session-check:
 
 .PHONY: elasticity-diagnostic-check
 elasticity-diagnostic-check:
-	$(UV) run --locked pytest tests/test_aws_elasticity_diagnostic.py tests/test_aws_elasticity_transition.py tests/test_scaling_metrics.py tests/test_aws_scaling_diagnostics.py tests/test_aws_observability_inputs.py tests/test_aws_fixed_control.py tests/test_aws_experiment_reset.py
+	$(UV) run --locked pytest tests/test_aws_elasticity_diagnostic.py tests/test_aws_elasticity_transition.py tests/test_scaling_metrics.py tests/test_request_timing.py tests/experiments/test_request_timings.py tests/test_aws_scaling_diagnostics.py tests/test_aws_observability_inputs.py tests/test_aws_fixed_control.py tests/test_aws_elastic_treatment.py tests/test_aws_elasticity_report.py tests/test_aws_experiment_reset.py
 
 aws-elasticity-session:
 	$(UV) run --locked trackrelay-aws-elasticity-session \

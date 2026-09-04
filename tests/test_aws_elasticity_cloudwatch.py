@@ -177,7 +177,8 @@ def test_collector_retries_until_full_window_is_published(tmp_path: Path) -> Non
         if command[-1] == "async_observability_dimensions":
             return completed(command, stdout=dumps(dimensions))
         if (
-            "describe-alarm-history" in command
+            "filter-log-events" in command
+            or "describe-alarm-history" in command
             or "describe-scaling-activities" in command
         ):
             return completed(command, stdout="{}")

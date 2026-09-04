@@ -131,7 +131,7 @@ resource "aws_iam_role_policy" "api_queue" {
     Version = "2012-10-17"
     Statement = [
       {
-        Action   = ["sqs:SendMessage"]
+        Action   = ["sqs:SendMessage", "sqs:GetQueueAttributes"]
         Effect   = "Allow"
         Resource = aws_sqs_queue.delivery[0].arn
       },

@@ -36,13 +36,21 @@ def collect_scaling_diagnostics(
                     ],
                 },
                 "Period": 10,
-                "Stat": "Maximum",
+                "Stat": "p95"
+                if metric == "ServerIngestionLatency"
+                else "Minimum"
+                if metric == "QuietSeconds"
+                else "Maximum",
             },
             "ReturnData": True,
         }
         for query_id, metric in (
             ("arrival_rate", "ArrivalRate"),
             ("outstanding", "OutstandingEvents"),
+            ("completed", "CompletedEvents"),
+            ("quiet", "QuietSeconds"),
+            ("query_latency", "TelemetryQueryLatency"),
+            ("server_ingestion_latency", "ServerIngestionLatency"),
         )
     ]
     window = (
@@ -52,6 +60,21 @@ def collect_scaling_diagnostics(
         end.isoformat(),
     )
     commands = {
+        **{
+            kind: (
+                "logs",
+                "filter-log-events",
+                "--log-group-name",
+                f"/trackrelay/{dimensions['cluster_name'].removeprefix('trackrelay-').removesuffix('-async')}/api",
+                "--filter-pattern",
+                f'"{kind}"',
+                "--start-time",
+                str(int(start.timestamp() * 1000)),
+                "--end-time",
+                str(int(end.timestamp() * 1000)),
+            )
+            for kind in ("request_timing", "telemetry_query_timing")
+        },
         "high-resolution-metrics": (
             "cloudwatch",
             "get-metric-data",

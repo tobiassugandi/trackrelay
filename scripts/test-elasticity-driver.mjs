@@ -112,7 +112,7 @@ function replay(subject, extraSteps = []) {
 test("normal replay submits every manifest event exactly once with the original tags", async () => {
   const subject = await driver();
   replay(subject);
-  assert.equal(subject.requests.length, 10800);
+  assert.equal(subject.requests.length, 5730);
   assert.deepEqual(
     subject.requests.map((request) => request.body),
     subject.manifest.expected_events.map((event) => event.payload),
@@ -137,14 +137,14 @@ test("normal replay submits every manifest event exactly once with the original 
     assert.equal(subject.counters.get(`driver_boundary_iterations:${step.name}`), 0);
   }
   assert.equal(subject.counters.get("driver_errors:all"), 0);
-  assert.equal(subject.checks.length, 10800);
+  assert.equal(subject.checks.length, 5730);
   assert.ok(subject.checks.every((check) => check.passed));
 });
 
 test("reproduces the failed cloud dispatches without crossing any slice or duplicating HTTP work", async () => {
   const subject = await driver();
   replay(subject, ["baseline", "fall-5", "recovery"]);
-  assert.equal(subject.requests.length, 10800);
+  assert.equal(subject.requests.length, 5730);
   assert.deepEqual(
     subject.requests.map((request) => request.body),
     subject.manifest.expected_events.map((event) => event.payload),
@@ -241,9 +241,9 @@ test("malformed or overlapping slices are rejected during initialization", async
 
 test("a hole inside an otherwise valid slice fails the driver error threshold", async () => {
   const subject = await driver({
-    mutate(manifest) { manifest.expected_events[59] = null; },
+    mutate(manifest) { manifest.expected_events[29] = null; },
   });
-  assert.throws(() => subject.run("baseline", 59), /missing manifest event/);
+  assert.throws(() => subject.run("baseline", 29), /missing manifest event/);
   assert.equal(subject.requests.length, 0);
   assert.equal(subject.counters.get("driver_errors:all"), 1);
 });
@@ -262,7 +262,7 @@ test("pacing and full metric windows match the frozen definition", async () => {
     assert.equal(scenario.maxVUs, step.offered_rate_per_second);
     offset += step.duration_seconds;
   }
-  assert.equal(offset, 1260);
+  assert.equal(offset, 630);
 });
 
 test("boundary and error metrics remain in the raw k6 summary", async () => {

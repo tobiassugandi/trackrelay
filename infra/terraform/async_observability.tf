@@ -157,6 +157,7 @@ resource "aws_cloudwatch_dashboard" "async" {
             ["AWS/ApplicationELB", "HTTPCode_ELB_4XX_Count", "LoadBalancer", aws_lb.async[0].arn_suffix, { id = "m_elb_4xx", stat = "Sum", visible = false }],
             ["AWS/ApplicationELB", "HTTPCode_ELB_5XX_Count", "LoadBalancer", aws_lb.async[0].arn_suffix, { id = "m_elb_5xx", stat = "Sum", visible = false }],
             [{ expression = local.async_observability_expression_contract.observed_request_rate.expression, id = "e_request_rate", label = local.async_observability_expression_contract.observed_request_rate.label }],
+            ["TrackRelay/Elasticity", "ArrivalRate", "QueueName", aws_sqs_queue.delivery[0].name, { stat = "Maximum", period = 10, label = "Accepted events/s (10s)" }],
           ]
         }
       },
@@ -180,6 +181,8 @@ resource "aws_cloudwatch_dashboard" "async" {
           }
           metrics = [
             ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", aws_lb.async[0].arn_suffix, { id = "m_p95_latency", label = "p95 latency (seconds)", stat = "p95" }],
+            ["TrackRelay/Elasticity", "ServerIngestionLatency", "QueueName", aws_sqs_queue.delivery[0].name, { id = "m_server_latency", stat = "p95", period = 10, visible = false }],
+            [{ expression = "m_server_latency / 1000", id = "e_server_latency", period = 10, label = "Server ingestion p95 (10s, seconds)" }],
           ]
         }
       },

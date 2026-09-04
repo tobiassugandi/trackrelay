@@ -40,6 +40,7 @@ from trackrelay.models import (
 )
 from trackrelay.models import TestRun as ExperimentRunModel
 from trackrelay.partners import PARTNER_ADAPTERS
+from trackrelay.request_timing import RequestTimingMiddleware
 from trackrelay.runtime_metrics import RuntimeMetricsSnapshot, capture_runtime_metrics
 from trackrelay.scaling_metrics import scaling_metrics_lifespan
 from trackrelay.services import (
@@ -65,6 +66,7 @@ app = FastAPI(
     title=settings.app_name, debug=settings.debug, lifespan=scaling_metrics_lifespan
 )
 logger = logging.getLogger(__name__)
+app.add_middleware(RequestTimingMiddleware, enabled=bool(settings.scaling_metrics_queue_name))
 
 EventPersister = Callable[[NormalizedEvent], EventPersistenceResult]
 DeliveryOutboxPublisher = Callable[

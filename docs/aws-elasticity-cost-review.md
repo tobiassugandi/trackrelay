@@ -6,16 +6,22 @@ estimate in USD, not a bill, a hard spending cap, or an elasticity result.
 
 ## Proposed operating envelope
 
-Policy-v4 addendum (2026-09-04): new runs also publish two custom high-resolution
-CloudWatch metrics. Each of the two API replicas submits one two-metric request
-every ten seconds (about 720 PutMetricData requests/hour combined while both
-publishers run). One scale-out alarm now uses ten-second evaluation rather than
-standard resolution. Publisher database reads use one additional bounded
-connection per API replica, with no additional ECS task. Recheck current regional
-custom-metric, API-request and high-resolution-alarm charges before approval;
-the historical estimate below does not price this addition. Publishing stops with
-task teardown; retained custom metric data follows CloudWatch retention rather
-than Terraform resource deletion. No approval or cost ceiling is increased here.
+Policy-v5 addendum (2026-09-04): new runs publish six custom high-resolution
+CloudWatch metric identities and use two ten-second alarms. Each API replica
+makes one batched PutMetricData request and one SQS GetQueueAttributes request
+every ten seconds (about 720 of each API call/hour combined). Server latency
+uses batches of raw values, not pre-aggregated percentiles. Structured logs add
+one timing record per HTTP request plus telemetry-query timing records.
+Publisher reads use one additional bounded database connection per API replica;
+there is no new ECS task. Diagnostic collection also reads those logs.
+
+Recheck regional custom-metric, high-resolution-alarm, API, log-ingestion/storage
+and retrieval charges, plus query overhead, before approval. The historical
+estimate below does not price these additions or approve a v5 session.
+The shorter 630-second waveform reduces scheduled load time, not provisioning,
+drain or teardown guarantees. Publishing stops with task teardown; retained
+custom metrics follow CloudWatch retention rather than resource deletion.
+No approval or cost ceiling is increased here.
 
 - Region: `ap-southeast-3` (Jakarta), profile `trackrelay-admin`.
 - One fixed-versus-elastic experiment on the unchanged asynchronous stack.

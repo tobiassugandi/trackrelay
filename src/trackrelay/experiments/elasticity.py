@@ -82,6 +82,14 @@ DEFAULT_ELASTICITY_STEPS = (
 )
 
 
+DEMO_ELASTICITY_STEPS = tuple(
+    step.model_copy(update={"duration_seconds": duration})
+    for step, duration in zip(
+        DEFAULT_ELASTICITY_STEPS, (30, 30, 30, 180, 30, 30, 300), strict=True
+    )
+)
+
+
 class ElasticityWorkloadDefinition(BaseModel):
     """Candidate waveform shared byte-for-byte by fixed and elastic runs.
 
@@ -98,6 +106,7 @@ class ElasticityWorkloadDefinition(BaseModel):
         "aws-elasticity-candidate-v2",
         "aws-elasticity-candidate-v3",
         "aws-elasticity-candidate-v4",
+        "aws-elasticity-demo-v5",
     ] = "aws-elasticity-candidate-v4"
     steps: tuple[ElasticityWorkloadStep, ...] = DEFAULT_ELASTICITY_STEPS
     random_seed: int = 20260901
@@ -150,7 +159,13 @@ class ElasticityWorkloadDefinition(BaseModel):
         if len(set(names)) != len(names):
             raise ValueError("elasticity workload step names must be unique")
         if any(
-            step.duration_seconds % self.metric_period_seconds for step in self.steps
+            step.duration_seconds
+            % (
+                10
+                if self.name == "aws-elasticity-demo-v5"
+                else self.metric_period_seconds
+            )
+            for step in self.steps
         ):
             raise ValueError(
                 "every elasticity step must align to the 60-second metric period"
@@ -174,6 +189,7 @@ class ElasticityWorkloadDefinition(BaseModel):
             "aws-elasticity-candidate-v2": 5,
             "aws-elasticity-candidate-v3": 7,
             "aws-elasticity-candidate-v4": 9,
+            "aws-elasticity-demo-v5": 5,
         }[self.name]
         if (
             self.steps[-1].duration_seconds
@@ -182,10 +198,17 @@ class ElasticityWorkloadDefinition(BaseModel):
             raise ValueError(
                 "elasticity recovery is shorter than the candidate minimum"
             )
+        if (
+            self.name == "aws-elasticity-demo-v5"
+            and self.steps != DEMO_ELASTICITY_STEPS
+        ):
+            raise ValueError("demo v5 requires the frozen 630-second waveform")
         return self
 
 
-ELASTICITY_WORKLOAD_DEFINITION = ElasticityWorkloadDefinition()
+ELASTICITY_WORKLOAD_DEFINITION = ElasticityWorkloadDefinition(
+    name="aws-elasticity-demo-v5", steps=DEMO_ELASTICITY_STEPS
+)
 
 
 def build_elasticity_manifest(
@@ -272,6 +295,11 @@ def build_elasticity_k6_command(
         f"{result_directory.resolve()}:/results",
         definition.k6_image,
         "run",
+        *(
+            ("--out", "json=/results/k6-points.json")
+            if definition.name == "aws-elasticity-demo-v5"
+            else ()
+        ),
         "/scripts/elasticity-steps.js",
     )
 

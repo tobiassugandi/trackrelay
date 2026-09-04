@@ -41,6 +41,7 @@ from trackrelay.experiments.elasticity import (
     ElasticityTreatment,
 )
 from trackrelay.experiments.reconciliation import ReconciliationReport
+from trackrelay.experiments.request_timings import IngestionTiming
 from trackrelay.operator_status import progress_output
 from trackrelay.runtime_metrics import DatabasePoolMetrics, RuntimeMetricsSnapshot
 
@@ -54,6 +55,43 @@ SOURCE_QUEUE_URL = (
 DLQ_URL = "https://sqs.ap-southeast-3.amazonaws.com/123456789012/trackrelay-dlq"
 CLUSTER_NAME = "trackrelay-8a7e37db-async"
 WORKER_SERVICE = "trackrelay-8a7e37db-worker"
+
+
+@mark.parametrize("case", ("missing", "duplicate", "late", "slow", "errors"))
+def test_v5_raw_ingestion_records_fail_closed(case):
+    result = passing_result()
+    samples = list(result.request_timings)
+    if case == "missing":
+        samples.pop()
+    elif case == "duplicate":
+        samples[-1] = samples[0]
+    elif case == "late":
+        samples[0] = samples[0].model_copy(
+            update={"observed_at": result.load_ended_at + timedelta(seconds=1)}
+        )
+    else:
+        samples = [
+            item.model_copy(
+                update={"duration_ms": 500} if case == "slow" else {"status": 500}
+            )
+            if item.step == "baseline"
+            else item
+            for item in samples
+        ]
+    assert not result.model_copy(
+        update={"request_timings": tuple(samples)}
+    ).ingestion_guardrails_passed
+
+
+def test_v5_does_not_gate_on_a_low_sample_ten_second_percentile():
+    result = passing_result()
+    # One slow request changes the ten-second display, but the complete phase
+    # still has p95=100ms. Do not turn a display into an accidental new gate.
+    samples = list(result.request_timings)
+    samples[0] = samples[0].model_copy(update={"duration_ms": 1000})
+    assert result.model_copy(
+        update={"request_timings": tuple(samples)}
+    ).ingestion_guardrails_passed
 
 
 def completed(
@@ -195,7 +233,24 @@ def passing_result() -> FixedControlResult:
         ),
     )
     count = definition.expected_request_count
+    timings = tuple(
+        IngestionTiming(
+            observed_at=started_at
+            + timedelta(
+                seconds=sum(s.duration_seconds for s in definition.steps[:i])
+                + n / step.offered_rate_per_second
+                + 0.1
+            ),
+            step=step.name,
+            sequence=n,
+            duration_ms=100,
+            status=201,
+        )
+        for i, step in enumerate(definition.steps)
+        for n in range(step.expected_request_count)
+    )
     return FixedControlResult(
+        request_timings=timings,
         test_run_id=TEST_RUN_ID,
         definition=definition,
         load_started_at=started_at,
@@ -250,12 +305,17 @@ def cloudwatch_evidence(
     }
     timestamps = tuple(
         started_at + timedelta(minutes=minute)
-        for minute in range(ELASTICITY_WORKLOAD_DEFINITION.duration_seconds // 60)
+        for minute in range(
+            (ELASTICITY_WORKLOAD_DEFINITION.duration_seconds + 59) // 60
+        )
     )
-    requests_per_bucket = tuple(
-        step.offered_rate_per_second * 60
+    rates = [
+        step.offered_rate_per_second
         for step in ELASTICITY_WORKLOAD_DEFINITION.steps
-        for _ in range(step.duration_seconds // 60)
+        for _ in range(step.duration_seconds)
+    ]
+    requests_per_bucket = tuple(
+        sum(rates[i : i + 60]) for i in range(0, len(rates), 60)
     )
     return ElasticityCloudWatchEvidence(
         test_run_id=test_run_id,
@@ -449,8 +509,8 @@ def test_live_observation_aligns_database_queue_and_fixed_worker(
             runner=runner,
         )
 
-    assert observed.step_name == "rise-10"
-    assert observed.offered_rate_per_second == 10
+    assert observed.step_name == "peak-25"
+    assert observed.offered_rate_per_second == 25
     assert observed.source_queue_work == 3
     assert observed.worker_running_count == 1
     assert observed.api_runtime is None
@@ -490,6 +550,10 @@ def test_execution_uses_definition_and_confirms_stable_drain(
             return 0
 
     monkeypatch.setattr("trackrelay.aws_fixed_control.Popen", CompletedK6)
+    monkeypatch.setattr(
+        "trackrelay.aws_fixed_control.read_request_timings",
+        lambda path: passing_result().request_timings,
+    )
     registered: list[dict[str, object]] = []
     reconciliation_timeouts: list[dict[str, float]] = []
 
@@ -562,7 +626,7 @@ def test_execution_uses_definition_and_confirms_stable_drain(
     started_at = datetime(2026, 9, 2, tzinfo=UTC)
     timestamps = iter(
         started_at + timedelta(seconds=seconds)
-        for seconds in (0, 60, 120, 180, 240, 300, 360, 420, 480)
+        for seconds in (0, 60, 630, 690, 750, 810, 870, 930, 990)
     )
     messages = []
     with (

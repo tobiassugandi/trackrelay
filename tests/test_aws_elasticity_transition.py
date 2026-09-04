@@ -76,7 +76,10 @@ def completed(
 
 def policy() -> WorkerAutoscalingPolicy:
     return WorkerAutoscalingPolicy(
-        policy_version=4,
+        policy_version=5,
+        scale_in_evaluation_periods=1,
+        scale_in_period_seconds=10,
+        scale_in_quiet_seconds=180,
         backlog_threshold_messages=None,
         empty_alarm_name=f"{WORKER_SERVICE}-release-safe",
         high_alarm_name=f"{WORKER_SERVICE}-demand-high",
@@ -111,9 +114,15 @@ def test_candidate_v2_policy_evidence_remains_readable() -> None:
 
 def test_candidate_v3_policy_evidence_remains_readable() -> None:
     historical = policy().model_dump(
-        exclude={"scale_out_period_seconds", "scale_out_rate_per_second"}
+        exclude={
+            "scale_out_period_seconds",
+            "scale_out_rate_per_second",
+            "scale_in_period_seconds",
+            "scale_in_quiet_seconds",
+        }
     )
     historical.update(
+        scale_in_evaluation_periods=3,
         policy_version=3,
         scale_out_evaluation_periods=1,
         scale_out_messages_per_minute=300,
@@ -335,12 +344,13 @@ def plan_document(expected: WorkerAutoscalingPolicy) -> dict[str, object]:
                 "actions_enabled": True,
                 "alarm_name": expected.empty_alarm_name,
                 "comparison_operator": "GreaterThanOrEqualToThreshold",
-                "datapoints_to_alarm": 3,
-                "evaluation_periods": 3,
+                "datapoints_to_alarm": 1,
+                "evaluation_periods": 1,
                 "metric_query": [
                     {
                         "id": "release_safe",
-                        "expression": "IF(FILL(sent, 0) < 120, IF(FILL(visible, 0) + FILL(in_flight, 0) + FILL(delayed, 0) < 10, 1, 0), 0)",
+                        "expression": "FILL(quiet, 0)",
+                        "period": 10,
                         "return_data": True,
                     },
                     *(
@@ -351,33 +361,18 @@ def plan_document(expected: WorkerAutoscalingPolicy) -> dict[str, object]:
                                 {
                                     "dimensions": {"QueueName": expected.queue_name},
                                     "metric_name": metric_name,
-                                    "namespace": "AWS/SQS",
-                                    "period": 60,
+                                    "namespace": "TrackRelay/Elasticity",
+                                    "period": 10,
                                     "stat": statistic,
                                 }
                             ],
                         }
                         for query_id, metric_name, statistic in (
-                            ("sent", "NumberOfMessagesSent", "Sum"),
-                            (
-                                "visible",
-                                "ApproximateNumberOfMessagesVisible",
-                                "Maximum",
-                            ),
-                            (
-                                "in_flight",
-                                "ApproximateNumberOfMessagesNotVisible",
-                                "Maximum",
-                            ),
-                            (
-                                "delayed",
-                                "ApproximateNumberOfMessagesDelayed",
-                                "Maximum",
-                            ),
+                            ("quiet", "QuietSeconds", "Minimum"),
                         )
                     ),
                 ],
-                "threshold": 1,
+                "threshold": 180,
                 "treat_missing_data": "notBreaching",
             },
         ),
@@ -422,18 +417,12 @@ def native_verification(
                 name=expected.empty_alarm_name,
                 actions_enabled=True,
                 comparison_operator="GreaterThanOrEqualToThreshold",
-                datapoints_to_alarm=3,
-                evaluation_periods=3,
-                threshold=1,
+                datapoints_to_alarm=1,
+                evaluation_periods=1,
+                threshold=180,
                 treat_missing_data="notBreaching",
-                signal="low_demand_and_queue_work",
-                metric_query_ids=(
-                    "delayed",
-                    "in_flight",
-                    "release_safe",
-                    "sent",
-                    "visible",
-                ),
+                signal="quiet_seconds",
+                metric_query_ids=("quiet", "release_safe"),
             ),
             WorkerAlarmVerification(
                 name=expected.high_alarm_name,
@@ -683,13 +672,14 @@ def test_native_verification_requires_alarm_policy_wiring(tmp_path: Path) -> Non
                     **common_alarm,
                     "AlarmName": expected.empty_alarm_name,
                     "AlarmActions": [scale_in_arn],
-                    "DatapointsToAlarm": 3,
-                    "EvaluationPeriods": 3,
-                    "Threshold": 1,
+                    "DatapointsToAlarm": 1,
+                    "EvaluationPeriods": 1,
+                    "Threshold": 180,
                     "Metrics": [
                         {
                             "Id": "release_safe",
-                            "Expression": "IF(FILL(sent, 0) < 120, IF(FILL(visible, 0) + FILL(in_flight, 0) + FILL(delayed, 0) < 10, 1, 0), 0)",
+                            "Expression": "FILL(quiet, 0)",
+                            "Period": 10,
                             "ReturnData": True,
                         },
                         *(
@@ -702,29 +692,14 @@ def test_native_verification_requires_alarm_policy_wiring(tmp_path: Path) -> Non
                                             {"Name": "QueueName", "Value": QUEUE_NAME}
                                         ],
                                         "MetricName": metric_name,
-                                        "Namespace": "AWS/SQS",
+                                        "Namespace": "TrackRelay/Elasticity",
                                     },
-                                    "Period": 60,
+                                    "Period": 10,
                                     "Stat": statistic,
                                 },
                             }
                             for query_id, metric_name, statistic in (
-                                ("sent", "NumberOfMessagesSent", "Sum"),
-                                (
-                                    "visible",
-                                    "ApproximateNumberOfMessagesVisible",
-                                    "Maximum",
-                                ),
-                                (
-                                    "in_flight",
-                                    "ApproximateNumberOfMessagesNotVisible",
-                                    "Maximum",
-                                ),
-                                (
-                                    "delayed",
-                                    "ApproximateNumberOfMessagesDelayed",
-                                    "Maximum",
-                                ),
+                                ("quiet", "QuietSeconds", "Minimum"),
                             )
                         ),
                     ],

@@ -51,6 +51,7 @@ from trackrelay.aws_fixed_control import (
     FixedControlResult,
     FixedControlSummary,
     evaluate_fixed_control_qualification,
+    evaluate_treatment_guardrails,
     execute_elasticity_workload,
     run_fixed_control_session,
 )
@@ -58,6 +59,7 @@ from trackrelay.aws_session import AwsSessionError, load_manifest, write_manifes
 from trackrelay.experiments.elasticity import (
     ELASTICITY_WORKLOAD_DEFINITION,
     ElasticityTreatment,
+    ElasticityWorkloadDefinition,
 )
 
 ELASTIC_ID = UUID("00000000-0000-0000-0000-000000000947")
@@ -79,7 +81,7 @@ def elastic_result():
                 name, rate = step.name, step.offered_rate_per_second
                 break
             remaining -= step.duration_seconds
-        backlog = min(persisted, 100) if 60 <= seconds < 720 else 0
+        backlog = min(persisted, 100) if 60 <= seconds < 330 else 0
         item = observation(
             observed_at=start + timedelta(seconds=seconds),
             step_name=name,
@@ -90,8 +92,8 @@ def elastic_result():
         ).model_copy(
             update={
                 "seconds_after_load_started": seconds,
-                "worker_running_count": 8 if 60 <= seconds < 900 else 1,
-                "worker_desired_count": 8 if 60 <= seconds < 900 else 1,
+                "worker_running_count": 8 if 60 <= seconds < 540 else 1,
+                "worker_desired_count": 8 if 60 <= seconds < 540 else 1,
             }
         )
         observations.append(item)
@@ -100,6 +102,12 @@ def elastic_result():
             **fixed.model_dump(round_trip=True),
             "test_run_id": ELASTIC_ID,
             "load_started_at": start,
+            "request_timings": [
+                item.model_copy(
+                    update={"observed_at": item.observed_at + timedelta(days=2)}
+                )
+                for item in fixed.request_timings
+            ],
             "load_ended_at": start
             + timedelta(seconds=fixed.definition.duration_seconds),
             "observations": observations,
@@ -120,7 +128,7 @@ def elastic_cloudwatch(result=None):
                 "datapoints": tuple(
                     ElasticityCloudWatchDatapoint(
                         interval_started_at=timestamp,
-                        value=(8 if 1 <= index < 15 else 1)
+                        value=(8 if 1 <= index < 9 else 1)
                         if item.query_id == "worker_running_tasks"
                         else item.datapoints[
                             min(index, len(item.datapoints) - 1)
@@ -281,7 +289,6 @@ def test_observed_failures_reject_treatment(case, reason):
         ("api_cpu", 70, "api_cpu_headroom_failed"),
         ("simulator_memory", 70, "simulator_memory_headroom_failed"),
         ("rds_cpu", 70, "rds_cpu_headroom_failed"),
-        ("alb_p95_latency", 0.5, "native_ingestion_latency_failed"),
         ("alb_target_5xx", 100, "native_ingestion_errors_failed"),
         ("dead_letter_queue_visible", 1, "native_dead_letter_queue_not_empty"),
     ),
@@ -296,12 +303,48 @@ def test_native_failures_reject_treatment(query, value, reason):
     assert reason in qualification.rejection_reasons
 
 
+def test_v5_native_latency_is_visible_corroboration_not_a_phase_gate():
+    result = elastic_result()
+    evidence = changed_series(elastic_cloudwatch(), "alb_p95_latency", 0.505873)
+    qualification = evaluate_treatment_guardrails(result, evidence)
+    assert "native_ingestion_latency_failed" not in qualification.rejection_reasons
+    assert qualification.maximum_native_p95_latency_ms == 505.873
+    assert evaluate_elastic_treatment(result, evidence, policy=policy()).qualified
+    # Historical definitions still use the native threshold. This deliberately
+    # incomplete old-shaped fixture checks the gate without reclassifying data.
+    legacy = result.model_copy(update={"definition": ElasticityWorkloadDefinition()})
+    assert (
+        "native_ingestion_latency_failed"
+        in evaluate_treatment_guardrails(legacy, evidence).rejection_reasons
+    )
+
+
+def test_v5_requires_a_full_minute_expanded_during_peak():
+    result = elastic_result()
+    observations = tuple(
+        item.model_copy(update={"worker_running_count": 1, "worker_desired_count": 1})
+        if item.step_name == "peak-25" and item.seconds_after_load_started < 230
+        else item
+        for item in result.observations
+    )
+    qualification = evaluate_elastic_treatment(
+        result.model_copy(update={"observations": observations}),
+        elastic_cloudwatch(),
+        policy=policy(),
+    )
+    assert "expanded_peak_window_too_short" in qualification.rejection_reasons
+
+
 def test_fractional_minute_launch_uses_last_complete_recovery_bucket():
     result = elastic_result()
     offset = timedelta(milliseconds=500)
     result = result.model_copy(
         update={
             "load_started_at": result.load_started_at + offset,
+            "request_timings": tuple(
+                item.model_copy(update={"observed_at": item.observed_at + offset})
+                for item in result.request_timings
+            ),
             "load_ended_at": result.load_ended_at + offset,
             "observations": tuple(
                 item.model_copy(update={"observed_at": item.observed_at + offset})

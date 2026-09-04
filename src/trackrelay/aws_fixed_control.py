@@ -62,6 +62,13 @@ from trackrelay.experiments.elasticity import (
     build_elasticity_manifest,
 )
 from trackrelay.experiments.reconciliation import ReconciliationReport
+from trackrelay.experiments.request_timings import (
+    IngestionTiming,
+    percentile95,
+    read_request_timings,
+    timing_windows,
+    timings_complete,
+)
 from trackrelay.operator_status import (
     PeriodicStatus,
     operator_failure,
@@ -202,6 +209,7 @@ class ElasticityResult(BaseModel):
     observation_failures: tuple[FixedControlObservationFailure, ...]
     drain_stability_confirmed: bool
     reconciliation: ReconciliationReport
+    request_timings: tuple[IngestionTiming, ...] = ()
 
     @model_validator(mode="after")
     def require_consistent_fixed_control(self) -> "ElasticityResult":
@@ -227,6 +235,32 @@ class ElasticityResult(BaseModel):
             self.k6_exit_code == 0
             and self.dropped_iteration_count == 0
             and all(step.ingestion_guardrails_passed for step in self.ingestion_steps)
+            and (
+                self.definition.name != "aws-elasticity-demo-v5"
+                or (
+                    timings_complete(self.request_timings, self.definition)
+                    and all(
+                        self.load_started_at <= item.observed_at <= self.load_ended_at
+                        for item in self.request_timings
+                    )
+                    and all(
+                        percentile95(
+                            item.duration_ms
+                            for item in self.request_timings
+                            if item.step == step.name
+                        )
+                        < 500
+                        and sum(
+                            item.status != 201
+                            for item in self.request_timings
+                            if item.step == step.name
+                        )
+                        / step.expected_request_count
+                        < 0.01
+                        for step in self.definition.steps
+                    )
+                )
+            )
         )
 
     @computed_field
@@ -447,7 +481,10 @@ def evaluate_treatment_guardrails(
     if native_request_count < definition.expected_request_count:
         reasons.append("native_request_count_incomplete")
     maximum_p95_ms = 1000 * max(values["alb_p95_latency"])
-    if maximum_p95_ms >= definition.ingestion_p95_limit_ms:
+    if (
+        definition.name != "aws-elasticity-demo-v5"
+        and maximum_p95_ms >= definition.ingestion_p95_limit_ms
+    ):
         reasons.append("native_ingestion_latency_failed")
     if native_error_percent >= definition.ingestion_error_limit_percent:
         reasons.append("native_ingestion_errors_failed")
@@ -1108,7 +1145,20 @@ def execute_elasticity_workload(
         if treatment is ElasticityTreatment.FIXED
         else ElasticityResult
     )
+    request_timings = ()
+    if definition.name == "aws-elasticity-demo-v5":
+        try:
+            request_timings = read_request_timings(evidence_root / "k6-points.json")
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise AwsFixedControlError(
+                "k6 per-request timing evidence is missing or invalid"
+            ) from error
+        (evidence_root / "request-timing-windows.json").write_text(
+            dumps(timing_windows(request_timings, load_started_at), indent=2) + "\n",
+            encoding="utf-8",
+        )
     result = result_type(
+        request_timings=request_timings,
         test_run_id=manifest.test_run_id,
         definition=definition,
         load_started_at=load_started_at,

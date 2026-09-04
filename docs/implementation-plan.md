@@ -882,7 +882,7 @@ approved session must repeat both treatments together.
   Local checks: 671 default Python tests passed (16 database integration tests
   excluded), all 17 mocked Terraform tests passed, Terraform validation passed,
   and Ruff lint passed.
-- [ ] Validate workload-v4 / policy-v4 autoscaling in a fresh explicitly approved diagnostic
+- [ ] Validate workload-v5 / policy-v5 autoscaling in a fresh explicitly approved diagnostic
   session, then repeat both treatments in one final paired session. A diagnostic
   pass does not supply a fixed-control denominator or an async-versus-sync ratio.
 - [x] Correct the first policy-v4 deployment's transition-input regression:
@@ -892,6 +892,17 @@ approved session must repeat both treatments together.
   stale-validator failure before repair; 691 default Python tests and lint pass
   (16 database integration tests excluded). The failed deployment ran no load
   and does not measure the high-resolution scaling policy.
+- [x] Implement the prospective [short v5 demo contract](aws-elasticity-v5-contract.md):
+  630 seconds and 5,730 events, unchanged 25/s peak, fresh ten-second quiet-timer
+  contraction, raw per-request phase p95 qualification, ten-second latency/count
+  displays, and endpoint/query timing diagnostics. Require 60 observed seconds
+  at eight during peak and 60 at one in recovery; preserve backlog, age, correctness,
+  native evidence and teardown requirements. Earlier failures keep their rules.
+  No AWS session was started; cloud qualification remains pending.
+  Local verification: 704 default Python tests, 17 mocked Terraform tests,
+  Terraform validation, Ruff, 10 executable driver tests and pinned k6 inspection
+  passed. A short real-k6/local-HTTP probe verified the raw request export format;
+  it was not a complete waveform or cloud qualification run.
 - [ ] Verify that workers scale from A to B as load rises, backlog remains bounded and drains, and workers return to A after demand falls.
 - [ ] Freeze the scaling policy, environment, raw aligned time series, reconciliation evidence, and summary in `results/aws-elastic-treatment/`.
 - [ ] Collect both treatments' evidence, destroy the complete session-4 stack, and verify the teardown.

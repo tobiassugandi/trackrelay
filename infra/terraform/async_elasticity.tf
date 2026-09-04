@@ -1,13 +1,15 @@
 locals {
   worker_autoscaling_policy = {
-    policy_version                = 4
+    policy_version                = 5
     maximum_capacity              = 8
     minimum_capacity              = 1
     metric_period_seconds         = 60
     scale_in_messages_per_minute  = 120
     scale_in_queue_work_threshold = 10
     scale_in_cooldown_seconds     = 60
-    scale_in_evaluation_periods   = 3
+    scale_in_evaluation_periods   = 1
+    scale_in_period_seconds       = 10
+    scale_in_quiet_seconds        = 180
     scale_out_messages_per_minute = null
     scale_out_period_seconds      = 10
     scale_out_rate_per_second     = 3
@@ -107,64 +109,28 @@ resource "aws_cloudwatch_metric_alarm" "async_worker_empty" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   datapoints_to_alarm = local.worker_autoscaling_policy.scale_in_evaluation_periods
   evaluation_periods  = local.worker_autoscaling_policy.scale_in_evaluation_periods
-  threshold           = 1
+  threshold           = local.worker_autoscaling_policy.scale_in_quiet_seconds
   treat_missing_data  = "notBreaching"
 
   metric_query {
     id          = "release_safe"
-    expression  = "IF(FILL(sent, 0) < ${local.worker_autoscaling_policy.scale_in_messages_per_minute}, IF(FILL(visible, 0) + FILL(in_flight, 0) + FILL(delayed, 0) < ${local.worker_autoscaling_policy.scale_in_queue_work_threshold}, 1, 0), 0)"
+    expression  = "FILL(quiet, 0)"
+    period      = local.worker_autoscaling_policy.scale_in_period_seconds
     label       = "Low arrivals and low unfinished queue work"
     return_data = true
   }
 
   metric_query {
-    id          = "sent"
+    id          = "quiet"
     return_data = false
     metric {
       dimensions  = { QueueName = aws_sqs_queue.delivery[0].name }
-      metric_name = "NumberOfMessagesSent"
-      namespace   = "AWS/SQS"
-      period      = local.worker_autoscaling_policy.metric_period_seconds
-      stat        = "Sum"
+      metric_name = "QuietSeconds"
+      namespace   = "TrackRelay/Elasticity"
+      period      = local.worker_autoscaling_policy.scale_in_period_seconds
+      stat        = "Minimum"
     }
   }
-
-  metric_query {
-    id          = "visible"
-    return_data = false
-    metric {
-      dimensions  = { QueueName = aws_sqs_queue.delivery[0].name }
-      metric_name = "ApproximateNumberOfMessagesVisible"
-      namespace   = "AWS/SQS"
-      period      = local.worker_autoscaling_policy.metric_period_seconds
-      stat        = "Maximum"
-    }
-  }
-
-  metric_query {
-    id          = "in_flight"
-    return_data = false
-    metric {
-      dimensions  = { QueueName = aws_sqs_queue.delivery[0].name }
-      metric_name = "ApproximateNumberOfMessagesNotVisible"
-      namespace   = "AWS/SQS"
-      period      = local.worker_autoscaling_policy.metric_period_seconds
-      stat        = "Maximum"
-    }
-  }
-
-  metric_query {
-    id          = "delayed"
-    return_data = false
-    metric {
-      dimensions  = { QueueName = aws_sqs_queue.delivery[0].name }
-      metric_name = "ApproximateNumberOfMessagesDelayed"
-      namespace   = "AWS/SQS"
-      period      = local.worker_autoscaling_policy.metric_period_seconds
-      stat        = "Maximum"
-    }
-  }
-
   tags = {
     Name = "${local.name_prefix}-worker-release-safe"
   }

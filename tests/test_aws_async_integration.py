@@ -336,6 +336,7 @@ def test_cloudwatch_collector_requires_dashboard_and_published_native_series(
 ) -> None:
     session = ready_session(tmp_path)
     dimensions = {
+        "scaling_metrics_namespace": "TrackRelay/Elasticity",
         "api_service_name": "trackrelay-12345678-api",
         "cluster_name": "trackrelay-12345678-async",
         "dashboard_name": "trackrelay-12345678-async",
@@ -358,16 +359,12 @@ def test_cloudwatch_collector_requires_dashboard_and_published_native_series(
                 stdout=dumps(
                     {
                         "DashboardName": dimensions["dashboard_name"],
-                        "DashboardBody": dumps(
-                            {"widgets": [{"type": "metric"}] * 7}
-                        ),
+                        "DashboardBody": dumps({"widgets": [{"type": "metric"}] * 7}),
                     }
                 ),
             )
         query_path = Path(
-            command[command.index("--metric-data-queries") + 1].removeprefix(
-                "file://"
-            )
+            command[command.index("--metric-data-queries") + 1].removeprefix("file://")
         )
         queries = loads(query_path.read_text(encoding="utf-8"))
         observed_query_ids.update(query["Id"] for query in queries)

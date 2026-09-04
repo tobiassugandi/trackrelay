@@ -885,6 +885,13 @@ approved session must repeat both treatments together.
 - [ ] Validate workload-v4 / policy-v4 autoscaling in a fresh explicitly approved diagnostic
   session, then repeat both treatments in one final paired session. A diagnostic
   pass does not supply a fixed-control denominator or an async-versus-sync ratio.
+- [x] Correct the first policy-v4 deployment's transition-input regression:
+  share the extended observability-output schema across transition, fixed,
+  reset and both metric collectors. Exercise current Terraform-shaped outputs
+  in controller tests while retaining legacy-schema coverage. Reproduced the
+  stale-validator failure before repair; 691 default Python tests and lint pass
+  (16 database integration tests excluded). The failed deployment ran no load
+  and does not measure the high-resolution scaling policy.
 - [ ] Verify that workers scale from A to B as load rises, backlog remains bounded and drains, and workers return to A after demand falls.
 - [ ] Freeze the scaling policy, environment, raw aligned time series, reconciliation evidence, and summary in `results/aws-elastic-treatment/`.
 - [ ] Collect both treatments' evidence, destroy the complete session-4 stack, and verify the teardown.

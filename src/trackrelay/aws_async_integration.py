@@ -25,6 +25,7 @@ from trackrelay.aws_async_deployment import (
     run_process,
     terraform_output,
 )
+from trackrelay.aws_observability_inputs import valid_async_observability_dimensions
 from trackrelay.aws_session import (
     AwsSession,
     AwsSessionError,
@@ -671,24 +672,7 @@ def collect_async_cloudwatch_evidence(
         runner=runner,
         json_output=True,
     )
-    required_keys = {
-        "api_service_name",
-        "cluster_name",
-        "dashboard_name",
-        "dead_letter_queue_name",
-        "delivery_queue_name",
-        "load_balancer_dimension",
-        "rds_identifier",
-        "simulator_service_name",
-        "worker_service_name",
-    }
-    if (
-        not isinstance(raw_dimensions, dict)
-        or set(raw_dimensions) - {"scaling_metrics_namespace"} != required_keys
-        or not all(
-            isinstance(value, str) and value for value in raw_dimensions.values()
-        )
-    ):
+    if not valid_async_observability_dimensions(raw_dimensions):
         raise AwsAsyncIntegrationError(
             "Terraform returned invalid CloudWatch dimensions"
         )

@@ -164,6 +164,7 @@ def test_parser_requires_every_overlapping_native_bucket() -> None:
 
 def test_collector_retries_until_full_window_is_published(tmp_path: Path) -> None:
     aws_session = session(tmp_path)
+    dimensions = {**DIMENSIONS, "scaling_metrics_namespace": "TrackRelay/Elasticity"}
     responses = [
         metric_response(omit_last_bucket_for="rds_cpu"),
         metric_response(),
@@ -174,7 +175,16 @@ def test_collector_retries_until_full_window_is_published(tmp_path: Path) -> Non
     def runner(arguments: Sequence[str], _input: str | None):
         command = tuple(arguments)
         if command[-1] == "async_observability_dimensions":
-            return completed(command, stdout=dumps(DIMENSIONS))
+            return completed(command, stdout=dumps(dimensions))
+        if (
+            "describe-alarm-history" in command
+            or "describe-scaling-activities" in command
+        ):
+            return completed(command, stdout="{}")
+        if "--metric-data-queries" in command and not command[
+            command.index("--metric-data-queries") + 1
+        ].startswith("file://"):
+            return completed(command, stdout='{"MetricDataResults": []}')
         if "get-dashboard" in command:
             return completed(
                 command,
@@ -228,6 +238,10 @@ def test_collector_retries_until_full_window_is_published(tmp_path: Path) -> Non
     )
     assert (root / "attempt-02.json").read_text() == metric_response()
     assert loads((root / "collection-status.json").read_text())["complete"]
+    scaling_root = (
+        aws_session.evidence_dir / "diagnostics" / "scaling" / str(TEST_RUN_ID)
+    )
+    assert loads((scaling_root / "collection.json").read_text())["complete"]
 
 
 def test_permanent_simulator_metric_gap_is_preserved_and_not_filled(tmp_path):

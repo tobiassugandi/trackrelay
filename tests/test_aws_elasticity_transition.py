@@ -744,8 +744,9 @@ def test_native_verification_requires_alarm_policy_wiring(tmp_path: Path) -> Non
 
 
 @mark.parametrize("diagnostic", (False, True))
+@mark.parametrize("high_resolution", (False, True))
 def test_transition_applies_the_saved_policy_only_plan(
-    tmp_path: Path, diagnostic
+    tmp_path: Path, diagnostic, high_resolution
 ) -> None:
     session = ready_session(tmp_path)
     if diagnostic:
@@ -773,6 +774,11 @@ def test_transition_applies_the_saved_policy_only_plan(
             name = call[4]
             outputs = {
                 "async_observability_dimensions": {
+                    **(
+                        {"scaling_metrics_namespace": "TrackRelay/Elasticity"}
+                        if high_resolution
+                        else {}
+                    ),
                     "api_service_name": "trackrelay-8a7e37db-api",
                     "cluster_name": CLUSTER_NAME,
                     "dashboard_name": "trackrelay-8a7e37db-async",

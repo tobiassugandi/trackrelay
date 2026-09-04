@@ -26,6 +26,7 @@ from trackrelay.aws_async_deployment import (
     run_process,
     terraform_output,
 )
+from trackrelay.aws_observability_inputs import valid_async_observability_dimensions
 from trackrelay.aws_scaling_diagnostics import collect_scaling_diagnostics
 from trackrelay.aws_session import AwsSession
 from trackrelay.operator_status import operator_status
@@ -322,19 +323,6 @@ def metric_definitions(
     )
 
 
-REQUIRED_DIMENSION_KEYS = {
-    "api_service_name",
-    "cluster_name",
-    "dashboard_name",
-    "dead_letter_queue_name",
-    "delivery_queue_name",
-    "load_balancer_dimension",
-    "rds_identifier",
-    "simulator_service_name",
-    "worker_service_name",
-}
-
-
 def _floor_minute(value: datetime) -> datetime:
     timestamp = value.astimezone(UTC).timestamp()
     return datetime.fromtimestamp(floor(timestamp / 60) * 60, UTC)
@@ -366,11 +354,7 @@ def build_elasticity_metric_queries(
     dimensions: Mapping[str, str],
 ) -> list[dict[str, object]]:
     """Build native queries, explicitly filling only sparse zero semantics."""
-    if set(dimensions) - {
-        "scaling_metrics_namespace"
-    } != REQUIRED_DIMENSION_KEYS or not all(
-        isinstance(value, str) and value for value in dimensions.values()
-    ):
+    if not valid_async_observability_dimensions(dimensions):
         raise AwsElasticityCloudWatchError(
             "Terraform returned invalid elasticity metric dimensions"
         )

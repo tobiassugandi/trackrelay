@@ -417,3 +417,23 @@ artifacts were rewritten and no new AWS run was started for these corrections.
 Local validation passed 655 default Python tests (16 integration tests excluded),
 lint, 10 executable JavaScript tests and the pinned k6 inspection. A complete
 21-minute real-HTTP replay was not run for this change.
+
+## Policy-v4 transition input regression — 2026-09-04 08:59 UTC
+
+Session `cloud-session-4-20260904T084747Z` completed deployment but stopped
+before autoscaling apply or workload execution with `Terraform returned invalid
+inputs`. Policy v4 introduced `scaling_metrics_namespace` in the shared Terraform
+observability output. The transition controller still required exactly the old
+nine fields; fixed-control preparation and experiment reset had the same stale
+validator. The initial policy-v4 tests used old-shape mocked outputs and missed
+this incompatibility. This attempt is not evidence about scaling response time.
+
+All five consumers now use one shared validator accepting either the historical
+native-only schema or the exact `TrackRelay/Elasticity` extension. Required
+identities, nonempty string values, unexpected-field rejection and resource-level
+checks remain enforced. Controller tests now exercise the extended Terraform
+output, both diagnostic and paired transition paths, fixed-control preparation,
+reset and both metric collectors. The regression was reproduced before the fix.
+No AWS operations or retries were initiated by this repair; the operator-owned
+session continues its unconditional cleanup. Check its final manifest and native
+inventory before approving any fresh session.

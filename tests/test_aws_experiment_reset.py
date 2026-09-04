@@ -190,6 +190,7 @@ def preparation_runner(arguments: Sequence[str], _input: str | None):
         "delivery_dead_letter_queue_url": DLQ_URL,
         "async_observability_dimensions": dumps(
             {
+                "scaling_metrics_namespace": "TrackRelay/Elasticity",
                 "api_service_name": "trackrelay-8a7e37db-api",
                 "cluster_name": CLUSTER_NAME,
                 "dashboard_name": "trackrelay-8a7e37db-async",

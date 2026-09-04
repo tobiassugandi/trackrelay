@@ -27,6 +27,7 @@ from trackrelay.aws_async_deployment import (
     terraform_output,
 )
 from trackrelay.aws_fixed_control import FixedControlSummary
+from trackrelay.aws_observability_inputs import valid_async_observability_dimensions
 from trackrelay.aws_session import (
     AwsSession,
     AwsSessionError,
@@ -640,20 +641,7 @@ def _prepare_reset(
         or not _valid_queue_url(source_queue_url, region=session.region)
         or not isinstance(dead_letter_queue_url, str)
         or not _valid_queue_url(dead_letter_queue_url, region=session.region)
-        or not isinstance(dimensions, dict)
-        or set(dimensions)
-        != {
-            "api_service_name",
-            "cluster_name",
-            "dashboard_name",
-            "dead_letter_queue_name",
-            "delivery_queue_name",
-            "load_balancer_dimension",
-            "rds_identifier",
-            "simulator_service_name",
-            "worker_service_name",
-        }
-        or not all(isinstance(value, str) and value for value in dimensions.values())
+        or not valid_async_observability_dimensions(dimensions)
         or not isinstance(dimensions.get("cluster_name"), str)
         or CLUSTER_NAME_PATTERN.fullmatch(dimensions["cluster_name"]) is None
         or not isinstance(dimensions.get("worker_service_name"), str)

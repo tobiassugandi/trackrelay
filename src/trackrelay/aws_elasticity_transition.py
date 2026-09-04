@@ -311,13 +311,12 @@ class ElasticityTransitionObservation(BaseModel):
         )
 
 
-class ElasticityTransitionEvidence(BaseModel):
-    """Complete proof that only the worker policy changed between treatments."""
+class WorkerPolicyTransitionEvidence(BaseModel):
+    """Complete proof of a policy-only change around an empty deployment."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[1] = 1
-    reset_fixed_test_run_id: UUID
     policy: WorkerAutoscalingPolicy
     plan: ElasticityTransitionPlanEvidence
     pre_apply: ElasticityTransitionObservation
@@ -327,7 +326,7 @@ class ElasticityTransitionEvidence(BaseModel):
     verified_at: AwareDatetime
 
     @model_validator(mode="after")
-    def require_isolated_verified_change(self) -> "ElasticityTransitionEvidence":
+    def require_isolated_verified_change(self) -> "WorkerPolicyTransitionEvidence":
         if not self.pre_apply.empty_at_minimum or not self.post_apply.empty_at_minimum:
             raise ValueError("autoscaling transition changed treatment state")
         if not self.native.matches(self.policy):
@@ -335,6 +334,19 @@ class ElasticityTransitionEvidence(BaseModel):
         if self.verified_at < self.applied_at:
             raise ValueError("autoscaling verification precedes apply")
         return self
+
+
+class ElasticityTransitionEvidence(WorkerPolicyTransitionEvidence):
+    """Paired evidence must retain its real fixed-control reset identity."""
+
+    reset_fixed_test_run_id: UUID
+
+
+class DiagnosticTransitionEvidence(WorkerPolicyTransitionEvidence):
+    """Fresh-deployment diagnostic proof, never a paired reset substitute."""
+
+    kind: Literal["elastic-only-diagnostic"] = "elastic-only-diagnostic"
+    reset_fixed_test_run_id: None = None
 
 
 def _expected_policy(
@@ -1110,15 +1122,29 @@ def execute_elasticity_transition(
     session: AwsSession,
     *,
     manifest: dict[str, object],
-    reset_result: ExperimentResetResult,
+    reset_result: ExperimentResetResult | None,
     runner: ProcessRunner = run_process,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     policy_verifier: Callable[..., WorkerAutoscalingVerification] = (
         verify_native_worker_autoscaling
     ),
     client: httpx.Client | None = None,
-) -> ElasticityTransitionEvidence:
+) -> ElasticityTransitionEvidence | DiagnosticTransitionEvidence:
     """Plan, apply, and natively prove the exact policy-only intervention."""
+    diagnostic = reset_result is None
+    if diagnostic:
+        journal = manifest.get("elasticity_diagnostic_session")
+        if (
+            manifest.get("status") != "async_deployed"
+            or not isinstance(journal, dict)
+            or journal.get("kind") != "elastic-only-diagnostic"
+            or journal.get("phase") != "transition"
+            or journal.get("headline_eligible") is not False
+            or any(key in manifest for key in ("fixed_control", "experiment_reset"))
+        ):
+            raise AwsSessionError(
+                "diagnostic transition requires a fresh diagnostic deployment"
+            )
     _current, revision = require_clean_approved_revision(session, runner=runner)
     dimensions = terraform_output(
         session,
@@ -1209,7 +1235,10 @@ def execute_elasticity_transition(
         worker_service_name=worker_service_name,
         queue_name=queue_name,
     )
-    evidence_root = session.evidence_dir / "elasticity" / "transition"
+    relative_root = (
+        "elasticity/diagnostic/transition" if diagnostic else "elasticity/transition"
+    )
+    evidence_root = session.evidence_dir / relative_root
     evidence_root.mkdir(parents=True, exist_ok=False)
     client_context = (
         client if client is not None else httpx.Client(base_url=api_url, timeout=10)
@@ -1269,7 +1298,7 @@ def execute_elasticity_transition(
         )
         manifest["worker_autoscaling_transition"] = {
             "git_revision": revision,
-            "plan": "elasticity/transition/plan-evidence.json",
+            "plan": f"{relative_root}/plan-evidence.json",
             "plan_sha256": plan_digest,
             "unconditional_teardown_armed": True,
         }
@@ -1339,8 +1368,13 @@ def execute_elasticity_transition(
             runner=runner,
             observed_at=now(),
         )
-        evidence = ElasticityTransitionEvidence(
-            reset_fixed_test_run_id=reset_result.fixed_test_run_id,
+        evidence_type = (
+            DiagnosticTransitionEvidence if diagnostic else ElasticityTransitionEvidence
+        )
+        evidence = evidence_type(
+            reset_fixed_test_run_id=(
+                reset_result.fixed_test_run_id if reset_result is not None else None
+            ),
             policy=expected_policy,
             plan=plan_evidence,
             pre_apply=pre_apply,

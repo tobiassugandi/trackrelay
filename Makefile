@@ -288,12 +288,31 @@ aws-experiment-reset:
 		--approved-cost-ceiling-usd "$(APPROVED_COST_CEILING_USD)" \
 		--approved-unconditional-teardown-session-id "$(APPROVED_UNCONDITIONAL_TEARDOWN_SESSION_ID)"
 
-.PHONY: aws-elastic-treatment aws-elasticity-report aws-elasticity-session elasticity-session-check
+.PHONY: aws-elastic-treatment aws-elasticity-diagnostic aws-elasticity-report aws-elasticity-session elasticity-session-check
 elasticity-session-check:
 	$(UV) run --locked pytest tests/test_aws_elasticity_session.py
 
+.PHONY: elasticity-diagnostic-check
+elasticity-diagnostic-check:
+	$(UV) run --locked pytest tests/test_aws_elasticity_diagnostic.py tests/test_aws_elasticity_transition.py
+
 aws-elasticity-session:
 	$(UV) run --locked trackrelay-aws-elasticity-session \
+		--session-id "$(SESSION_ID)" \
+		--profile "$(TRACKRELAY_AWS_PROFILE)" \
+		--region "$(TRACKRELAY_AWS_REGION)" \
+		--api-ingress-cidr "$(API_INGRESS_CIDR)" \
+		--deployment-mode async \
+		--rehost-instance-type "$(REHOST_INSTANCE_TYPE)" \
+		--terraform-dir "$(TERRAFORM_DIR)" \
+		--evidence-root "$(AWS_SESSION_RESULTS)" \
+		--approved-session-id "$(APPROVED_SESSION_ID)" \
+		--approved-cost-ceiling-usd "$(APPROVED_COST_CEILING_USD)" \
+		--approved-unconditional-teardown-session-id "$(APPROVED_UNCONDITIONAL_TEARDOWN_SESSION_ID)" \
+		--monthly-budget-usd "$(AWS_MONTHLY_BUDGET_USD)"
+
+aws-elasticity-diagnostic:
+	$(UV) run --locked trackrelay-aws-elasticity-diagnostic \
 		--session-id "$(SESSION_ID)" \
 		--profile "$(TRACKRELAY_AWS_PROFILE)" \
 		--region "$(TRACKRELAY_AWS_REGION)" \

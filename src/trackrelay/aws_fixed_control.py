@@ -1179,8 +1179,15 @@ def _prepare_fixed_control(
     definition: ElasticityWorkloadDefinition,
     runner: ProcessRunner,
     treatment: ElasticityTreatment = ElasticityTreatment.FIXED,
+    evidence_name: Literal["fixed", "elastic", "diagnostic"] | None = None,
 ) -> tuple[str, str, str, str, str, Path]:
     """Validate fixed capacity, resolve endpoints, and arm the control."""
+    resolved_evidence_name = evidence_name or treatment.value
+    if (
+        resolved_evidence_name == "diagnostic"
+        and treatment is not ElasticityTreatment.ELASTIC
+    ):
+        raise AwsFixedControlError("diagnostic evidence requires elastic treatment")
     _current, revision = require_clean_approved_revision(session, runner=runner)
     api_url = terraform_output(session, "async_api_url", runner=runner)
     source_queue_url = terraform_output(session, "delivery_queue_url", runner=runner)
@@ -1265,24 +1272,36 @@ def _prepare_fixed_control(
         or capacity["worker"]["service_name"] != dimensions["worker_service_name"]
     ):
         raise AwsFixedControlError("Terraform returned inconsistent fixed control")
-    evidence_root = session.evidence_dir / "elasticity" / treatment.value
+    evidence_root = session.evidence_dir / "elasticity" / resolved_evidence_name
+    if resolved_evidence_name == "diagnostic":
+        evidence_root = evidence_root / "elastic"
     evidence_root.mkdir(parents=True, exist_ok=False)
+    manifest_key = (
+        "elastic_diagnostic"
+        if resolved_evidence_name == "diagnostic"
+        else (
+            "fixed_control"
+            if treatment is ElasticityTreatment.FIXED
+            else "elastic_treatment"
+        )
+    )
+    armed_status = (
+        "elastic_diagnostic_armed"
+        if resolved_evidence_name == "diagnostic"
+        else (
+            "fixed_control_armed"
+            if treatment is ElasticityTreatment.FIXED
+            else "elastic_treatment_armed"
+        )
+    )
     manifest.update(
         {
-            (
-                "fixed_control"
-                if treatment is ElasticityTreatment.FIXED
-                else "elastic_treatment"
-            ): {
+            manifest_key: {
                 "definition": definition.model_dump(mode="json"),
                 "git_revision": revision,
                 "unconditional_teardown_armed": True,
             },
-            "status": (
-                "fixed_control_armed"
-                if treatment is ElasticityTreatment.FIXED
-                else "elastic_treatment_armed"
-            ),
+            "status": armed_status,
         }
     )
     write_manifest(session, manifest)

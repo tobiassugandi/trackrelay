@@ -8,7 +8,7 @@ from subprocess import CompletedProcess
 from uuid import UUID
 
 import httpx
-from pytest import MonkeyPatch, raises
+from pytest import MonkeyPatch, mark, raises
 
 from trackrelay.aws_elasticity_transition import (
     AwsElasticityTransitionError,
@@ -702,8 +702,21 @@ def test_native_verification_requires_alarm_policy_wiring(tmp_path: Path) -> Non
     assert verified.matches(expected)
 
 
-def test_transition_applies_the_saved_policy_only_plan(tmp_path: Path) -> None:
+@mark.parametrize("diagnostic", (False, True))
+def test_transition_applies_the_saved_policy_only_plan(
+    tmp_path: Path, diagnostic
+) -> None:
     session = ready_session(tmp_path)
+    if diagnostic:
+        manifest = load_manifest(session)
+        manifest.pop("experiment_reset")
+        manifest["status"] = "async_deployed"
+        manifest["elasticity_diagnostic_session"] = {
+            "kind": "elastic-only-diagnostic",
+            "phase": "transition",
+            "headline_eligible": False,
+        }
+        write_manifest(session, manifest)
     expected = policy()
     calls: list[tuple[str, ...]] = []
     plan_json = dumps(plan_document(expected))
@@ -790,7 +803,7 @@ def test_transition_applies_the_saved_policy_only_plan(tmp_path: Path) -> None:
         evidence = execute_elasticity_transition(
             session,
             manifest=load_manifest(session),
-            reset_result=reset_result(),
+            reset_result=None if diagnostic else reset_result(),
             runner=runner,
             now=lambda: STARTED_AT + timedelta(minutes=2),
             policy_verifier=lambda *_args, **_kwargs: native_verification(expected),
@@ -802,9 +815,22 @@ def test_transition_applies_the_saved_policy_only_plan(tmp_path: Path) -> None:
     apply_call = next(call for call in calls if len(call) > 2 and call[2] == "apply")
     assert apply_call[-1].endswith("terraform-autoscaling.tfplan")
     assert evidence.policy.maximum_capacity == 8
-    assert (
-        session.evidence_dir / "elasticity" / "transition" / "evidence.json"
-    ).is_file()
+    path = "elasticity/diagnostic/transition" if diagnostic else "elasticity/transition"
+    assert (session.evidence_dir / path / "evidence.json").is_file()
+    assert (evidence.reset_fixed_test_run_id is None) is diagnostic
+
+
+def test_null_reset_cannot_bypass_paired_transition_approval(tmp_path):
+    session = ready_session(tmp_path)
+    calls = []
+    with raises(AwsSessionError, match="fresh diagnostic deployment"):
+        execute_elasticity_transition(
+            session,
+            manifest=load_manifest(session),
+            reset_result=None,
+            runner=lambda *args: calls.append(args),
+        )
+    assert not calls
 
 
 def test_success_leaves_stack_for_elastic_replay(

@@ -854,6 +854,18 @@ approved session must repeat both treatments together.
   2026-09-03 22:41:47 UTC with empty Terraform state and all native categories
   zero.
 - [ ] Replay the fixed-control workload without changing the application, task definition, API capacity, database, simulator, benchmark driver, SLO, or guardrails.
+- [x] Add a separate elastic-only candidate-v3 diagnostic workflow for policy
+  development: fresh approved deployment, proven-empty policy-only transition,
+  full elastic workload and unchanged qualification gates, retained isolated
+  evidence, and unconditional verified teardown. Skip fixed load and reset
+  without fabricating their evidence. Explicitly reject diagnostic sessions in
+  paired reporting. Local validation: 649 default Python tests passed, including
+  diagnostic failure/interrupt cleanup and real controller handoffs with mocked
+  external work; lint passed. The 16 database integration tests were excluded.
+  See `docs/aws-elasticity-diagnostic-runbook.md`.
+- [ ] Validate candidate-v3 autoscaling in a fresh explicitly approved diagnostic
+  session, then repeat both treatments in one final paired session. A diagnostic
+  pass does not supply a fixed-control denominator or an async-versus-sync ratio.
 - [ ] Verify that workers scale from A to B as load rises, backlog remains bounded and drains, and workers return to A after demand falls.
 - [ ] Freeze the scaling policy, environment, raw aligned time series, reconciliation evidence, and summary in `results/aws-elastic-treatment/`.
 - [ ] Collect both treatments' evidence, destroy the complete session-4 stack, and verify the teardown.

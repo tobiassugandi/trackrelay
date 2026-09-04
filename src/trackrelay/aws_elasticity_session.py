@@ -168,7 +168,11 @@ def validate_elasticity_session_approval(
     if ceiling > budget:
         raise AwsSessionError("approved cost ceiling exceeds the monthly budget")
     manifest = load_manifest(session)
-    if manifest.get("status") != "planned" or "elasticity_session" in manifest:
+    if (
+        manifest.get("status") != "planned"
+        or "elasticity_session" in manifest
+        or "elasticity_diagnostic_session" in manifest
+    ):
         raise AwsSessionError(
             "session must start from a fresh reviewed plan, not a partial run"
         )

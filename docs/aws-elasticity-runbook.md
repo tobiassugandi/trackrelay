@@ -5,6 +5,11 @@ stack once, measures one fixed worker, resets application state, enables only
 worker autoscaling, replays the identical workload, destroys the stack, verifies
 absence, and builds the comparison from saved evidence with AWS off.
 
+For autoscaling development without repeating the fixed-worker load, use the
+[elastic-only diagnostic runbook](aws-elasticity-diagnostic-runbook.md). Its
+separate command retains all elastic guardrails and teardown but cannot produce
+a paired comparison or multiplier. Return here for the final paired run.
+
 This runbook is not cloud authorization or a measured result. Session 4 still
 requires explicit approval of the session ID, region, complete staged resource
 list, expected duration, cost ceiling, and unconditional teardown.
@@ -14,12 +19,15 @@ have a separate Terraform-owned group, created before the cluster and deleted
 after it. Native verification checks this namespace independently of application
 logs, and comparison reports require that new inventory entry. See the
 [resource/cost review](aws-elasticity-cost-review.md) for the discovery and cleanup
-audit. Six attempts have since run and been torn down. The sixth completed both
+audit. Seven attempts have since run and been torn down. The sixth completed both
 candidate-v2 treatments with correct delivery and a one-to-eight-to-one worker
 transition, but exceeded the frozen backlog bound and returned to one too late
 in the workload to qualify. Candidate v3 is now frozen locally with a longer
-waveform, demand-based scale-out, and demand-plus-queue-work scale-in. It has not
-run in AWS.
+waveform, demand-based scale-out, and demand-plus-queue-work scale-in. Its first
+fixed attempt delivered and drained all 10,680 events but timed out during
+reconciliation; that implementation defect is corrected locally. Teardown was
+recovered and verified after reauthentication. The v3 elastic treatment has not
+yet been validated in AWS.
 See the [incident record](aws-elasticity-session-4-incident.md).
 
 ## Workflow and ownership

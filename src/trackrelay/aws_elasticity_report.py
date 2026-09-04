@@ -603,6 +603,10 @@ def load_comparison_evidence(root: Path):
     """Verify the completed local evidence chain without AWS, Terraform, or Git calls."""
     saved = SavedEvidence(root)
     manifest = saved.json("session.json")
+    if "elasticity_diagnostic_session" in manifest or "elastic_diagnostic" in manifest:
+        raise ElasticityReportError(
+            "elastic-only diagnostic evidence cannot produce a paired comparison"
+        )
     if (
         manifest.get("status") != "teardown_verified"
         or manifest.get("deployment_mode") != "async"

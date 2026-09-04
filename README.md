@@ -1,10 +1,16 @@
 # TrackRelay
 
-### More traffic. More workers. Fewer workers when traffic falls.
+### Elastic: More traffic, more workers. Fewer workers when traffic falls.
 
 TrackRelay is a shipment-event gateway: it turns courier updates into a consistent
 event stream for an order-management system. This project shows how moving
 delivery work behind a queue lets cloud compute **expand and contract with demand**.
+
+![TrackRelay architecture: courier updates pass through a load balancer and fixed-capacity API into a PostgreSQL transactional outbox and SQS queue. Fargate workers deliver events downstream, with CloudWatch demand and unfinished-work signals controlling worker autoscaling.](docs/assets/trackrelay-architecture.png)
+
+The API accepts and durably records updates; the queue lets delivery workers
+scale independently. As demand rises and falls, the scaling policy changes
+worker capacity—the behavior measured below.
 
 **In a 10½-minute AWS experiment, traffic rose from 1 to 25 events/second.
 Workers automatically scaled from 1 → 8 → 1, and all 5,730 events were delivered.**

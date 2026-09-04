@@ -6,6 +6,11 @@ estimate in USD, not a bill, a hard spending cap, or an elasticity result.
 
 ## Proposed operating envelope
 
+V6 amendment: no new cloud resources or custom metric identities. The local
+k6 driver preallocates five VUs per offered event/s (125 at peak); review laptop
+CPU/memory and connection overhead. Existing per-request logs gain timing spans,
+so their byte volume increases. AWS approval and cost ceilings are unchanged.
+
 Policy-v5 addendum (2026-09-04): new runs publish six custom high-resolution
 CloudWatch metric identities and use two ten-second alarms. Each API replica
 makes one batched PutMetricData request and one SQS GetQueueAttributes request

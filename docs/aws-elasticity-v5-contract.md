@@ -1,5 +1,8 @@
 # Short elasticity demonstration: workload v5 / policy v5
 
+Historical contract: new runs now use the [v6 amendment](aws-elasticity-v6-contract.md).
+The v5 rules below remain unchanged for v5 evidence.
+
 This is the pre-data contract for **new** runs. It does not reclassify any previous
 failure or authorize AWS spending. The same profile is used by the elastic-only
 diagnostic and by both treatments of the final paired experiment. Diagnostic

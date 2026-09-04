@@ -904,6 +904,18 @@ approved session must repeat both treatments together.
   passed. A short real-k6/local-HTTP probe verified the raw request export format;
   it was not a complete waveform or cloud qualification run.
 - [ ] Verify that workers scale from A to B as load rises, backlog remains bounded and drains, and workers return to A after demand falls.
+- [x] Implement the prospective [v6 amendment](aws-elasticity-v6-contract.md):
+  bounded five-second driver concurrency headroom at unchanged offered rates,
+  live 60-second service-count recovery with timestamped native corroboration,
+  and per-request lookup/persistence/publication timing spans. Keep v5 rejection
+  semantics, all scheduling/correctness/SLO bounds and the 630-second waveform.
+  Session `cloud-session-4-20260904T104239Z` remains rejected; its teardown was
+  verified at 2026-09-04 11:17:15 UTC. No new cloud run started.
+  Local verification: 710 default Python tests and 11 executable driver tests
+  passed, with lint and pinned k6 inspection. A real-k6/local-receiver stall
+  probe reproduced 82 dropped arrivals under v5, while v6 sent all 500 unique
+  requests with zero drops and retained the injected ~4.3-second latency spike.
+  The original saved v5 diagnostic still validates with both rejection reasons.
 - [ ] Freeze the scaling policy, environment, raw aligned time series, reconciliation evidence, and summary in `results/aws-elastic-treatment/`.
 - [ ] Collect both treatments' evidence, destroy the complete session-4 stack, and verify the teardown.
 

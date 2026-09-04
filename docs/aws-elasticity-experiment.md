@@ -31,11 +31,11 @@ below 1%, complete request scheduling, every accepted event, zero duplicate
 business effects, correct final shipment states, an empty DLQ, and the frozen
 drain contract. API latency alone cannot establish sustainable end-to-end load.
 
-## Demo workload v5
+## Demo workload v6
 
 The authoritative prospective rules are in the
-[v5 workload and measurement contract](aws-elasticity-v5-contract.md).
-`aws-elasticity-demo-v5` schedules **5,730 unique events over 630 seconds**:
+[v6 amendment](aws-elasticity-v6-contract.md) to the v5 measurement contract.
+`aws-elasticity-demo-v6` schedules **5,730 unique events over 630 seconds**:
 rates `1/5/10/25/10/5/1` for `30/30/30/180/30/30/300` seconds.
 It shortens duration, not peak demand. Both paired treatments use this definition.
 
@@ -304,7 +304,8 @@ The pre-data elastic contract adds these explicit qualification bounds:
   without actual running workers does not pass.
 - During the five-minute low-rate recovery, the sampled one-worker suffix must
   last at least 60 seconds and reach within 30 seconds of the waveform's end.
-  The last complete native recovery minute must also show one running worker.
+  V6 requires the latest native point within the live suffix to show one running
+  worker; the final bucket may be partial. V5 retains its complete-minute rule.
   Returning to one only after traffic stops does not pass.
 - Observation gaps above 30 seconds, missing API-pool coverage, any observed
   DLQ messages, incomplete scheduling, correctness failures, or any shared
@@ -369,7 +370,7 @@ provenance refuses publication. Output is staged before publication, and an
 existing report directory is never overwritten. To regenerate after a local
 reporting change, select a fresh `ELASTICITY_REPORT_OUTPUT` directory.
 
-### Frozen short-step support method v2 (workload-v5 window amendment)
+### Frozen short-step support method v3 (workload-v6 recovery amendment)
 
 Passing the elastic waveform and demonstrating a higher supported rate are
 separate claims. A low ingestion latency by itself establishes neither. The
@@ -380,8 +381,8 @@ report evaluates both treatments using the same pre-data method:
   from actual post-load samples, within the unchanged 1,200-second deadline.
 - For each plateau, use the first and last actual samples inside its scheduled
   window. Each edge must be covered within 30 seconds, gaps must not exceed 30
-  seconds, and for v5 the span must be at least the greater of 10 seconds and
-  plateau duration minus 60 seconds. Historical profiles keep the 30-second
+  seconds, and for v5/v6 the span must be at least the greater of 10 seconds and
+  plateau duration minus 60 seconds. Pre-v5 profiles keep the 30-second
   minimum. Retain the exact sampled interval in the report.
 - Require completed-event throughput at least equal to the offered rate over
   that interval and non-growing outstanding accepted events. Apply the same

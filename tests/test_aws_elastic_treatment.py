@@ -357,6 +357,76 @@ def test_fractional_minute_launch_uses_last_complete_recovery_bucket():
     ).qualified
 
 
+@mark.parametrize("version,accepted", (("v5", False), ("v6", True)))
+def test_short_recovery_partial_native_bucket_is_prospectively_versioned(
+    version, accepted
+):
+    result = elastic_result()
+    result = result.model_copy(
+        update={
+            "definition": result.definition.model_copy(
+                update={"name": f"aws-elasticity-demo-{version}"}
+            ),
+            "observations": tuple(
+                item.model_copy(
+                    update={"worker_running_count": 8, "worker_desired_count": 8}
+                )
+                if 60 <= item.seconds_after_load_started < 560
+                else item
+                for item in result.observations
+            ),
+        }
+    )
+    cloudwatch = elastic_cloudwatch(result)
+    cloudwatch = cloudwatch.model_copy(
+        update={
+            "series": tuple(
+                series.model_copy(
+                    update={
+                        "datapoints": tuple(
+                            point.model_copy(update={"value": 8})
+                            if (
+                                point.interval_started_at - result.load_started_at
+                            ).total_seconds()
+                            == 540
+                            else point
+                            for point in series.datapoints
+                        )
+                    }
+                )
+                if series.query_id == "worker_running_tasks"
+                else series
+                for series in cloudwatch.series
+            )
+        }
+    )
+    qualification = evaluate_elastic_treatment(result, cloudwatch, policy=policy())
+    assert qualification.returned_to_minimum_during_recovery is accepted
+    assert qualification.qualified is accepted
+    if accepted:
+        # No native corroboration, or only a short live suffix, still fails.
+        assert not evaluate_elastic_treatment(
+            result,
+            changed_series(cloudwatch, "worker_running_tasks", 8),
+            policy=policy(),
+        ).returned_to_minimum_during_recovery
+        short = result.model_copy(
+            update={
+                "observations": tuple(
+                    item.model_copy(
+                        update={"worker_running_count": 8, "worker_desired_count": 8}
+                    )
+                    if 560 <= item.seconds_after_load_started < 580
+                    else item
+                    for item in result.observations
+                )
+            }
+        )
+        assert not evaluate_elastic_treatment(
+            short, cloudwatch, policy=policy()
+        ).returned_to_minimum_during_recovery
+
+
 def test_misaligned_native_window_is_not_qualified():
     with raises(ValueError, match="misaligned"):
         evaluate_elastic_treatment(

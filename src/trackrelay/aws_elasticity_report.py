@@ -113,9 +113,11 @@ class ElasticityComparisonReport(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[1] = 1
-    method: Literal["short-plateau-completion-v1", "short-plateau-completion-v2"] = (
-        "short-plateau-completion-v1"
-    )
+    method: Literal[
+        "short-plateau-completion-v1",
+        "short-plateau-completion-v2",
+        "short-plateau-completion-v3",
+    ] = "short-plateau-completion-v1"
     generated_at: AwareDatetime
     session_id: str
     region: str
@@ -316,7 +318,7 @@ def _step_results(
             or end - last.seconds_after_load_started > MAXIMUM_GAP_SECONDS
             or last.seconds_after_load_started - first.seconds_after_load_started
             < max(
-                10 if result.definition.name == "aws-elasticity-demo-v5" else 30,
+                10 if result.definition.uses_request_timings else 30,
                 step.duration_seconds - 2 * MAXIMUM_GAP_SECONDS,
             )
         ):
@@ -507,8 +509,10 @@ def build_comparison(
         conclusion += " A supported-step rate multiplier is not established."
     return ElasticityComparisonReport(
         method=(
-            "short-plateau-completion-v2"
-            if fixed.measurement.definition.name == "aws-elasticity-demo-v5"
+            "short-plateau-completion-v3"
+            if fixed.measurement.definition.name == "aws-elasticity-demo-v6"
+            else "short-plateau-completion-v2"
+            if fixed.measurement.definition.uses_request_timings
             else "short-plateau-completion-v1"
         ),
         generated_at=now(),
@@ -1009,10 +1013,10 @@ def render_markdown(report: ElasticityComparisonReport) -> str:
                 "backlog together demonstrate observed processing support, not per-event delivery latency. "
                 "Scaling and drain times are first observed samples, not exact transition timestamps. "
                 "Native p95 values retain their true 60-second buckets; driver p95 is reported per step, never averaged."
-                " Demo v5 gates each phase on complete individual ingestion samples, p95 <500 ms and errors <1%; "
+                " Demo v5/v6 gate each phase on complete individual ingestion samples, p95 <500 ms and errors <1%; "
                 "native ALB p95 remains corroborating evidence, not the ingestion gate. Ten-second latency windows "
-                "are displays with variable sample counts, not independent SLO gates. For v5, the minimum sampled "
-                "completion window is max(10 seconds, plateau duration minus 60 seconds). Historical profiles retain their original gates."
+                "are displays with variable sample counts, not independent SLO gates. For v5/v6, the minimum sampled "
+                "completion window is max(10 seconds, plateau duration minus 60 seconds). Historical profiles retain their original gates. V6 recovery requires a 60-second live ECS service-count suffix with native corroboration inside that suffix; it does not claim that all retiring task containers have stopped or ceased billing."
             ),
             "",
             (

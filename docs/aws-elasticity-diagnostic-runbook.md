@@ -1,4 +1,4 @@
-# Elastic-only workload-v5 / policy-v5 diagnostic
+# Elastic-only workload-v6 / policy-v5 diagnostic
 
 Use this workflow while developing autoscaling. It skips the fixed-worker load
 and between-treatment reset, but retains the full elastic workload and all
@@ -40,7 +40,8 @@ policy resources, verifies native policy wiring and emptiness again, and checks
 the unchanged environment immediately before load. It never fabricates a
 fixed-run ID or reset result.
 
-New runs use the [v5 workload and measurement contract](aws-elasticity-v5-contract.md):
+New runs use the [v6 amendment](aws-elasticity-v6-contract.md) to the
+[v5 workload and measurement contract](aws-elasticity-v5-contract.md):
 **5,730 events over 10½ minutes**, still peaking at 25 events/s. Phase durations
 are `30 → 30 → 30 → 180 → 30 → 30 → 300` seconds. Provisioning, migration,
 minute alignment, drain and teardown are additional. Drain retains its
@@ -56,12 +57,15 @@ remain unchanged.
 
 Ingestion p95 <500 ms is checked per phase from k6 and complete raw request
 records. Native ALB minute p95 remains visible corroboration, not a v5
-ingestion-only gate. Earlier versions retain their original rules. Ten-second
+ingestion-only gate. V6 additionally provides bounded driver headroom and uses a 60-second live
+service-count recovery suffix corroborated by a native point within that suffix,
+including a partial final bucket. Earlier versions retain their original rules. Ten-second
 p95 displays include sample counts; they are not averaged into a phase p95.
 
 Use a fresh deployment and rebuilt API image. Telemetry runs in both fixed and
 elastic deployments, so the transition still creates only five policy resources.
-There are six custom metrics, two high-resolution alarms, bounded database
+Request timing logs now include lookup, persistence and publication spans to
+locate transient stalls. There are six custom metrics, two high-resolution alarms, bounded database
 counting queries, SQS attribute reads and structured timing logs. Review those
 costs and overhead before approval. Accepted arrival rate can be suppressed by
 an ingestion bottleneck; ingestion and headroom gates remain mandatory.

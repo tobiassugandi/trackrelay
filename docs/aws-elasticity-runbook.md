@@ -32,7 +32,7 @@ reconciliation accounting, missed one native RDS CPU bucket, and retained only
 45 seconds at one worker during recovery. Candidate v4 added two recovery
 minutes; subsequent diagnostics exposed a stale scale-in alarm and a native
 latency bucket containing mixed endpoint traffic. Neither is a passing comparison.
-New deployments now use the [v5 contract](aws-elasticity-v5-contract.md):
+New deployments now use the [v6 amendment](aws-elasticity-v6-contract.md):
 10½ minutes at the same 25/s peak, fresh ten-second scale-in/out telemetry,
 and complete per-request phase latency qualification. Native minute evidence
 remains visible; historical failures retain their original rules. Review the

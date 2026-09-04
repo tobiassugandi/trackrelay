@@ -40,7 +40,7 @@ from trackrelay.models import (
 )
 from trackrelay.models import TestRun as ExperimentRunModel
 from trackrelay.partners import PARTNER_ADAPTERS
-from trackrelay.request_timing import RequestTimingMiddleware
+from trackrelay.request_timing import RequestTimingMiddleware, ingestion_stage
 from trackrelay.runtime_metrics import RuntimeMetricsSnapshot, capture_runtime_metrics
 from trackrelay.scaling_metrics import scaling_metrics_lifespan
 from trackrelay.services import (
@@ -66,7 +66,9 @@ app = FastAPI(
     title=settings.app_name, debug=settings.debug, lifespan=scaling_metrics_lifespan
 )
 logger = logging.getLogger(__name__)
-app.add_middleware(RequestTimingMiddleware, enabled=bool(settings.scaling_metrics_queue_name))
+app.add_middleware(
+    RequestTimingMiddleware, enabled=bool(settings.scaling_metrics_queue_name)
+)
 
 EventPersister = Callable[[NormalizedEvent], EventPersistenceResult]
 DeliveryOutboxPublisher = Callable[
@@ -657,7 +659,8 @@ def ingest_partner_event(
     test_run_id: Annotated[UUID | None, Header(alias="X-Test-Run-ID")] = None,
 ) -> IngestionResponse:
     """Validate, normalize, persist, and schedule one configured partner event."""
-    partner = session.get(Partner, partner_id)
+    with ingestion_stage("partner_lookup"):
+        partner = session.get(Partner, partner_id)
     if partner is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -693,7 +696,8 @@ def ingest_partner_event(
         normalized_event = normalized_event.model_copy(
             update={"test_run_id": test_run_id}
         )
-    persistence = persist_event(normalized_event)
+    with ingestion_stage("persistence"):
+        persistence = persist_event(normalized_event)
     if persistence.duplicate:
         response.status_code = status.HTTP_200_OK
         return DuplicateEventResponse(
@@ -705,7 +709,8 @@ def ingest_partner_event(
         )
 
     try:
-        publish_outbox_entry(persistence.event_id, delivery_queue)
+        with ingestion_stage("publication"):
+            publish_outbox_entry(persistence.event_id, delivery_queue)
     except (DownstreamDeliveryQueueError, SQLAlchemyError):
         logger.warning(
             "immediate delivery publication failed; durable outbox remains pending",

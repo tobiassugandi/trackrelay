@@ -109,6 +109,7 @@ class ElasticityDiagnosticSummary(BaseModel):
                 "aws-elasticity-candidate-v3",
                 "aws-elasticity-candidate-v4",
                 "aws-elasticity-demo-v5",
+                "aws-elasticity-demo-v6",
             )
             or self.transition.policy.policy_version not in (3, 4, 5)
             or self.measurement.load_started_at < self.transition.verified_at

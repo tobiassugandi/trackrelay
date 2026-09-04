@@ -258,11 +258,19 @@ test("pacing and full metric windows match the frozen definition", async () => {
     assert.equal(scenario.timeUnit, "1s");
     assert.equal(scenario.startTime, `${offset}s`);
     assert.equal(scenario.duration, `${step.duration_seconds}s`);
-    assert.equal(scenario.preAllocatedVUs, step.offered_rate_per_second);
-    assert.equal(scenario.maxVUs, step.offered_rate_per_second);
+    assert.equal(scenario.preAllocatedVUs, 5 * step.offered_rate_per_second);
+    assert.equal(scenario.maxVUs, 5 * step.offered_rate_per_second);
     offset += step.duration_seconds;
   }
   assert.equal(offset, 630);
+});
+
+test("historical v5 keeps its original concurrency, v6 adds only bounded headroom", async () => {
+  const subject = await driver({mutate: (_manifest, workload) => { workload.name = "aws-elasticity-demo-v5"; }});
+  for (const step of subject.workload.steps) {
+    assert.equal(subject.options.scenarios[step.name].maxVUs, step.offered_rate_per_second);
+    assert.equal(subject.options.scenarios[step.name].preAllocatedVUs, step.offered_rate_per_second);
+  }
 });
 
 test("boundary and error metrics remain in the raw k6 summary", async () => {

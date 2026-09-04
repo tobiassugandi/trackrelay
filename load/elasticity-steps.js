@@ -66,8 +66,8 @@ for (const [index, step] of workload.steps.entries()) {
     timeUnit: "1s",
     duration: `${step.duration_seconds}s`,
     startTime: `${startOffsetSeconds}s`,
-    preAllocatedVUs: step.offered_rate_per_second,
-    maxVUs: step.offered_rate_per_second,
+    preAllocatedVUs: step.offered_rate_per_second * (workload.name === "aws-elasticity-demo-v6" ? 5 : 1),
+    maxVUs: step.offered_rate_per_second * (workload.name === "aws-elasticity-demo-v6" ? 5 : 1),
     gracefulStop: "10s",
     env: {
       EVENT_OFFSET: String(workload.event_offsets[index]),
@@ -138,7 +138,7 @@ export default function () {
         name: "POST partner event",
         offered_rate: String(step.offered_rate_per_second),
         step: step.name,
-        ...(workload.name === "aws-elasticity-demo-v5" ? {sample_sequence: String(iteration)} : {}),
+        ...(["aws-elasticity-demo-v5", "aws-elasticity-demo-v6"].includes(workload.name) ? {sample_sequence: String(iteration)} : {}),
       },
     },
   );

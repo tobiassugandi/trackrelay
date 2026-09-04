@@ -107,6 +107,7 @@ class ElasticityWorkloadDefinition(BaseModel):
         "aws-elasticity-candidate-v3",
         "aws-elasticity-candidate-v4",
         "aws-elasticity-demo-v5",
+        "aws-elasticity-demo-v6",
     ] = "aws-elasticity-candidate-v4"
     steps: tuple[ElasticityWorkloadStep, ...] = DEFAULT_ELASTICITY_STEPS
     random_seed: int = 20260901
@@ -125,6 +126,10 @@ class ElasticityWorkloadDefinition(BaseModel):
     minimum_worker_count: Literal[1] = 1
     k6_image: str = "grafana/k6:2.1.0"
     trackrelay_api_url_for_container: str = "http://host.docker.internal:8000"
+
+    @property
+    def uses_request_timings(self) -> bool:
+        return self.name in ("aws-elasticity-demo-v5", "aws-elasticity-demo-v6")
 
     @computed_field
     @property
@@ -160,11 +165,7 @@ class ElasticityWorkloadDefinition(BaseModel):
             raise ValueError("elasticity workload step names must be unique")
         if any(
             step.duration_seconds
-            % (
-                10
-                if self.name == "aws-elasticity-demo-v5"
-                else self.metric_period_seconds
-            )
+            % (10 if self.uses_request_timings else self.metric_period_seconds)
             for step in self.steps
         ):
             raise ValueError(
@@ -190,6 +191,7 @@ class ElasticityWorkloadDefinition(BaseModel):
             "aws-elasticity-candidate-v3": 7,
             "aws-elasticity-candidate-v4": 9,
             "aws-elasticity-demo-v5": 5,
+            "aws-elasticity-demo-v6": 5,
         }[self.name]
         if (
             self.steps[-1].duration_seconds
@@ -198,16 +200,13 @@ class ElasticityWorkloadDefinition(BaseModel):
             raise ValueError(
                 "elasticity recovery is shorter than the candidate minimum"
             )
-        if (
-            self.name == "aws-elasticity-demo-v5"
-            and self.steps != DEMO_ELASTICITY_STEPS
-        ):
-            raise ValueError("demo v5 requires the frozen 630-second waveform")
+        if self.uses_request_timings and self.steps != DEMO_ELASTICITY_STEPS:
+            raise ValueError("short demos require the frozen 630-second waveform")
         return self
 
 
 ELASTICITY_WORKLOAD_DEFINITION = ElasticityWorkloadDefinition(
-    name="aws-elasticity-demo-v5", steps=DEMO_ELASTICITY_STEPS
+    name="aws-elasticity-demo-v6", steps=DEMO_ELASTICITY_STEPS
 )
 
 
@@ -297,7 +296,7 @@ def build_elasticity_k6_command(
         "run",
         *(
             ("--out", "json=/results/k6-points.json")
-            if definition.name == "aws-elasticity-demo-v5"
+            if definition.uses_request_timings
             else ()
         ),
         "/scripts/elasticity-steps.js",

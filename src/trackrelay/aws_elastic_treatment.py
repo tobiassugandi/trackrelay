@@ -181,7 +181,7 @@ def evaluate_elastic_treatment(
     )
     if not scale_out:
         reasons.append("scale_out_not_observed_during_demand")
-    if definition.name == "aws-elasticity-demo-v5":
+    if definition.uses_request_timings:
         peak_name = max(
             definition.steps, key=lambda step: step.offered_rate_per_second
         ).name
@@ -227,6 +227,17 @@ def evaluate_elastic_treatment(
         and point.interval_started_at + timedelta(seconds=60)
         <= result.load_started_at + timedelta(seconds=duration)
     )
+    if definition.name == "aws-elasticity-demo-v6":
+        # A native point within the live suffix corroborates the return. It is
+        # not proof of a whole quiet minute; live samples establish duration.
+        native_recovery = tuple(
+            point
+            for point in worker_points
+            if suffix
+            and point.interval_started_at >= suffix[-1].observed_at
+            and point.interval_started_at
+            < result.load_started_at + timedelta(seconds=duration)
+        )
     recovered = (
         len(suffix) >= 2
         and suffix[0].seconds_after_load_started - suffix[-1].seconds_after_load_started

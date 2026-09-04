@@ -230,7 +230,7 @@ def fake_plotter(_report, _fixed, _elastic, output):
 def test_comparison_requires_completion_not_only_api_latency():
     report = comparison()
     assert report.elasticity_demonstrated
-    assert report.method == "short-plateau-completion-v2"
+    assert report.method == "short-plateau-completion-v3"
     assert report.fixed.highest_supported_rate_per_second == 10
     assert report.elastic.highest_supported_rate_per_second == 25
     assert report.observed_step_rate_multiplier == 2.5

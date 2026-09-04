@@ -236,7 +236,7 @@ class ElasticityResult(BaseModel):
             and self.dropped_iteration_count == 0
             and all(step.ingestion_guardrails_passed for step in self.ingestion_steps)
             and (
-                self.definition.name != "aws-elasticity-demo-v5"
+                not self.definition.uses_request_timings
                 or (
                     timings_complete(self.request_timings, self.definition)
                     and all(
@@ -482,7 +482,7 @@ def evaluate_treatment_guardrails(
         reasons.append("native_request_count_incomplete")
     maximum_p95_ms = 1000 * max(values["alb_p95_latency"])
     if (
-        definition.name != "aws-elasticity-demo-v5"
+        not definition.uses_request_timings
         and maximum_p95_ms >= definition.ingestion_p95_limit_ms
     ):
         reasons.append("native_ingestion_latency_failed")
@@ -1146,7 +1146,7 @@ def execute_elasticity_workload(
         else ElasticityResult
     )
     request_timings = ()
-    if definition.name == "aws-elasticity-demo-v5":
+    if definition.uses_request_timings:
         try:
             request_timings = read_request_timings(evidence_root / "k6-points.json")
         except (OSError, ValueError, KeyError, TypeError) as error:

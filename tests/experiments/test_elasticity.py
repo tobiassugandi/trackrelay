@@ -233,7 +233,7 @@ def test_prepare_writes_self_describing_replay_inputs(tmp_path: Path) -> None:
     definition = loads(definition_path.read_text(encoding="utf-8"))
     manifest = loads(manifest_path.read_text(encoding="utf-8"))
     command = loads((output_directory / "k6-command.json").read_text(encoding="utf-8"))
-    assert definition["name"] == "aws-elasticity-demo-v5"
+    assert definition["name"] == "aws-elasticity-demo-v6"
     assert definition["expected_request_count"] == 5730
     assert manifest["scenario_name"] == "elasticity-fixed-control"
     assert manifest["events_generated"] == 5730

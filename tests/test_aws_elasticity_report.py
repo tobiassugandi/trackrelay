@@ -360,7 +360,7 @@ def test_rejected_elastic_evidence_produces_negative_report():
     fixed, elastic = comparison_summaries()
     points = tuple(
         item.model_copy(update={"worker_running_count": 8, "worker_desired_count": 8})
-        if 720 <= item.seconds_after_load_started < 1140
+        if 720 <= item.seconds_after_load_started < elastic.measurement.definition.duration_seconds
         else item
         for item in elastic.measurement.observations
     )

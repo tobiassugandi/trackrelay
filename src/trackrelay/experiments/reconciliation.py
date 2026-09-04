@@ -51,12 +51,28 @@ class TestRunDefinitionMismatchError(ValueError):
     """Raised when database run metadata disagrees with the input manifest."""
 
 
+class ReconciliationMismatch(BaseModel):
+    """Per-identity evidence without raw event payloads or HTTP error bodies."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    partner_id: str
+    partner_event_id: str
+    reasons: tuple[str, ...]
+    successful_attempts: Count
+    simulator_receipts: Count
+
+
 class ReconciliationReport(BaseModel):
     """Basic request and processing accounting for one test run."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[1] = 1
+    accounting_method: Literal["attempt-count-v1", "idempotent-effects-v2"] = (
+        "attempt-count-v1"
+    )
+    mismatches: tuple[ReconciliationMismatch, ...] | None = None
+    successful_retry_attempts: Count = 0
     test_run_id: UUID
     generated: Count
     accepted: Count
@@ -78,11 +94,19 @@ class ReconciliationReport(BaseModel):
         if self.generated != self.accepted + self.rejected:
             raise ValueError("generated must equal accepted plus rejected")
         if self.unique != self.processed + self.failed + self.pending:
-            raise ValueError(
-                "unique must equal processed plus failed plus pending"
-            )
+            raise ValueError("unique must equal processed plus failed plus pending")
         if self.unique > self.accepted:
             raise ValueError("unique events cannot exceed accepted requests")
+        if self.mismatches is not None and (
+            len(self.mismatches) != self.unaccounted
+            or len(
+                {(item.partner_id, item.partner_event_id) for item in self.mismatches}
+            )
+            != self.unaccounted
+        ):
+            raise ValueError(
+                "mismatch evidence must cover every unaccounted identity once"
+            )
         invariants_implied_by_counts = (
             self.unique == self.processed + self.failed + self.pending
             and self.unaccounted == 0
@@ -119,9 +143,7 @@ class DownstreamDeliveryComparison:
     duplicate_business_effect_count: int
     simulator_content_mismatch_identities: set[BusinessEventIdentity]
     unexpected_simulator_receipt_identities: set[BusinessEventIdentity]
-    processed_without_delivery_attempt_identities: set[
-        BusinessEventIdentity
-    ]
+    processed_without_delivery_attempt_identities: set[BusinessEventIdentity]
     delivery_evidence_mismatch_identities: set[BusinessEventIdentity]
 
 
@@ -134,9 +156,7 @@ class FinalShipmentComparison:
 
 def load_input_manifest(manifest_path: Path) -> InputManifest:
     """Load and validate a generated JSON input manifest."""
-    return InputManifest.model_validate_json(
-        manifest_path.read_text(encoding="utf-8")
-    )
+    return InputManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
 
 
 def write_reconciliation_report(
@@ -160,11 +180,7 @@ def fetch_simulator_receipts(
 ) -> tuple[NormalizedEvent, ...]:
     """Fetch and validate the simulator's current normalized-event receipts."""
     endpoint = f"{downstream_url.rstrip('/')}/events"
-    parameters = (
-        {"test_run_id": str(test_run_id)}
-        if test_run_id is not None
-        else None
-    )
+    parameters = {"test_run_id": str(test_run_id)} if test_run_id is not None else None
     if client is not None:
         response = client.get(endpoint, params=parameters)
     else:
@@ -237,8 +253,7 @@ def _require_database_test_run_matches_manifest(
     if definition_mismatch_fields:
         mismatch_field_names = ", ".join(definition_mismatch_fields)
         raise TestRunDefinitionMismatchError(
-            "Test run definition disagrees with manifest: "
-            f"{mismatch_field_names}"
+            f"Test run definition disagrees with manifest: {mismatch_field_names}"
         )
 
 
@@ -296,12 +311,8 @@ def _compare_manifest_with_database_events(
                 database_event_matching_manifest_by_identity.values()
             )
         ),
-        database_content_mismatch_identities=(
-            database_content_mismatch_identities
-        ),
-        unexpected_database_event_identities=(
-            unexpected_database_event_identities
-        ),
+        database_content_mismatch_identities=(database_content_mismatch_identities),
+        unexpected_database_event_identities=(unexpected_database_event_identities),
     )
 
 
@@ -322,9 +333,7 @@ def _compare_delivery_attempts_with_simulator_receipts(
     }
     business_identity_by_database_event_id = {
         database_event.id: identity
-        for identity, database_event in (
-            database_event_by_business_identity.items()
-        )
+        for identity, database_event in (database_event_by_business_identity.items())
     }
 
     delivery_attempt_count_by_identity: Counter[BusinessEventIdentity] = Counter()
@@ -356,9 +365,7 @@ def _compare_delivery_attempts_with_simulator_receipts(
         simulator_receipt_count_by_identity
     ) - set(database_event_matching_manifest_by_identity)
 
-    processed_without_delivery_attempt_identities: set[
-        BusinessEventIdentity
-    ] = set()
+    processed_without_delivery_attempt_identities: set[BusinessEventIdentity] = set()
     delivery_evidence_mismatch_identities: set[BusinessEventIdentity] = set()
     database_events_matching_manifest = (
         database_event_matching_manifest_by_identity.items()
@@ -371,33 +378,32 @@ def _compare_delivery_attempts_with_simulator_receipts(
         if database_event.processing_status is EventProcessingStatus.PROCESSED:
             if delivery_attempt_count == 0:
                 processed_without_delivery_attempt_identities.add(identity)
-            if simulator_receipt_count != successful_attempt_count:
+            # Several successful HTTP responses may acknowledge the same
+            # idempotently stored business effect. Still require a successful
+            # attempt for a receipt and exactly one receipt for any success;
+            # retries cannot excuse data loss or duplicate effects. Processing
+            # alone is not delivery: zero successes/receipts remains unfinished.
+            if simulator_receipt_count != min(successful_attempt_count, 1):
                 delivery_evidence_mismatch_identities.add(identity)
         elif simulator_receipt_count or successful_attempt_count:
             delivery_evidence_mismatch_identities.add(identity)
 
     duplicate_business_effect_count = sum(
         max(0, simulator_receipt_count - 1)
-        for simulator_receipt_count in (
-            simulator_receipt_count_by_identity.values()
-        )
+        for simulator_receipt_count in (simulator_receipt_count_by_identity.values())
     )
     return DownstreamDeliveryComparison(
         simulator_receipt_count=len(simulator_receipts_for_run),
         simulator_unique_event_count=len(simulator_receipt_count_by_identity),
         duplicate_business_effect_count=duplicate_business_effect_count,
-        simulator_content_mismatch_identities=(
-            simulator_content_mismatch_identities
-        ),
+        simulator_content_mismatch_identities=(simulator_content_mismatch_identities),
         unexpected_simulator_receipt_identities=(
             unexpected_simulator_receipt_identities
         ),
         processed_without_delivery_attempt_identities=(
             processed_without_delivery_attempt_identities
         ),
-        delivery_evidence_mismatch_identities=(
-            delivery_evidence_mismatch_identities
-        ),
+        delivery_evidence_mismatch_identities=(delivery_evidence_mismatch_identities),
     )
 
 
@@ -418,15 +424,12 @@ def _compare_manifest_with_database_shipments(
     )
 
     incorrect_database_shipment_count = 0
-    for tracking_number, manifest_final_status in (
-        manifest.expected_final_shipments.items()
-    ):
-        database_shipment = database_shipment_by_tracking_number.get(
-            tracking_number
-        )
-        manifest_final_event = manifest_final_event_by_tracking_number[
-            tracking_number
-        ]
+    for (
+        tracking_number,
+        manifest_final_status,
+    ) in manifest.expected_final_shipments.items():
+        database_shipment = database_shipment_by_tracking_number.get(tracking_number)
+        manifest_final_event = manifest_final_event_by_tracking_number[tracking_number]
         if (
             database_shipment is None
             or database_shipment.current_status is not manifest_final_status
@@ -473,9 +476,7 @@ def reconcile_manifest(
     _require_database_test_run_matches_manifest(manifest, session)
 
     database_events = tuple(
-        session.scalars(
-            select(Event).where(Event.test_run_id == manifest.test_run_id)
-        )
+        session.scalars(select(Event).where(Event.test_run_id == manifest.test_run_id))
     )
     database_event_comparison = _compare_manifest_with_database_events(
         manifest,
@@ -509,9 +510,7 @@ def reconcile_manifest(
     database_shipments = tuple(
         session.scalars(
             select(Shipment).where(
-                Shipment.tracking_number.in_(
-                    tuple(manifest.expected_final_shipments)
-                )
+                Shipment.tracking_number.in_(tuple(manifest.expected_final_shipments))
             )
         )
     )
@@ -547,6 +546,37 @@ def reconcile_manifest(
         | delivery_evidence_mismatches
     )
     unaccounted_count = len(unaccounted_business_identities)
+    mismatch_categories = {
+        "database_content_mismatch": database_content_mismatches,
+        "unexpected_database_event": unexpected_database_events,
+        "simulator_content_mismatch": simulator_content_mismatches,
+        "unexpected_simulator_receipt": unexpected_simulator_receipts,
+        "processed_without_delivery_attempt": processed_without_delivery_attempts,
+        "delivery_evidence_mismatch": delivery_evidence_mismatches,
+    }
+    identity_by_event_id = {
+        event.id: _business_event_identity(event) for event in database_events
+    }
+    successful_counts = Counter(
+        identity_by_event_id[attempt.event_id]
+        for attempt in database_delivery_attempts
+        if attempt.result is DeliveryAttemptResult.DELIVERED
+    )
+    receipt_counts = Counter(map(_business_event_identity, simulator_receipts_for_run))
+    mismatches = tuple(
+        ReconciliationMismatch(
+            partner_id=identity[0],
+            partner_event_id=identity[1],
+            reasons=tuple(
+                name
+                for name, identities in mismatch_categories.items()
+                if identity in identities
+            ),
+            successful_attempts=successful_counts[identity],
+            simulator_receipts=receipt_counts[identity],
+        )
+        for identity in sorted(unaccounted_business_identities)
+    )
     invariants_passed = (
         unaccounted_count == 0
         and downstream_delivery_comparison.duplicate_business_effect_count == 0
@@ -554,6 +584,11 @@ def reconcile_manifest(
     )
 
     return ReconciliationReport(
+        accounting_method="idempotent-effects-v2",
+        mismatches=mismatches,
+        successful_retry_attempts=sum(
+            max(0, count - 1) for count in successful_counts.values()
+        ),
         test_run_id=manifest.test_run_id,
         generated=manifest.events_generated,
         accepted=database_event_comparison.accepted_manifest_request_count,
@@ -571,9 +606,7 @@ def reconcile_manifest(
             EventProcessingStatus.RECEIVED
         ],
         unaccounted=unaccounted_count,
-        simulator_receipts=(
-            downstream_delivery_comparison.simulator_receipt_count
-        ),
+        simulator_receipts=(downstream_delivery_comparison.simulator_receipt_count),
         simulator_unique_events=(
             downstream_delivery_comparison.simulator_unique_event_count
         ),

@@ -31,9 +31,9 @@ below 1%, complete request scheduling, every accepted event, zero duplicate
 business effects, correct final shipment states, an empty DLQ, and the frozen
 drain contract. API latency alone cannot establish sustainable end-to-end load.
 
-## Candidate workload v3
+## Candidate workload v4
 
-`aws-elasticity-candidate-v3` is now defined in code and consumed from a saved
+`aws-elasticity-candidate-v4` is now defined in code and consumed from a saved
 JSON definition by `load/elasticity-steps.js`:
 
 | Step | Offered rate | Duration | Scheduled events |
@@ -44,12 +44,17 @@ JSON definition by `load/elasticity-steps.js`:
 | peak-25 | 25 events/s | 300 s | 7,500 |
 | fall-10 | 10 events/s | 60 s | 600 |
 | fall-5 | 5 events/s | 60 s | 300 |
-| recovery | 1 event/s | 420 s | 420 |
+| recovery | 1 event/s | 540 s | 540 |
 
-The complete waveform schedules 10,680 unique `CREATED` events over 1,140 seconds.
+The complete waveform schedules 10,800 unique `CREATED` events over 1,260 seconds.
 Every plateau aligns to CloudWatch's 60-second native metric period. The final
-seven-minute low-rate window exists to observe backlog recovery and, in the
+nine-minute low-rate window exists to observe backlog recovery and, in the
 elastic treatment, return to the minimum worker count.
+
+V4 changes only recovery duration relative to v3; policy version 3 and every
+acceptance bound remain fixed. The extra two minutes provide observation margin
+after the first v3 diagnostic retained only 45 seconds at one worker. Historical
+v3 remains readable and is not reclassified using the new window.
 
 The controller waits until the next UTC minute boundary when necessary and
 launches within a one-second tolerance. With the driver image prevalidated and
@@ -172,9 +177,9 @@ Only a manifest in `fixed_control_qualified` state can enter the reset. The
 controller revalidates the approved clean revision, all fixed ECS capacities,
 the API and queue endpoints, a stable one-of-one worker service, and the
 absence of an ECS scalable target. It also requires the live application state
-to describe exactly the qualified fixed run: one test-run row, all 10,680
+to describe exactly the qualified fixed run: one test-run row, all 10,800
 events, shipments, durable outbox entries, at least one delivery attempt per
-event, 10,680 simulator receipts, a healthy simulator, and empty source and
+event, 10,800 simulator receipts, a healthy simulator, and empty source and
 dead-letter queues.
 
 For an authorized live session, run:
@@ -225,7 +230,7 @@ data as non-breaching.
 This is an experiment policy, not a general production recommendation. Its
 purpose is to make acquisition and release obvious within the fixed waveform:
 one complete arrival-demand bucket can trigger expansion before backlog grows,
-while the seven-minute recovery step contains the three low-demand,
+while the nine-minute recovery step contains the three low-demand,
 low-queue-work buckets required for safe contraction. The
 maximum adds at most seven 0.25-vCPU/0.5-GiB Fargate workers—1.75 vCPU and
 3.5 GiB above the fixed control—only while the alarm-driven service desires
@@ -308,7 +313,7 @@ The pre-data elastic contract adds these explicit qualification bounds:
 - Desired and running workers must remain within 1–8. Both live samples and
   native metrics must show expansion before recovery; a desired count of eight
   without actual running workers does not pass.
-- During the seven-minute low-rate recovery, the sampled one-worker suffix must
+- During the nine-minute low-rate recovery, the sampled one-worker suffix must
   last at least 60 seconds and reach within 30 seconds of the waveform's end.
   The last complete native recovery minute must also show one running worker.
   Returning to one only after traffic stops does not pass.

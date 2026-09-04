@@ -466,8 +466,25 @@ def parse_elasticity_metric_response(
             )
         ordered = tuple(sorted(zip(timestamps, values, strict=True)))
         if tuple(timestamp for timestamp, _value in ordered) != expected_timestamps:
+            expected_set = set(expected_timestamps)
+            actual_set = set(timestamps)
+            missing = sorted(expected_set - actual_set)
+            unexpected = sorted(actual_set - expected_set)
+            interior = [
+                item for item in missing if any(later > item for later in actual_set)
+            ]
+
+            def utc_list(items):
+                return (
+                    ", ".join(item.astimezone(UTC).isoformat() for item in items)
+                    or "none"
+                )
+
             raise IncompleteElasticityCloudWatchError(
-                f"CloudWatch series {query_id} has unpublished native buckets"
+                f"CloudWatch series {query_id} has unpublished native buckets; "
+                f"missing UTC: {utc_list(missing)}; interior gaps UTC: {utc_list(interior)}; "
+                f"unexpected UTC: {utc_list(unexpected)}; "
+                f"duplicate timestamps: {len(timestamps) - len(actual_set)}"
             )
         definition = definitions[query_id]
         try:

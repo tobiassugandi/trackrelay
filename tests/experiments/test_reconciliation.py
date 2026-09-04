@@ -7,7 +7,8 @@ from uuid import UUID
 
 import httpx
 from pydantic import ValidationError
-from pytest import raises
+from pytest import mark, raises
+from sqlalchemy import select
 
 from trackrelay.database import Base, create_database_engine, create_session_factory
 from trackrelay.domain import (
@@ -81,8 +82,9 @@ def create_test_database(manifest: InputManifest):
             Shipment(
                 tracking_number=tracking_number,
                 current_status=ShipmentStatus.DELIVERED,
-                current_status_occurred_at=manifest.expected_events[-1]
-                .expected_occurred_at,
+                current_status_occurred_at=manifest.expected_events[
+                    -1
+                ].expected_occurred_at,
             )
         )
 
@@ -121,13 +123,14 @@ def add_delivery_attempt(
     *,
     result: DeliveryAttemptResult,
     sessions,
+    attempt_number: int = 1,
 ) -> None:
     started_at = build_manifest().configuration.start_at
     with sessions.begin() as session:
         session.add(
             DeliveryAttempt(
                 event_id=database_event_id,
-                attempt_number=1,
+                attempt_number=attempt_number,
                 result=result,
                 response_code=(
                     202 if result is DeliveryAttemptResult.DELIVERED else 503
@@ -220,6 +223,8 @@ def test_reconciliation_reports_request_and_processing_counts() -> None:
         )
 
     assert report == ReconciliationReport(
+        accounting_method="idempotent-effects-v2",
+        mismatches=(),
         test_run_id=manifest.test_run_id,
         generated=5,
         accepted=4,
@@ -393,6 +398,57 @@ def test_latest_final_events_are_selected_in_one_manifest_pass() -> None:
     )
 
 
+@mark.parametrize("case", ("deduplicated", "missing", "duplicate", "wrong-content"))
+def test_retries_reconcile_business_effects_and_retain_mismatch_details(case):
+    manifest = build_manifest()
+    engine, sessions = create_test_database(manifest)
+    receipts = add_complete_delivery_evidence(manifest, sessions=sessions)
+    first = manifest.expected_events[0]
+    with sessions() as session:
+        event_id = session.scalar(
+            select(Event.id).where(Event.partner_event_id == first.partner_event_id)
+        )
+    add_delivery_attempt(
+        event_id,
+        result=DeliveryAttemptResult.DELIVERED,
+        sessions=sessions,
+        attempt_number=2,
+    )
+    if case == "missing":
+        receipts.pop(0)
+    elif case == "duplicate":
+        receipts.append(receipts[0])
+    elif case == "wrong-content":
+        receipts[0] = receipts[0].model_copy(update={"raw_payload": {"wrong": True}})
+    with sessions() as session:
+        report = reconcile_manifest(
+            manifest, session=session, simulator_receipts=receipts
+        )
+    assert report.successful_retry_attempts == 1
+    assert report.accounting_method == "idempotent-effects-v2"
+    assert report.invariants_passed is (case == "deduplicated")
+    if case == "deduplicated":
+        assert report.unaccounted == 0
+        assert report.mismatches == ()
+        assert report.duplicate_business_effects == 0
+    else:
+        assert report.unaccounted == 1
+        (mismatch,) = report.mismatches
+        assert mismatch.partner_event_id == first.partner_event_id
+        assert mismatch.successful_attempts == 2
+        assert (
+            mismatch.simulator_receipts
+            == {"missing": 0, "duplicate": 2, "wrong-content": 1}[case]
+        )
+        assert mismatch.reasons == (
+            ("simulator_content_mismatch",)
+            if case == "wrong-content"
+            else ("delivery_evidence_mismatch",)
+        )
+    assert ReconciliationReport.model_validate_json(report.model_dump_json()) == report
+    engine.dispose()
+
+
 def test_fetch_simulator_receipts_validates_normalized_events() -> None:
     manifest_event = build_manifest().expected_events[0]
     simulator_receipt = simulator_receipt_for(manifest_event)
@@ -435,9 +491,12 @@ def test_reconciliation_rejects_mismatched_test_run_metadata() -> None:
         assert database_test_run is not None
         database_test_run.random_seed += 1
 
-    with sessions() as session, raises(
-        RunDefinitionMismatchError,
-        match="random_seed",
+    with (
+        sessions() as session,
+        raises(
+            RunDefinitionMismatchError,
+            match="random_seed",
+        ),
     ):
         reconcile_manifest(manifest, session=session)
 
@@ -466,9 +525,12 @@ def test_manifest_and_report_files_round_trip_through_their_schemas(
     write_reconciliation_report(report, report_path)
 
     assert load_input_manifest(manifest_path) == manifest
-    assert ReconciliationReport.model_validate_json(
-        report_path.read_text(encoding="utf-8")
-    ) == report
+    assert (
+        ReconciliationReport.model_validate_json(
+            report_path.read_text(encoding="utf-8")
+        )
+        == report
+    )
 
 
 def test_report_rejects_inconsistent_accounting() -> None:

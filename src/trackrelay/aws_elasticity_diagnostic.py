@@ -104,12 +104,13 @@ class ElasticityDiagnosticSummary(BaseModel):
     @model_validator(mode="after")
     def require_diagnostic_provenance(self) -> "ElasticityDiagnosticSummary":
         if (
-            self.measurement.definition != ELASTICITY_WORKLOAD_DEFINITION
+            self.measurement.definition.name
+            not in ("aws-elasticity-candidate-v3", "aws-elasticity-candidate-v4")
             or self.transition.policy.policy_version != 3
             or self.measurement.load_started_at < self.transition.verified_at
         ):
             raise ValueError(
-                "diagnostic requires the frozen candidate-v3 workload and policy timeline"
+                "diagnostic requires a supported workload and policy timeline"
             )
         if self.transition.reset_fixed_test_run_id is not None:
             raise ValueError("elastic diagnostic must not claim a fixed-control reset")
@@ -193,7 +194,9 @@ def run_elastic_diagnostic_treatment(
         definition != ELASTICITY_WORKLOAD_DEFINITION
         or transition.policy.policy_version != 3
     ):
-        raise AwsSessionError("elastic diagnostic requires frozen candidate v3")
+        raise AwsSessionError(
+            "elastic diagnostic requires the frozen workload and policy"
+        )
     if transition.reset_fixed_test_run_id is not None:
         raise AwsElasticTreatmentError(
             "elastic diagnostic transition claims paired fixed-control evidence"

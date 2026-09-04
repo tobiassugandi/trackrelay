@@ -1,4 +1,4 @@
-# Elastic-only candidate-v3 diagnostic
+# Elastic-only candidate-v4 diagnostic
 
 Use this workflow while developing autoscaling. It skips the fixed-worker load
 and between-treatment reset, but retains the full elastic workload and all
@@ -40,13 +40,18 @@ policy resources, verifies native policy wiring and emptiness again, and checks
 the unchanged environment immediately before load. It never fabricates a
 fixed-run ID or reset result.
 
-Candidate v3 sends 10,680 events over 19 minutes at
+Candidate v4 sends 10,800 events over 21 minutes at
 `1 → 5 → 10 → 25 → 10 → 5 → 1` events/second, using plateaus of
-`60 → 120 → 120 → 300 → 60 → 60 → 420` seconds. Allow additional time for
+`60 → 120 → 120 → 300 → 60 → 60 → 540` seconds. Allow additional time for
 provisioning, images, migration, minute alignment, drain, metric publication and
 teardown. Drain still requires 180 continuously empty seconds within a
 20-minute post-load deadline. Skipping fixed load saves that treatment's load
-and drain plus reset; it does not make the whole session a 19-minute operation.
+and drain plus reset; it does not make the whole session a 21-minute operation.
+
+V4 adds two recovery minutes to v3 and retains policy version 3, including the
+three-period low-demand/low-queue scale-in rule and the 60-second observed
+one-worker recovery gate. It does not promise immediate scale-in or relax any
+acceptance bound. Historical v3 evidence remains unchanged.
 
 Review current regional costs and remaining monthly budget before approval.
 The ceiling check is not a billing meter or dollar/time kill switch. Do not
@@ -101,6 +106,15 @@ The paired comparison reporter explicitly refuses a diagnostic session even
 if other treatment files are present.
 
 On failure, retain the negative/incomplete evidence and inspect the journal's
+`failed_phase`, `workflow_error` and `cleanup_errors`. Reconciliation now records
+`accounting_method: idempotent-effects-v2`, successful retry counts, and per-event
+`mismatches` with reasons and successful-attempt/receipt counts in `result.json`.
+Multiple successful retries may correspond to one idempotently stored business
+effect; missing receipts, duplicates and content mismatches still fail.
+CloudWatch missing-bucket errors name exact UTC timestamps and identify interior
+gaps where later data already exists. Do not zero-fill or interpolate RDS CPU.
+
+Inspect the journal's
 `failed_phase`, `workflow_error` and `cleanup_errors`. If teardown is not
 verified, use the paired runbook's `make aws-down` and `make aws-verify-down`
 recovery commands with this **same** session ID, `/32`, profile and region.

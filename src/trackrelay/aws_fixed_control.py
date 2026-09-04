@@ -1085,6 +1085,7 @@ def execute_elasticity_workload(
         operator_status(
             f"{treatment_label} reconciliation: accepted={reconciliation.accepted}, "
             f"receipts={reconciliation.simulator_unique_events}, unaccounted={reconciliation.unaccounted}, "
+            f"successful_retries={reconciliation.successful_retry_attempts}, "
             f"invariants_passed={reconciliation.invariants_passed}"
         )
 

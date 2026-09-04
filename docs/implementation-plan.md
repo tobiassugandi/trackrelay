@@ -863,7 +863,16 @@ approved session must repeat both treatments together.
   diagnostic failure/interrupt cleanup and real controller handoffs with mocked
   external work; lint passed. The 16 database integration tests were excluded.
   See `docs/aws-elasticity-diagnostic-runbook.md`.
-- [ ] Validate candidate-v3 autoscaling in a fresh explicitly approved diagnostic
+- [x] Retain the first elastic-only v3 diagnostic as a failed attempt with
+  verified teardown. Correct reconciliation to compare successful delivery
+  presence against one idempotent receipt, retain per-identity mismatch details,
+  and identify exact/interior native metric gaps without filling missing values.
+  Freeze candidate v4 with 540 seconds of recovery (10,800 total events over
+  1,260 seconds), preserving policy v3 and all acceptance gates. Its predecessor
+  returned to one worker with only 45 seconds of observed recovery. Local checks:
+  655 default Python tests, 10 executable JavaScript tests and pinned k6
+  inspection passed; no cloud retry was started.
+- [ ] Validate candidate-v4 autoscaling in a fresh explicitly approved diagnostic
   session, then repeat both treatments in one final paired session. A diagnostic
   pass does not supply a fixed-control denominator or an async-versus-sync ratio.
 - [ ] Verify that workers scale from A to B as load rises, backlog remains bounded and drains, and workers return to A after demand falls.

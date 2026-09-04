@@ -40,11 +40,11 @@ def test_candidate_is_one_metric_aligned_rise_and_fall() -> None:
         300,
         60,
         60,
-        420,
+        540,
     )
     assert definition.event_offsets == (0, 60, 660, 1860, 9360, 9960, 10260)
-    assert definition.expected_request_count == 10680
-    assert definition.duration_seconds == 1140
+    assert definition.expected_request_count == 10800
+    assert definition.duration_seconds == 1260
     assert definition.peak_rate_per_second == 25
     assert definition.minimum_worker_count == 1
     assert definition.maximum_non_worker_utilization_percent == 70
@@ -55,6 +55,23 @@ def test_candidate_is_one_metric_aligned_rise_and_fall() -> None:
     assert definition.minimum_rds_freeable_memory_bytes == 128 * 1024 * 1024
     assert definition.maximum_rds_read_latency_seconds == 0.02
     assert definition.maximum_rds_write_latency_seconds == 0.02
+
+
+def test_v3_remains_readable_and_v4_adds_only_recovery_margin():
+    current = ELASTICITY_WORKLOAD_DEFINITION
+    previous = ElasticityWorkloadDefinition(
+        name="aws-elasticity-candidate-v3",
+        steps=(
+            *current.steps[:-1],
+            current.steps[-1].model_copy(update={"duration_seconds": 420}),
+        ),
+    )
+    assert previous.duration_seconds == 1140
+    assert previous.expected_request_count == 10680
+    assert current.duration_seconds - previous.duration_seconds == 120
+    assert current.steps[:-1] == previous.steps[:-1]
+    with raises(ValueError, match="candidate minimum"):
+        ElasticityWorkloadDefinition(steps=previous.steps)
 
 
 def test_definition_rejects_an_unaligned_or_non_recovering_wave() -> None:
@@ -211,8 +228,8 @@ def test_prepare_writes_self_describing_replay_inputs(tmp_path: Path) -> None:
     definition = loads(definition_path.read_text(encoding="utf-8"))
     manifest = loads(manifest_path.read_text(encoding="utf-8"))
     command = loads((output_directory / "k6-command.json").read_text(encoding="utf-8"))
-    assert definition["name"] == "aws-elasticity-candidate-v3"
-    assert definition["expected_request_count"] == 10680
+    assert definition["name"] == "aws-elasticity-candidate-v4"
+    assert definition["expected_request_count"] == 10800
     assert manifest["scenario_name"] == "elasticity-fixed-control"
-    assert manifest["events_generated"] == 10680
+    assert manifest["events_generated"] == 10800
     assert command[-1] == "/scripts/elasticity-steps.js"

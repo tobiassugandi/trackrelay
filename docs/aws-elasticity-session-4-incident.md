@@ -367,3 +367,53 @@ cleanup errors remain in the journal rather than being rewritten.
 This correction is local only and does not salvage the attempt or authorize a
 retry. A fresh session ID, reviewed plan, matching immutable images, and
 explicit spending and unconditional teardown approval are still required.
+
+## Elastic-only v3 diagnostic: retry accounting, metric gap and late recovery
+
+Session `cloud-session-4-20260904T060729Z` used revision `1885dc2c283e`.
+The diagnostic issued exactly 10,680 requests with zero ingestion errors and
+all per-step p95 values below 108 ms. All 10,680 unique simulator receipts
+existed, no duplicate business effects or wrong final states were reported,
+and stable drain completed. Sampled queue work peaked at 1,126 (bound 1,500),
+and native oldest-message age peaked at 66 seconds (bound 180).
+
+Three separate issues prevent a pass:
+
+- Reconciliation reported four unaccounted identities. The old comparison
+  required receipt count to equal successful HTTP attempt count. A local
+  reproduction with two successful attempts and one idempotent receipt produced
+  a false mismatch. This is a plausible explanation, not proof of the four
+  historical mismatches: that report did not retain their identities or reasons.
+  The correction compares successful-delivery presence with one business
+  receipt; zero successes/zero receipts remains unfinished, not successful
+  delivery. Missing receipts, duplicate effects, unexpected identities and
+  content mismatches still fail their existing gates. New reports record
+  `idempotent-effects-v2`, retry counts and per-identity evidence without raw
+  payloads. Old reports retain their original counts and accounting semantics.
+- Native RDS CPU lacked the 06:38 UTC (13:38 Jakarta) bucket, while 06:39 UTC
+  existed. Eight attempts did not recover this interior gap. Other required
+  series had complete bucket timestamps. The collector now names missing UTC
+  buckets, interior gaps, unexpected timestamps and duplicates. It still fails
+  closed and does not interpolate or zero-fill resource utilization. More
+  precise diagnostics do not guarantee AWS will publish a missing point.
+- Desired workers reached eight at 311.8 seconds, running workers reached eight
+  at 346.7 seconds, desired count returned to one at 1,073.7 seconds and running
+  count at 1,084.8 seconds. The observed one-worker suffix was only 45.15 seconds,
+  short of the frozen 60-second gate. Low-demand/low-queue native buckets began
+  at 06:32 UTC, but desired capacity changed around 06:37:54 UTC. ECS then took
+  about 11 seconds to reach one worker. This points to latency before desired
+  capacity changed; without retained alarm/action history the precise cause
+  cannot be established.
+
+Candidate v4 adds 120 seconds of recovery to v3: the last step is 540 seconds,
+total duration 1,260 seconds, and total requests 10,800. All preceding steps,
+policy version 3, three-period scale-in rule, and acceptance limits are
+unchanged. Both future paired treatments must use the new definition. This is
+observation margin, not a claim that scale-in was made faster or that the old
+attempt now passes.
+
+Cleanup reached `teardown_verified` at 2026-09-04 06:51:28 UTC. No historical
+artifacts were rewritten and no new AWS run was started for these corrections.
+Local validation passed 655 default Python tests (16 integration tests excluded),
+lint, 10 executable JavaScript tests and the pinned k6 inspection. A complete
+21-minute real-HTTP replay was not run for this change.

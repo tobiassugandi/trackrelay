@@ -77,7 +77,7 @@ DEFAULT_ELASTICITY_STEPS = (
     ElasticityWorkloadStep(
         name="recovery",
         offered_rate_per_second=1,
-        duration_seconds=420,
+        duration_seconds=540,
     ),
 )
 
@@ -94,9 +94,11 @@ class ElasticityWorkloadDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[1] = 1
-    name: Literal["aws-elasticity-candidate-v2", "aws-elasticity-candidate-v3"] = (
-        "aws-elasticity-candidate-v3"
-    )
+    name: Literal[
+        "aws-elasticity-candidate-v2",
+        "aws-elasticity-candidate-v3",
+        "aws-elasticity-candidate-v4",
+    ] = "aws-elasticity-candidate-v4"
     steps: tuple[ElasticityWorkloadStep, ...] = DEFAULT_ELASTICITY_STEPS
     random_seed: int = 20260901
     partner_id: str = "elasticity-alpha"
@@ -168,9 +170,11 @@ class ElasticityWorkloadDefinition(BaseModel):
             raise ValueError("elasticity rates must fall strictly after the peak")
         if rates[0] != rates[-1]:
             raise ValueError("elasticity workload must return to its starting rate")
-        minimum_recovery_periods = (
-            7 if self.name == "aws-elasticity-candidate-v3" else 5
-        )
+        minimum_recovery_periods = {
+            "aws-elasticity-candidate-v2": 5,
+            "aws-elasticity-candidate-v3": 7,
+            "aws-elasticity-candidate-v4": 9,
+        }[self.name]
         if (
             self.steps[-1].duration_seconds
             < minimum_recovery_periods * self.metric_period_seconds

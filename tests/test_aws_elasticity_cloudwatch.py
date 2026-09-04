@@ -270,6 +270,26 @@ def test_permanent_simulator_metric_gap_is_preserved_and_not_filled(tmp_path):
     assert waits == [15]
 
 
+def test_parser_reports_exact_interior_gap_without_filling_it():
+    document = loads(metric_response())
+    metric = next(
+        item for item in document["MetricDataResults"] if item["Id"] == "rds_cpu"
+    )
+    missing = metric["Timestamps"].pop(1)
+    metric["Values"].pop(1)
+    with raises(AwsElasticityCloudWatchError) as caught:
+        parse_elasticity_metric_response(
+            dumps(document),
+            test_run_id=TEST_RUN_ID,
+            window_started_at=STARTED_AT,
+            window_ended_at=ENDED_AT,
+            collected_at=ENDED_AT + timedelta(minutes=10),
+        )
+    assert f"missing UTC: {missing}" in str(caught.value)
+    assert f"interior gaps UTC: {missing}" in str(caught.value)
+    assert "rds_cpu" in str(caught.value)
+
+
 def test_query_builder_rejects_missing_dimensions() -> None:
     with raises(AwsElasticityCloudWatchError, match="invalid elasticity"):
         build_elasticity_metric_queries(

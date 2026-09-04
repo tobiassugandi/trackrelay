@@ -29,6 +29,18 @@ def test_quiet_window_requires_continuous_fresh_safety():
     assert window.observe(250, True) == 0
 
 
+def test_two_minute_release_timer_resets_when_demand_returns():
+    window = scaling_metrics.QuietWindow()
+    for second in range(0, 120, 10):
+        assert window.observe(second, True) < 120
+    assert window.observe(120, True) == 120
+    # The signal does not stay latched safe after renewed demand/queue work.
+    assert window.observe(130, False) == 0
+    for second in range(140, 260, 10):
+        assert window.observe(second, True) < 120
+    assert window.observe(260, True) == 120
+
+
 def test_snapshot_counts_unique_arrivals_and_successful_retries():
     engine, sessions, _, event_id = create_event_fixture()
     now = STARTED_AT + timedelta(seconds=10)

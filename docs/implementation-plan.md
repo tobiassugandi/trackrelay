@@ -919,6 +919,16 @@ approved session must repeat both treatments together.
 - [ ] Freeze the scaling policy, environment, raw aligned time series, reconciliation evidence, and summary in `results/aws-elastic-treatment/`.
 - [ ] Collect both treatments' evidence, destroy the complete session-4 stack, and verify the teardown.
 
+Policy-v6 follow-up (local implementation): reduce only the fresh quiet scale-in
+threshold from 180 to 120 seconds. Keep workload v6 at 630 seconds and all
+acceptance bounds unchanged; validate historical policy-v5 plans/native evidence
+at 180 seconds. Session `cloud-session-4-20260904T112722Z` remains rejected with
+56.606 seconds of observed recovery; its teardown was verified at
+2026-09-04 12:01:22 UTC. No new AWS run was started.
+Local checks: 715 default Python tests, 17 mocked Terraform tests, Terraform
+validation/format checks and Ruff passed. Saved policy-v5 diagnostic validation
+retained its 180-second threshold and original recovery rejection.
+
 ### Stage 9.8 — Publish the elasticity headline
 
 - [x] Implement and locally test the AWS-off comparison/report generator before

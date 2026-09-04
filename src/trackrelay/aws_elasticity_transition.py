@@ -88,7 +88,7 @@ class WorkerAutoscalingPolicy(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    policy_version: Literal[2, 3, 4, 5] = 2
+    policy_version: Literal[2, 3, 4, 5, 6] = 2
     backlog_threshold_messages: Literal[10] | None = 10
     empty_alarm_name: str
     high_alarm_name: str
@@ -100,7 +100,7 @@ class WorkerAutoscalingPolicy(BaseModel):
     scale_in_cooldown_seconds: Literal[60] = 60
     scale_in_evaluation_periods: Literal[1, 3] = 3
     scale_in_period_seconds: Literal[10] | None = None
-    scale_in_quiet_seconds: Literal[180] | None = None
+    scale_in_quiet_seconds: Literal[120, 180] | None = None
     scale_in_messages_per_minute: Literal[120] | None = None
     scale_in_queue_work_threshold: Literal[10] | None = None
     scale_in_policy_name: str
@@ -168,13 +168,14 @@ class WorkerAutoscalingPolicy(BaseModel):
             or self.scale_in_queue_work_threshold != 10
         ):
             raise ValueError("policy v4 high-resolution thresholds are inconsistent")
-        if self.policy_version == 5:
+        if self.policy_version >= 5:
             if (
                 self.scale_in_period_seconds != 10
-                or self.scale_in_quiet_seconds != 180
+                or self.scale_in_quiet_seconds
+                != (180 if self.policy_version == 5 else 120)
                 or self.scale_in_evaluation_periods != 1
             ):
-                raise ValueError("policy v5 requires fresh three-minute quiet evidence")
+                raise ValueError("quiet period must match the frozen policy version")
         elif (
             self.scale_in_period_seconds is not None
             or self.scale_in_quiet_seconds is not None
@@ -322,18 +323,19 @@ class WorkerAutoscalingVerification(BaseModel):
             == ("arrival_rate" if expected.policy_version >= 4 else "messages_sent")
             and not high.metric_query_ids
             and low.comparison_operator == "GreaterThanOrEqualToThreshold"
-            and low.threshold == (180 if expected.policy_version == 5 else 1)
+            and low.threshold
+            == (expected.scale_in_quiet_seconds if expected.policy_version >= 5 else 1)
             and low.treat_missing_data == "notBreaching"
             and low.signal
             == (
                 "quiet_seconds"
-                if expected.policy_version == 5
+                if expected.policy_version >= 5
                 else "low_demand_and_queue_work"
             )
             and low.metric_query_ids
             == (
                 ("quiet", "release_safe")
-                if expected.policy_version == 5
+                if expected.policy_version >= 5
                 else ("delayed", "in_flight", "release_safe", "sent", "visible")
             )
         )
@@ -409,9 +411,9 @@ def _expected_policy(
     queue_name: str,
 ) -> WorkerAutoscalingPolicy:
     return WorkerAutoscalingPolicy(
-        policy_version=5,
+        policy_version=6,
         scale_in_period_seconds=10,
-        scale_in_quiet_seconds=180,
+        scale_in_quiet_seconds=120,
         scale_in_evaluation_periods=1,
         backlog_threshold_messages=None,
         empty_alarm_name=f"{worker_service_name}-release-safe",
@@ -652,7 +654,9 @@ def validate_elasticity_transition_plan(
                 "comparison_operator": "GreaterThanOrEqualToThreshold",
                 "datapoints_to_alarm": expected_policy.scale_in_evaluation_periods,
                 "evaluation_periods": expected_policy.scale_in_evaluation_periods,
-                "threshold": 180 if expected_policy.policy_version == 5 else 1,
+                "threshold": expected_policy.scale_in_quiet_seconds
+                if expected_policy.policy_version >= 5
+                else 1,
                 "treat_missing_data": "notBreaching",
             },
         )
@@ -672,13 +676,13 @@ def validate_elasticity_transition_plan(
             "in_flight": ("ApproximateNumberOfMessagesNotVisible", "Maximum"),
             "delayed": ("ApproximateNumberOfMessagesDelayed", "Maximum"),
         }
-        if expected_policy.policy_version == 5:
+        if expected_policy.policy_version >= 5:
             expected_expression = "FILL(quiet, 0)"
             expected_metrics = {"quiet": ("QuietSeconds", "Minimum")}
         expression = by_id.get("release_safe", {})
         if (
             set(by_id) != {"release_safe", *expected_metrics}
-            or (expected_policy.policy_version == 5 and expression.get("period") != 10)
+            or (expected_policy.policy_version >= 5 and expression.get("period") != 10)
             or expression.get("expression") != expected_expression
             or expression.get("return_data") is not True
         ):
@@ -698,13 +702,13 @@ def validate_elasticity_transition_plan(
                 or metrics[0].get("namespace")
                 != (
                     "TrackRelay/Elasticity"
-                    if expected_policy.policy_version == 5
+                    if expected_policy.policy_version >= 5
                     else "AWS/SQS"
                 )
                 or metrics[0].get("period")
                 != (
                     10
-                    if expected_policy.policy_version == 5
+                    if expected_policy.policy_version >= 5
                     else expected_policy.metric_period_seconds
                 )
                 or metrics[0].get("stat") != statistic
@@ -956,6 +960,7 @@ def _native_autoscaling_state(
                     3: "NumberOfMessagesSent",
                     4: "ArrivalRate",
                     5: "ArrivalRate",
+                    6: "ArrivalRate",
                 }[expected.policy_version]
                 expected_statistic = (
                     "Sum" if expected.policy_version == 3 else "Maximum"
@@ -984,6 +989,7 @@ def _native_autoscaling_state(
                     3: "messages_sent",
                     4: "arrival_rate",
                     5: "arrival_rate",
+                    6: "arrival_rate",
                 }[expected.policy_version]
             elif expected.policy_version >= 3:
                 metrics = item.get("Metrics")
@@ -999,18 +1005,18 @@ def _native_autoscaling_state(
                     ),
                     "delayed": ("ApproximateNumberOfMessagesDelayed", "Maximum"),
                 }
-                if expected.policy_version == 5:
+                if expected.policy_version >= 5:
                     expected_metric_names = {"quiet": ("QuietSeconds", "Minimum")}
                 query_by_id = {query["Id"]: query for query in metrics}
                 expression = query_by_id.get("release_safe", {})
                 if (
                     set(query_by_id) != {"release_safe", *expected_metric_names}
-                    or (expected.policy_version == 5 and expression.get("Period") != 10)
+                    or (expected.policy_version >= 5 and expression.get("Period") != 10)
                     or expression.get("Expression")
                     != (
                         "IF(FILL(sent, 0) < 120, IF(FILL(visible, 0) + "
                         "FILL(in_flight, 0) + FILL(delayed, 0) < 10, 1, 0), 0)"
-                        if expected.policy_version != 5
+                        if expected.policy_version < 5
                         else "FILL(quiet, 0)"
                     )
                     or expression.get("ReturnData") is not True
@@ -1027,7 +1033,7 @@ def _native_autoscaling_state(
                         or metric.get("Namespace")
                         != (
                             "TrackRelay/Elasticity"
-                            if expected.policy_version == 5
+                            if expected.policy_version >= 5
                             else "AWS/SQS"
                         )
                         or metric.get("Dimensions")
@@ -1035,7 +1041,7 @@ def _native_autoscaling_state(
                         or metric_stat.get("Period")
                         != (
                             10
-                            if expected.policy_version == 5
+                            if expected.policy_version >= 5
                             else expected.metric_period_seconds
                         )
                         or metric_stat.get("Stat") != statistic
@@ -1046,7 +1052,7 @@ def _native_autoscaling_state(
                     continue
                 signal_name = (
                     "quiet_seconds"
-                    if expected.policy_version == 5
+                    if expected.policy_version >= 5
                     else "low_demand_and_queue_work"
                 )
             else:

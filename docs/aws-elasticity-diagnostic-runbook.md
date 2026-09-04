@@ -1,4 +1,4 @@
-# Elastic-only workload-v6 / policy-v5 diagnostic
+# Elastic-only workload-v6 / policy-v6 diagnostic
 
 Use this workflow while developing autoscaling. It skips the fixed-worker load
 and between-treatment reset, but retains the full elastic workload and all
@@ -47,8 +47,8 @@ are `30 → 30 → 30 → 180 → 30 → 30 → 300` seconds. Provisioning, migr
 minute alignment, drain and teardown are additional. Drain retains its
 180-second stable-empty requirement and 20-minute deadline.
 
-Policy v5 uses ten-second telemetry in both directions: two arrival-rate buckets
-at or above 3/s request eight workers; 180 seconds of continuously sampled low
+Policy v6 uses ten-second telemetry in both directions: two arrival-rate buckets
+at or above 3/s request eight workers; 120 seconds of continuously sampled low
 demand and low outstanding/queue work permits return to one. Failures and stale
 samples reset that quiet timer. Scale-out and Fargate startup still have latency.
 Qualification requires at least 60 observed seconds at eight workers during

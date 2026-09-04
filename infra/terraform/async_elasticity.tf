@@ -1,6 +1,6 @@
 locals {
   worker_autoscaling_policy = {
-    policy_version                = 5
+    policy_version                = 6
     maximum_capacity              = 8
     minimum_capacity              = 1
     metric_period_seconds         = 60
@@ -9,7 +9,7 @@ locals {
     scale_in_cooldown_seconds     = 60
     scale_in_evaluation_periods   = 1
     scale_in_period_seconds       = 10
-    scale_in_quiet_seconds        = 180
+    scale_in_quiet_seconds        = 120
     scale_out_messages_per_minute = null
     scale_out_period_seconds      = 10
     scale_out_rate_per_second     = 3

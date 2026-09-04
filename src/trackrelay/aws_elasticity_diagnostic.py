@@ -111,7 +111,7 @@ class ElasticityDiagnosticSummary(BaseModel):
                 "aws-elasticity-demo-v5",
                 "aws-elasticity-demo-v6",
             )
-            or self.transition.policy.policy_version not in (3, 4, 5)
+            or self.transition.policy.policy_version not in (3, 4, 5, 6)
             or self.measurement.load_started_at < self.transition.verified_at
         ):
             raise ValueError(
@@ -197,7 +197,7 @@ def run_elastic_diagnostic_treatment(
         raise AwsSessionError("elastic diagnostic requires verified worker autoscaling")
     if (
         definition != ELASTICITY_WORKLOAD_DEFINITION
-        or transition.policy.policy_version not in (3, 4, 5)
+        or transition.policy.policy_version not in (3, 4, 5, 6)
     ):
         raise AwsSessionError(
             "elastic diagnostic requires the frozen workload and policy"

@@ -74,12 +74,12 @@ def completed(
     return CompletedProcess(arguments, returncode, stdout, "")
 
 
-def policy() -> WorkerAutoscalingPolicy:
+def policy(version: int = 6) -> WorkerAutoscalingPolicy:
     return WorkerAutoscalingPolicy(
-        policy_version=5,
+        policy_version=version,
         scale_in_evaluation_periods=1,
         scale_in_period_seconds=10,
-        scale_in_quiet_seconds=180,
+        scale_in_quiet_seconds=120 if version == 6 else 180,
         backlog_threshold_messages=None,
         empty_alarm_name=f"{WORKER_SERVICE}-release-safe",
         high_alarm_name=f"{WORKER_SERVICE}-demand-high",
@@ -130,6 +130,25 @@ def test_candidate_v3_policy_evidence_remains_readable() -> None:
     parsed = WorkerAutoscalingPolicy.model_validate(historical)
     assert parsed.policy_version == 3
     assert parsed.scale_out_period_seconds is None
+
+
+@mark.parametrize("version,seconds", ((5, 180), (6, 120)))
+def test_quiet_period_is_versioned_without_changing_other_controls(version, seconds):
+    fields = {
+        **policy().model_dump(),
+        "policy_version": version,
+        "scale_in_quiet_seconds": seconds,
+    }
+    parsed = WorkerAutoscalingPolicy.model_validate(fields)
+    assert parsed.scale_in_quiet_seconds == seconds
+    with raises(ValueError, match="quiet period"):
+        WorkerAutoscalingPolicy.model_validate(
+            {**fields, "scale_in_quiet_seconds": 120 if seconds == 180 else 180}
+        )
+    assert parsed.scale_out_rate_per_second == 3
+    assert parsed.scale_out_evaluation_periods == 2
+    assert parsed.scale_in_cooldown_seconds == 60
+    assert parsed.scale_in_queue_work_threshold == 10
 
 
 @mark.parametrize(
@@ -372,7 +391,7 @@ def plan_document(expected: WorkerAutoscalingPolicy) -> dict[str, object]:
                         )
                     ),
                 ],
-                "threshold": 180,
+                "threshold": expected.scale_in_quiet_seconds,
                 "treat_missing_data": "notBreaching",
             },
         ),
@@ -419,7 +438,7 @@ def native_verification(
                 comparison_operator="GreaterThanOrEqualToThreshold",
                 datapoints_to_alarm=1,
                 evaluation_periods=1,
-                threshold=180,
+                threshold=expected.scale_in_quiet_seconds,
                 treat_missing_data="notBreaching",
                 signal="quiet_seconds",
                 metric_query_ids=("quiet", "release_safe"),
@@ -482,8 +501,9 @@ def test_transition_requires_the_verified_reset(tmp_path: Path) -> None:
         validate_elasticity_transition_approval(session, **approvals(session))
 
 
-def test_plan_allows_only_the_five_policy_resources() -> None:
-    expected = policy()
+@mark.parametrize("version", (5, 6))
+def test_plan_allows_only_the_five_policy_resources(version) -> None:
+    expected = policy(version)
     document = plan_document(expected)
 
     evidence = validate_elasticity_transition_plan(
@@ -594,9 +614,12 @@ def test_plan_rejects_a_changed_scale_out_threshold(field, value) -> None:
         )
 
 
-def test_native_verification_requires_alarm_policy_wiring(tmp_path: Path) -> None:
+@mark.parametrize("version", (5, 6))
+def test_native_verification_requires_alarm_policy_wiring(
+    tmp_path: Path, version
+) -> None:
     session = ready_session(tmp_path)
-    expected = policy()
+    expected = policy(version)
     scale_in_arn = "arn:aws:autoscaling:region:account:policy/scale-in"
     scale_out_arn = "arn:aws:autoscaling:region:account:policy/scale-out"
 
@@ -674,7 +697,7 @@ def test_native_verification_requires_alarm_policy_wiring(tmp_path: Path) -> Non
                     "AlarmActions": [scale_in_arn],
                     "DatapointsToAlarm": 1,
                     "EvaluationPeriods": 1,
-                    "Threshold": 180,
+                    "Threshold": expected.scale_in_quiet_seconds,
                     "Metrics": [
                         {
                             "Id": "release_safe",

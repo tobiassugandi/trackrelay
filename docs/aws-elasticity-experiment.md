@@ -206,7 +206,7 @@ against a partially changed stack.
 
 ## Worker-autoscaling transition
 
-The elastic treatment uses frozen policy v5. Two API replicas publish global
+The elastic treatment uses frozen policy v6. Two API replicas publish global
 accepted arrivals and unfinished/completed events every ten seconds. Maximum
 `ArrivalRate` >=3/s for two ten-second buckets requests exactly eight workers.
 Maximum avoids double-counting shared database snapshots.
@@ -214,7 +214,7 @@ Maximum avoids double-counting shared database snapshots.
 For contraction, each publisher tracks a fresh `QuietSeconds` timer: rate <2/s,
 unfinished events <10, and the sum of all three SQS work counts <10. Busy or
 failed samples, restarts and gaps over 15 seconds reset it. A ten-second Minimum
-timer >=180 seconds permits return to one. Missing timer data is filled with
+timer >=120 seconds permits return to one. Missing timer data is filled with
 zero, which cannot authorize contraction. Both directions retain 60-second
 cooldowns. This replaces the stale native-minute scale-in signal; it is not
 scheduled scaling or laptop-driven capacity control.

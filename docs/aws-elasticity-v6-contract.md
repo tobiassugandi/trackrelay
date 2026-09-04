@@ -1,5 +1,29 @@
 # Workload v6: bounded driver headroom and short-window recovery evidence
 
+## Current policy amendment: two-minute quiet period
+
+New deployments now pair this **unchanged workload v6** with **policy v6**.
+The sole scaling change is the `QuietSeconds` threshold: **120 seconds**, down
+from policy v5's 180 seconds. Older policy evidence retains its original
+threshold. The original workload-v6 specification below describes its first
+policy-v5 pairing; this amendment supersedes that pairing for fresh deployments.
+
+Scale-in still requires continuously low accepted demand, unfinished events and
+all three SQS work counts. Busy, failed or stale samples reset the timer, and
+missing metrics cannot authorize contraction. Scale-out remains two ten-second
+arrival-rate buckets >=3/s requesting eight workers; renewed demand is not
+required to wait for another quiet period. Both cooldowns remain 60 seconds.
+Detection, action and ECS task startup/shutdown add latency: 120 seconds is a
+quiet qualification threshold, not a guaranteed task-stop deadline.
+
+The 630-second workload, 25/s peak, 60-second observed recovery requirement,
+180-second stable-empty post-load drain, backlog/age/SLO/correctness gates and
+eight-worker maximum are unchanged. No extra traffic or observation time was
+added. Previous failed runs remain failed; this document does not authorize AWS
+spending. The separate diagnostic-log atomicity issue is not part of this change.
+
+## Original workload-v6 specification
+
 New diagnostic and paired runs select `aws-elasticity-demo-v6` automatically.
 The [v5 contract](aws-elasticity-v5-contract.md) remains the historical record;
 v6 inherits its 630-second, 5,730-event waveform, 25/s peak, policy v5, 60-second

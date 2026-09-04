@@ -837,7 +837,7 @@ run "worker_elasticity_policy_is_bounded_and_queue_driven" {
     condition = (
       local.worker_autoscaling_policy.minimum_capacity == 1
       && local.worker_autoscaling_policy.maximum_capacity == 8
-      && local.worker_autoscaling_policy.policy_version == 5
+      && local.worker_autoscaling_policy.policy_version == 6
       && local.worker_autoscaling_policy.scale_out_messages_per_minute == null
       && local.worker_autoscaling_policy.scale_out_period_seconds == 10
       && local.worker_autoscaling_policy.scale_out_rate_per_second == 3
@@ -847,7 +847,7 @@ run "worker_elasticity_policy_is_bounded_and_queue_driven" {
       && local.worker_autoscaling_policy.scale_out_evaluation_periods == 2
       && local.worker_autoscaling_policy.scale_in_evaluation_periods == 1
       && local.worker_autoscaling_policy.scale_in_period_seconds == 10
-      && local.worker_autoscaling_policy.scale_in_quiet_seconds == 180
+      && local.worker_autoscaling_policy.scale_in_quiet_seconds == 120
       && local.worker_autoscaling_policy.scale_out_cooldown_seconds == 60
       && local.worker_autoscaling_policy.scale_in_cooldown_seconds == 60
     )
@@ -903,7 +903,7 @@ run "worker_elasticity_policy_is_bounded_and_queue_driven" {
     condition = (
       aws_cloudwatch_metric_alarm.async_worker_empty[0].actions_enabled
       && aws_cloudwatch_metric_alarm.async_worker_empty[0].comparison_operator == "GreaterThanOrEqualToThreshold"
-      && aws_cloudwatch_metric_alarm.async_worker_empty[0].threshold == 180
+      && aws_cloudwatch_metric_alarm.async_worker_empty[0].threshold == 120
       && aws_cloudwatch_metric_alarm.async_worker_empty[0].evaluation_periods == 1
       && aws_cloudwatch_metric_alarm.async_worker_empty[0].datapoints_to_alarm == 1
       && aws_cloudwatch_metric_alarm.async_worker_empty[0].treat_missing_data == "notBreaching"
@@ -916,14 +916,14 @@ run "worker_elasticity_policy_is_bounded_and_queue_driven" {
       && one(one([for query in aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_query : query if query.id == "quiet"]).metric).period == 10
       && one(one([for query in aws_cloudwatch_metric_alarm.async_worker_empty[0].metric_query : query if query.id == "quiet"]).metric).stat == "Minimum"
     )
-    error_message = "Scale-in requires 180 seconds of fresh quiet evidence; missing data is fail-closed."
+    error_message = "Scale-in requires 120 seconds of fresh quiet evidence; missing data is fail-closed."
   }
 
   assert {
     condition = (
       output.worker_autoscaling_policy.minimum_capacity == 1
       && output.worker_autoscaling_policy.maximum_capacity == 8
-      && output.worker_autoscaling_policy.policy_version == 5
+      && output.worker_autoscaling_policy.policy_version == 6
       && output.worker_autoscaling_policy.scale_out_messages_per_minute == null
       && local.worker_autoscaling_policy.scale_out_period_seconds == 10
       && local.worker_autoscaling_policy.scale_out_rate_per_second == 3

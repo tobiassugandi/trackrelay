@@ -976,6 +976,14 @@ evidence.
   diagnostic. The old 10-second ladder cannot establish the new `X×` ratio;
   document the measurement differences and proposed comparison work in the
   [baseline review](aws-async-capacity-baseline-review.md).
+- [x] Publish the successful standalone autoscaling demonstration as the README
+  MVP before building the capacity comparison. Lead with 1→8→1 workers and
+  all 5,730 events delivered, add aligned demand/worker and latency/backlog
+  plots from actual evidence, and commit a sanitized numeric subset with an
+  AWS-off renderer. Retain the ten-second 572 ms latency spike and explain
+  full-phase qualification. Preserve the old README as an explicitly historical
+  archive. [Measurement notes](autoscaling-report.md) distinguish this one-run
+  result from the still-deferred paired and async-versus-sync comparisons.
 
 - [x] Implement and locally test the AWS-off comparison/report generator before
   session 4. Recheck the saved reset, policy, revision, measurement, and teardown
@@ -988,8 +996,8 @@ evidence.
 - [ ] Analyze the frozen results and build the report locally with AWS off.
 - [ ] Produce one large, aligned time-series figure comparing fixed and elastic runs across offered load, running worker tasks, queue depth or message age, and p95 latency with its 500 ms SLO line.
 - [ ] Report the highest demand step that satisfies every end-to-end guardrail in each run, the load multiplier, worker expansion A→B, time to scale out, backlog drain time, and return to A.
-- [ ] Put the figure and one-sentence elasticity result near the top of the repository README.
-- [ ] Explain the causal chain plainly: SQS exposes pending demand, autoscaling responds, ECS changes the worker count, and AWS supplies and releases compute without TrackRelay owning spare hardware.
+- [x] Put the standalone figure and one-sentence elasticity result near the top of the repository README; the paired comparison figure remains deferred.
+- [x] Explain the causal chain plainly: queue decoupling enables independent workers, demand/backlog telemetry drives autoscaling, ECS changes worker count, and AWS supplies compute without TrackRelay owning spare physical hardware.
 - [ ] Present the Stage 9.3 hardware-flexibility result as the clear first answer to "why not choose more suitable cloud hardware?", then keep migration details and extensive guardrail evidence from competing with the primary elasticity result.
 - [ ] Freeze and run a separate matched capacity staircase for the synchronous
   reference and elastic asynchronous architecture. Use identical correctness,

@@ -26,6 +26,7 @@ from trackrelay.aws_async_deployment import (
     run_process,
     terraform_output,
 )
+from trackrelay.aws_scaling_diagnostics import collect_scaling_diagnostics
 from trackrelay.aws_session import AwsSession
 from trackrelay.operator_status import operator_status
 
@@ -365,7 +366,9 @@ def build_elasticity_metric_queries(
     dimensions: Mapping[str, str],
 ) -> list[dict[str, object]]:
     """Build native queries, explicitly filling only sparse zero semantics."""
-    if set(dimensions) != REQUIRED_DIMENSION_KEYS or not all(
+    if set(dimensions) - {
+        "scaling_metrics_namespace"
+    } != REQUIRED_DIMENSION_KEYS or not all(
         isinstance(value, str) and value for value in dimensions.values()
     ):
         raise AwsElasticityCloudWatchError(
@@ -548,6 +551,15 @@ def collect_elasticity_cloudwatch_evidence(
             "Terraform returned invalid elasticity metric dimensions"
         )
     dimensions = raw_dimensions
+    if dimensions.get("scaling_metrics_namespace") == "TrackRelay/Elasticity":
+        collect_scaling_diagnostics(
+            session,
+            dimensions,
+            window_started_at,
+            now(),
+            session.evidence_dir / "diagnostics" / "scaling" / str(test_run_id),
+            runner=runner,
+        )
     query_document = build_elasticity_metric_queries(dimensions)
     operator_status("CloudWatch: checking dashboard and native metric window")
     dashboard_result = invoke(

@@ -402,6 +402,14 @@ run "async_platform_has_bounded_logs_and_least_privilege_roles" {
     )
     error_message = "API and worker queue permissions must stay role-specific."
   }
+
+  assert {
+    condition = (
+      jsondecode(aws_iam_role_policy.api_queue[0].policy).Statement[1].Action == ["cloudwatch:PutMetricData"]
+      && jsondecode(aws_iam_role_policy.api_queue[0].policy).Statement[1].Condition.StringEquals["cloudwatch:namespace"] == "TrackRelay/Elasticity"
+    )
+    error_message = "API telemetry may publish only into the dedicated scaling namespace."
+  }
 }
 
 run "async_observability_has_one_native_metric_contract" {
@@ -419,6 +427,7 @@ run "async_observability_has_one_native_metric_contract" {
         "rds_identifier",
         "simulator_service_name",
         "worker_service_name",
+        "scaling_metrics_namespace",
       ])
       && output.async_observability_dimensions.api_service_name == "trackrelay-8a7e37db-api"
       && output.async_observability_dimensions.cluster_name == "trackrelay-8a7e37db-async"
@@ -808,6 +817,13 @@ run "async_services_are_fixed_and_start_only_when_enabled" {
     )
     error_message = "Services must retain their exact ingress and discovery boundaries."
   }
+
+  assert {
+    condition = (
+      { for item in jsondecode(aws_ecs_task_definition.async_api[0].container_definitions)[0].environment : item.name => item.value }["TRACKRELAY_SCALING_METRICS_QUEUE_NAME"] == aws_sqs_queue.delivery[0].name
+    )
+    error_message = "The publisher must be present before the policy-only transition, including fixed deployments."
+  }
 }
 
 run "worker_elasticity_policy_is_bounded_and_queue_driven" {
@@ -821,17 +837,19 @@ run "worker_elasticity_policy_is_bounded_and_queue_driven" {
     condition = (
       local.worker_autoscaling_policy.minimum_capacity == 1
       && local.worker_autoscaling_policy.maximum_capacity == 8
-      && local.worker_autoscaling_policy.policy_version == 3
-      && local.worker_autoscaling_policy.scale_out_messages_per_minute == 300
+      && local.worker_autoscaling_policy.policy_version == 4
+      && local.worker_autoscaling_policy.scale_out_messages_per_minute == null
+      && local.worker_autoscaling_policy.scale_out_period_seconds == 10
+      && local.worker_autoscaling_policy.scale_out_rate_per_second == 3
       && local.worker_autoscaling_policy.scale_in_messages_per_minute == 120
       && local.worker_autoscaling_policy.scale_in_queue_work_threshold == 10
       && local.worker_autoscaling_policy.metric_period_seconds == 60
-      && local.worker_autoscaling_policy.scale_out_evaluation_periods == 1
+      && local.worker_autoscaling_policy.scale_out_evaluation_periods == 2
       && local.worker_autoscaling_policy.scale_in_evaluation_periods == 3
       && local.worker_autoscaling_policy.scale_out_cooldown_seconds == 60
       && local.worker_autoscaling_policy.scale_in_cooldown_seconds == 60
     )
-    error_message = "Worker elasticity must retain its frozen v3 bounds, thresholds, periods, and cooldowns."
+    error_message = "Worker elasticity must retain its frozen v4 bounds, thresholds, periods, and cooldowns."
   }
 
   assert {
@@ -864,19 +882,19 @@ run "worker_elasticity_policy_is_bounded_and_queue_driven" {
 
   assert {
     condition = (
-      aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].metric_name == "NumberOfMessagesSent"
+      aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].metric_name == "ArrivalRate"
       && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].actions_enabled
-      && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].namespace == "AWS/SQS"
-      && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].statistic == "Sum"
-      && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].period == 60
-      && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].threshold == 300
-      && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].evaluation_periods == 1
-      && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].datapoints_to_alarm == 1
+      && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].namespace == "TrackRelay/Elasticity"
+      && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].statistic == "Maximum"
+      && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].period == 10
+      && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].threshold == 3
+      && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].evaluation_periods == 2
+      && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].datapoints_to_alarm == 2
       && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].treat_missing_data == "notBreaching"
       && aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].dimensions.QueueName == "trackrelay-8a7e37db-delivery"
       && length(aws_cloudwatch_metric_alarm.async_worker_backlog_high[0].alarm_actions) == 1
     )
-    error_message = "Scale-out must use one complete native SQS arrival-demand period."
+    error_message = "Scale-out must use two ten-second high-resolution global arrival-rate periods."
   }
 
   assert {
@@ -904,8 +922,10 @@ run "worker_elasticity_policy_is_bounded_and_queue_driven" {
     condition = (
       output.worker_autoscaling_policy.minimum_capacity == 1
       && output.worker_autoscaling_policy.maximum_capacity == 8
-      && output.worker_autoscaling_policy.policy_version == 3
-      && output.worker_autoscaling_policy.scale_out_messages_per_minute == 300
+      && output.worker_autoscaling_policy.policy_version == 4
+      && output.worker_autoscaling_policy.scale_out_messages_per_minute == null
+      && local.worker_autoscaling_policy.scale_out_period_seconds == 10
+      && local.worker_autoscaling_policy.scale_out_rate_per_second == 3
       && output.worker_autoscaling_policy.scale_in_messages_per_minute == 120
       && output.worker_autoscaling_policy.scale_in_queue_work_threshold == 10
       && output.worker_autoscaling_policy.queue_name == "trackrelay-8a7e37db-delivery"

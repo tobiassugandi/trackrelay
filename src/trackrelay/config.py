@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     sqs_visibility_timeout_seconds: SqsVisibilityTimeoutSeconds = 120
     sqs_max_messages: SqsMaxMessages = 10
     aws_region: str = "ap-southeast-3"
+    scaling_metrics_queue_name: str | None = Field(
+        default=None, pattern=r"^[A-Za-z0-9_-]+-delivery$"
+    )
 
     def database_connection_url(self) -> str:
         """Build a database URL without storing the injected password in the model."""

@@ -87,7 +87,7 @@ class WorkerAutoscalingPolicy(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    policy_version: Literal[2, 3] = 2
+    policy_version: Literal[2, 3, 4] = 2
     backlog_threshold_messages: Literal[10] | None = 10
     empty_alarm_name: str
     high_alarm_name: str
@@ -102,8 +102,10 @@ class WorkerAutoscalingPolicy(BaseModel):
     scale_in_queue_work_threshold: Literal[10] | None = None
     scale_in_policy_name: str
     scale_out_cooldown_seconds: Literal[60] = 60
-    scale_out_evaluation_periods: Literal[1] = 1
+    scale_out_evaluation_periods: Literal[1, 2] = 1
     scale_out_messages_per_minute: Literal[300] | None = None
+    scale_out_period_seconds: Literal[10] | None = None
+    scale_out_rate_per_second: Literal[3] | None = None
     scale_out_policy_name: str
 
     @model_validator(mode="after")
@@ -123,9 +125,9 @@ class WorkerAutoscalingPolicy(BaseModel):
             raise ValueError("autoscaling policy uses an invalid queue")
         expected_prefix = resource_parts[2]
         expected_high_suffix = (
-            "demand-high" if self.policy_version == 3 else "backlog-high"
+            "demand-high" if self.policy_version >= 3 else "backlog-high"
         )
-        expected_low_suffix = "release-safe" if self.policy_version == 3 else "empty"
+        expected_low_suffix = "release-safe" if self.policy_version >= 3 else "empty"
         if (
             self.high_alarm_name != f"{expected_prefix}-{expected_high_suffix}"
             or self.empty_alarm_name != f"{expected_prefix}-{expected_low_suffix}"
@@ -147,6 +149,22 @@ class WorkerAutoscalingPolicy(BaseModel):
             or self.scale_in_queue_work_threshold != 10
         ):
             raise ValueError("candidate v3 autoscaling thresholds are inconsistent")
+        if self.policy_version < 4 and (
+            self.scale_out_period_seconds is not None
+            or self.scale_out_rate_per_second is not None
+            or self.scale_out_evaluation_periods != 1
+        ):
+            raise ValueError("historical policies cannot use high-resolution demand")
+        if self.policy_version == 4 and (
+            self.backlog_threshold_messages is not None
+            or self.scale_out_messages_per_minute is not None
+            or self.scale_out_period_seconds != 10
+            or self.scale_out_rate_per_second != 3
+            or self.scale_out_evaluation_periods != 2
+            or self.scale_in_messages_per_minute != 120
+            or self.scale_in_queue_work_threshold != 10
+        ):
+            raise ValueError("policy v4 high-resolution thresholds are inconsistent")
         return self
 
 
@@ -197,9 +215,9 @@ class WorkerAlarmVerification(BaseModel):
     evaluation_periods: PositiveInteger
     threshold: NonNegativeInteger
     treat_missing_data: Literal["breaching", "notBreaching"]
-    signal: Literal["visible_backlog", "messages_sent", "low_demand_and_queue_work"] = (
-        "visible_backlog"
-    )
+    signal: Literal[
+        "visible_backlog", "messages_sent", "arrival_rate", "low_demand_and_queue_work"
+    ] = "visible_backlog"
     metric_query_ids: tuple[str, ...] = ()
 
 
@@ -274,8 +292,14 @@ class WorkerAutoscalingVerification(BaseModel):
             and scale_out.metric_interval_upper_bound is None
             and scale_in.metric_interval_lower_bound == 0
             and scale_in.metric_interval_upper_bound is None
-            and high.threshold == expected.scale_out_messages_per_minute
-            and high.signal == "messages_sent"
+            and high.threshold
+            == (
+                expected.scale_out_rate_per_second
+                if expected.policy_version == 4
+                else expected.scale_out_messages_per_minute
+            )
+            and high.signal
+            == ("arrival_rate" if expected.policy_version == 4 else "messages_sent")
             and not high.metric_query_ids
             and low.comparison_operator == "GreaterThanOrEqualToThreshold"
             and low.threshold == 1
@@ -356,7 +380,7 @@ def _expected_policy(
     queue_name: str,
 ) -> WorkerAutoscalingPolicy:
     return WorkerAutoscalingPolicy(
-        policy_version=3,
+        policy_version=4,
         backlog_threshold_messages=None,
         empty_alarm_name=f"{worker_service_name}-release-safe",
         high_alarm_name=f"{worker_service_name}-demand-high",
@@ -366,7 +390,9 @@ def _expected_policy(
         scale_in_messages_per_minute=120,
         scale_in_queue_work_threshold=10,
         scale_out_policy_name=f"{worker_service_name}-scale-out",
-        scale_out_messages_per_minute=300,
+        scale_out_period_seconds=10,
+        scale_out_rate_per_second=3,
+        scale_out_evaluation_periods=2,
     )
 
 
@@ -568,11 +594,21 @@ def validate_elasticity_transition_plan(
                 "datapoints_to_alarm": expected_policy.scale_out_evaluation_periods,
                 "dimensions": {"QueueName": expected_policy.queue_name},
                 "evaluation_periods": expected_policy.scale_out_evaluation_periods,
-                "metric_name": "NumberOfMessagesSent",
-                "namespace": "AWS/SQS",
-                "period": expected_policy.metric_period_seconds,
-                "statistic": "Sum",
-                "threshold": expected_policy.scale_out_messages_per_minute,
+                "metric_name": "ArrivalRate"
+                if expected_policy.policy_version == 4
+                else "NumberOfMessagesSent",
+                "namespace": "TrackRelay/Elasticity"
+                if expected_policy.policy_version == 4
+                else "AWS/SQS",
+                "period": expected_policy.scale_out_period_seconds
+                if expected_policy.policy_version == 4
+                else expected_policy.metric_period_seconds,
+                "statistic": "Maximum"
+                if expected_policy.policy_version == 4
+                else "Sum",
+                "threshold": expected_policy.scale_out_rate_per_second
+                if expected_policy.policy_version == 4
+                else expected_policy.scale_out_messages_per_minute,
                 "treat_missing_data": "notBreaching",
             },
         )
@@ -869,29 +905,39 @@ def _native_autoscaling_state(
             signal_name = "visible_backlog"
             metric_query_ids: tuple[str, ...] = ()
             if alarm_name == expected.high_alarm_name:
-                expected_metric_name = (
-                    "NumberOfMessagesSent"
-                    if expected.policy_version == 3
-                    else "ApproximateNumberOfMessagesVisible"
-                )
+                expected_metric_name = {
+                    2: "ApproximateNumberOfMessagesVisible",
+                    3: "NumberOfMessagesSent",
+                    4: "ArrivalRate",
+                }[expected.policy_version]
                 expected_statistic = (
                     "Sum" if expected.policy_version == 3 else "Maximum"
                 )
                 if (
                     item.get("MetricName") != expected_metric_name
-                    or item.get("Namespace") != "AWS/SQS"
-                    or item.get("Period") != expected.metric_period_seconds
+                    or item.get("Namespace")
+                    != (
+                        "TrackRelay/Elasticity"
+                        if expected.policy_version == 4
+                        else "AWS/SQS"
+                    )
+                    or item.get("Period")
+                    != (
+                        expected.scale_out_period_seconds
+                        if expected.policy_version == 4
+                        else expected.metric_period_seconds
+                    )
                     or item.get("Statistic") != expected_statistic
                     or item.get("Dimensions")
                     != [{"Name": "QueueName", "Value": expected.queue_name}]
                 ):
                     continue
-                signal_name = (
-                    "messages_sent"
-                    if expected.policy_version == 3
-                    else "visible_backlog"
-                )
-            elif expected.policy_version == 3:
+                signal_name = {
+                    2: "visible_backlog",
+                    3: "messages_sent",
+                    4: "arrival_rate",
+                }[expected.policy_version]
+            elif expected.policy_version >= 3:
                 metrics = item.get("Metrics")
                 if not isinstance(metrics, list):
                     continue

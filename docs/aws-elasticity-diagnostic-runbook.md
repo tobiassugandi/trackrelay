@@ -1,4 +1,4 @@
-# Elastic-only candidate-v4 diagnostic
+# Elastic-only workload-v4 / policy-v4 diagnostic
 
 Use this workflow while developing autoscaling. It skips the fixed-worker load
 and between-treatment reset, but retains the full elastic workload and all
@@ -48,10 +48,30 @@ teardown. Drain still requires 180 continuously empty seconds within a
 20-minute post-load deadline. Skipping fixed load saves that treatment's load
 and drain plus reset; it does not make the whole session a 21-minute operation.
 
-V4 adds two recovery minutes to v3 and retains policy version 3, including the
-three-period low-demand/low-queue scale-in rule and the 60-second observed
-one-worker recovery gate. It does not promise immediate scale-in or relax any
-acceptance bound. Historical v3 evidence remains unchanged.
+The workload is unchanged from candidate v4. New deployments use **policy v4**:
+each API replica publishes global database-derived `ArrivalRate` and
+`OutstandingEvents` gauges to `TrackRelay/Elasticity` every ten seconds, with
+one-second storage resolution. The alarm uses **Maximum**, never Sum across
+replicas: at least 3 accepted unique events/s for two ten-second periods requests
+eight workers. This replaces the native SQS 300-message/minute scale-out signal.
+The existing three-minute low-demand/low-queue scale-in rule, cooldowns,
+1,500-event backlog bound, 180-second age bound and observed one-worker recovery
+gate are unchanged. A ten-second alarm is not a ten-second task-start guarantee.
+
+The publisher is also present in fixed deployments, so the guarded transition
+still creates only the five policy resources. It has its own bounded database
+pool and CloudWatch timeouts, publishes explicit zeroes on successful empty
+samples, logs failures without manufacturing zeroes, and shuts down with the API.
+Duplicate retries are not counted as new unique arrivals. This is accepted demand,
+not offered traffic: an API/database ingestion bottleneck can suppress this signal.
+Existing ingestion and non-worker headroom gates remain mandatory.
+
+Use a fresh deployment and rebuilt API image; do not apply this change to a stack
+from an earlier run. Policy v2/v3 evidence stays readable and is not reclassified.
+The telemetry adds two custom metrics, a high-resolution alarm, PutMetricData
+calls from two API replicas, and one database connection per replica. Review those
+costs and overhead before approving another run. No cloud result is implied by
+the local implementation. See [AWS high-resolution metrics](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/publishingMetrics.html#high-resolution-metrics).
 
 Review current regional costs and remaining monthly budget before approval.
 The ceiling check is not a billing meter or dollar/time kill switch. Do not
@@ -113,6 +133,17 @@ Multiple successful retries may correspond to one idempotently stored business
 effect; missing receipts, duplicates and content mismatches still fail.
 CloudWatch missing-bucket errors name exact UTC timestamps and identify interior
 gaps where later data already exists. Do not zero-fill or interpolate RDS CPU.
+
+Auxiliary timing evidence is collected before native metric qualification under
+`diagnostics/scaling/TEST_RUN_ID/`: `high-resolution-metrics.json` (ten-second
+Maximum gauges), `alarm-demand-high.json`, `alarm-release-safe.json`, and
+`scaling-activities.json` (including non-scaling decisions). Inspect
+`collection.json` for collection failures. These are best-effort diagnostics,
+not substitutes for complete native metric evidence; raw responses can contain
+missing or not-yet-published datapoints. Compare alarm state/action timestamps,
+scaling activity timestamps, and the existing desired/running/pending task
+observations to separate detection, action, and startup delay. Native bucket
+timestamps alone do not reveal when AWS first published the datapoint.
 
 Inspect the journal's
 `failed_phase`, `workflow_error` and `cleanup_errors`. If teardown is not

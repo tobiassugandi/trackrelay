@@ -14,7 +14,7 @@ work accumulates. A successful treatment must show this complete sequence:
 offered load rises
         |
         v
-SQS arrival demand crosses the frozen threshold
+high-resolution accepted arrival demand crosses the frozen threshold
         |
         v
 ECS increases worker tasks
@@ -51,8 +51,9 @@ Every plateau aligns to CloudWatch's 60-second native metric period. The final
 nine-minute low-rate window exists to observe backlog recovery and, in the
 elastic treatment, return to the minimum worker count.
 
-V4 changes only recovery duration relative to v3; policy version 3 and every
-acceptance bound remain fixed. The extra two minutes provide observation margin
+Workload v4 changes only recovery duration relative to v3. New runs use policy
+v4 (high-resolution scale-out), while every acceptance bound remains fixed.
+The extra two minutes provide observation margin
 after the first v3 diagnostic retained only 45 seconds at one worker. Historical
 v3 remains readable and is not reclassified using the new window.
 
@@ -216,10 +217,16 @@ against a partially changed stack.
 
 ## Worker-autoscaling transition
 
-The elastic treatment uses one frozen step-scaling policy. The source queue's
-native `NumberOfMessagesSent` sum is evaluated in 60-second periods. At least
-300 messages sent in one period (5 events/s) sets the worker service to eight
-tasks. Returning to one requires both fewer than 120 messages sent per minute
+The elastic treatment uses frozen policy v4. Both API replicas publish global
+database-derived accepted arrivals/second and outstanding logical events every
+ten seconds to `TrackRelay/Elasticity`, with one-second storage resolution.
+`ArrivalRate` **Maximum** at least 3 events/s for two ten-second periods sets
+the worker service to eight tasks. Maximum avoids double-counting the shared
+snapshot across replicas. The publisher runs in both treatments; its separate
+bounded database pool, AWS timeouts, namespace-scoped IAM permission and image
+are established before the policy-only transition. Missing samples are not
+fabricated as zeroes, and missing scale-out data is non-breaching.
+Returning to one still requires both fewer than 120 native SQS messages sent per minute
 (below 2 events/s) and fewer than ten unfinished messages across visible,
 in-flight, and delayed queue work for three consecutive periods. Both
 directions use exact-capacity adjustments and a 60-second cooldown. Missing
@@ -229,14 +236,20 @@ data as non-breaching.
 
 This is an experiment policy, not a general production recommendation. Its
 purpose is to make acquisition and release obvious within the fixed waveform:
-one complete arrival-demand bucket can trigger expansion before backlog grows,
+two short arrival-demand buckets can trigger expansion before backlog grows,
 while the nine-minute recovery step contains the three low-demand,
 low-queue-work buckets required for safe contraction. The
 maximum adds at most seven 0.25-vCPU/0.5-GiB Fargate workers—1.75 vCPU and
 3.5 GiB above the fixed control—only while the alarm-driven service desires
 them. It adds one scalable target, two scaling policies, and two CloudWatch
 alarms; API, simulator, RDS, SQS, task definitions, images, and the minimum
-worker count remain unchanged.
+worker count remain unchanged. Native 60-second reporting and all acceptance
+gates remain unchanged. High-resolution signal data, alarm histories and scaling
+activities are auxiliary evidence under `diagnostics/scaling/TEST_RUN_ID/`.
+Policy v3's 300-message/minute SQS scale-out and all historical evidence remain
+readable; only fresh runs may test policy v4. This is not a production-scale
+telemetry design: the database counting queries add work and the accepted-rate
+signal cannot by itself diagnose an overloaded ingestion tier.
 
 After the reset succeeds, run:
 

@@ -104,7 +104,9 @@ class AsyncIntegrationDefinition(BaseModel):
         self,
     ) -> "AsyncIntegrationDefinition":
         if self.event_counts != FROZEN_EVENT_COUNTS:
-            raise ValueError("integration workloads must be exactly 1, 10, and 100 events")
+            raise ValueError(
+                "integration workloads must be exactly 1, 10, and 100 events"
+            )
         minimum_timeout = (
             self.processing_guardrails.drain_deadline_seconds
             + self.processing_guardrails.empty_stability_seconds
@@ -269,8 +271,13 @@ class AsyncIntegrationSummary(BaseModel):
 
     @model_validator(mode="after")
     def require_all_frozen_points(self) -> "AsyncIntegrationSummary":
-        if tuple(point.event_count for point in self.points) != self.definition.event_counts:
-            raise ValueError("integration summary does not contain the frozen workloads")
+        if (
+            tuple(point.event_count for point in self.points)
+            != self.definition.event_counts
+        ):
+            raise ValueError(
+                "integration summary does not contain the frozen workloads"
+            )
         expected_pass = all(point.guardrails_passed for point in self.points)
         if self.all_guardrails_passed is not expected_pass:
             raise ValueError("integration summary disagrees with point guardrails")
@@ -301,9 +308,7 @@ def build_exact_event_manifest(
             for event in reversed(expected_events)
             if event.tracking_number == tracking_number
         )
-        for tracking_number in {
-            event.tracking_number for event in expected_events
-        }
+        for tracking_number in {event.tracking_number for event in expected_events}
     }
     return InputManifest(
         test_run_id=generated.test_run_id,
@@ -385,9 +390,7 @@ def _processing_observation(
             summary.database_delivery_attempts.delivered_unique_events
         ),
         pending_outbox_entries=summary.database_outbox.pending_publication,
-        source_queue_visible_messages=source_attributes[
-            "ApproximateNumberOfMessages"
-        ],
+        source_queue_visible_messages=source_attributes["ApproximateNumberOfMessages"],
         source_queue_in_flight_messages=source_attributes[
             "ApproximateNumberOfMessagesNotVisible"
         ],
@@ -681,10 +684,9 @@ def collect_async_cloudwatch_evidence(
     }
     if (
         not isinstance(raw_dimensions, dict)
-        or set(raw_dimensions) != required_keys
+        or set(raw_dimensions) - {"scaling_metrics_namespace"} != required_keys
         or not all(
-            isinstance(value, str) and value
-            for value in raw_dimensions.values()
+            isinstance(value, str) and value for value in raw_dimensions.values()
         )
     ):
         raise AwsAsyncIntegrationError(

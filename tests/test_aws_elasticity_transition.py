@@ -76,7 +76,7 @@ def completed(
 
 def policy() -> WorkerAutoscalingPolicy:
     return WorkerAutoscalingPolicy(
-        policy_version=3,
+        policy_version=4,
         backlog_threshold_messages=None,
         empty_alarm_name=f"{WORKER_SERVICE}-release-safe",
         high_alarm_name=f"{WORKER_SERVICE}-demand-high",
@@ -86,7 +86,9 @@ def policy() -> WorkerAutoscalingPolicy:
         scale_in_messages_per_minute=120,
         scale_in_queue_work_threshold=10,
         scale_out_policy_name=f"{WORKER_SERVICE}-scale-out",
-        scale_out_messages_per_minute=300,
+        scale_out_period_seconds=10,
+        scale_out_rate_per_second=3,
+        scale_out_evaluation_periods=2,
     )
 
 
@@ -105,6 +107,35 @@ def test_candidate_v2_policy_evidence_remains_readable() -> None:
     assert historical.policy_version == 2
     assert historical.backlog_threshold_messages == 10
     assert historical.scale_out_messages_per_minute is None
+
+
+def test_candidate_v3_policy_evidence_remains_readable() -> None:
+    historical = policy().model_dump(
+        exclude={"scale_out_period_seconds", "scale_out_rate_per_second"}
+    )
+    historical.update(
+        policy_version=3,
+        scale_out_evaluation_periods=1,
+        scale_out_messages_per_minute=300,
+    )
+    parsed = WorkerAutoscalingPolicy.model_validate(historical)
+    assert parsed.policy_version == 3
+    assert parsed.scale_out_period_seconds is None
+
+
+@mark.parametrize(
+    "field,value",
+    [
+        ("scale_out_period_seconds", None),
+        ("scale_out_evaluation_periods", 1),
+        ("scale_out_rate_per_second", None),
+    ],
+)
+def test_high_resolution_policy_rejects_incomplete_contract(field, value):
+    from pydantic import ValidationError
+
+    with raises(ValidationError):
+        WorkerAutoscalingPolicy.model_validate({**policy().model_dump(), field: value})
 
 
 def empty_state() -> ExperimentStateSnapshot:
@@ -287,14 +318,14 @@ def plan_document(expected: WorkerAutoscalingPolicy) -> dict[str, object]:
                 "actions_enabled": True,
                 "alarm_name": expected.high_alarm_name,
                 "comparison_operator": "GreaterThanOrEqualToThreshold",
-                "datapoints_to_alarm": 1,
+                "datapoints_to_alarm": 2,
                 "dimensions": {"QueueName": expected.queue_name},
-                "evaluation_periods": 1,
-                "metric_name": "NumberOfMessagesSent",
-                "namespace": "AWS/SQS",
-                "period": 60,
-                "statistic": "Sum",
-                "threshold": 300,
+                "evaluation_periods": 2,
+                "metric_name": "ArrivalRate",
+                "namespace": "TrackRelay/Elasticity",
+                "period": 10,
+                "statistic": "Maximum",
+                "threshold": 3,
                 "treat_missing_data": "notBreaching",
             },
         ),
@@ -408,11 +439,11 @@ def native_verification(
                 name=expected.high_alarm_name,
                 actions_enabled=True,
                 comparison_operator="GreaterThanOrEqualToThreshold",
-                datapoints_to_alarm=1,
-                evaluation_periods=1,
-                threshold=300,
+                datapoints_to_alarm=2,
+                evaluation_periods=2,
+                threshold=3,
                 treat_missing_data="notBreaching",
-                signal="messages_sent",
+                signal="arrival_rate",
             ),
         ),
     )
@@ -546,7 +577,17 @@ def test_plan_rejects_non_string_actions_as_invalid() -> None:
         )
 
 
-def test_plan_rejects_a_changed_scale_out_threshold() -> None:
+@mark.parametrize(
+    "field,value",
+    [
+        ("threshold", 100),
+        ("period", 60),
+        ("statistic", "Sum"),
+        ("namespace", "AWS/SQS"),
+        ("datapoints_to_alarm", 1),
+    ],
+)
+def test_plan_rejects_a_changed_scale_out_threshold(field, value) -> None:
     expected = policy()
     document = plan_document(expected)
     high_alarm = next(
@@ -554,7 +595,7 @@ def test_plan_rejects_a_changed_scale_out_threshold() -> None:
         for item in document["resource_changes"]
         if item["address"].endswith("async_worker_backlog_high[0]")
     )
-    high_alarm["change"]["after"]["threshold"] = 100
+    high_alarm["change"]["after"][field] = value
 
     with raises(AwsElasticityTransitionError, match="frozen policy"):
         validate_elasticity_transition_plan(
@@ -629,14 +670,14 @@ def test_native_verification_requires_alarm_policy_wiring(tmp_path: Path) -> Non
                     **common_alarm,
                     "AlarmName": expected.high_alarm_name,
                     "AlarmActions": [scale_out_arn],
-                    "DatapointsToAlarm": 1,
+                    "DatapointsToAlarm": 2,
                     "Dimensions": [{"Name": "QueueName", "Value": QUEUE_NAME}],
-                    "EvaluationPeriods": 1,
-                    "MetricName": "NumberOfMessagesSent",
-                    "Namespace": "AWS/SQS",
-                    "Period": 60,
-                    "Statistic": "Sum",
-                    "Threshold": 300,
+                    "EvaluationPeriods": 2,
+                    "MetricName": "ArrivalRate",
+                    "Namespace": "TrackRelay/Elasticity",
+                    "Period": 10,
+                    "Statistic": "Maximum",
+                    "Threshold": 3,
                 },
                 {
                     **common_alarm,

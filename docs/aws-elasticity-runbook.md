@@ -31,7 +31,12 @@ diagnostic scaled 1→8→1 and delivered all 10,680 unique receipts, but failed
 reconciliation accounting, missed one native RDS CPU bucket, and retained only
 45 seconds at one worker during recovery. Candidate v4 now adds two recovery
 minutes with the same policy; reconciliation is retry-aware and metric gaps
-are reported precisely. Neither attempt is a passing comparison.
+are reported precisely. Neither attempt is a passing comparison. New deployments
+now pair workload v4 with policy v4: ten-second custom arrival-rate telemetry
+and a two-period scale-out alarm, while keeping native reporting, conservative
+scale-in and acceptance bounds unchanged. Review the additional custom-metric,
+API-call and high-resolution-alarm costs in the diagnostic runbook. Rebuild and
+deploy fresh; do not mix policy v3 results with new-policy evidence.
 See the [incident record](aws-elasticity-session-4-incident.md).
 
 ## Workflow and ownership

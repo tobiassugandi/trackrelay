@@ -1,6 +1,6 @@
 locals {
   worker_autoscaling_policy = {
-    policy_version                = 3
+    policy_version                = 4
     maximum_capacity              = 8
     minimum_capacity              = 1
     metric_period_seconds         = 60
@@ -8,9 +8,11 @@ locals {
     scale_in_queue_work_threshold = 10
     scale_in_cooldown_seconds     = 60
     scale_in_evaluation_periods   = 3
-    scale_out_messages_per_minute = 300
+    scale_out_messages_per_minute = null
+    scale_out_period_seconds      = 10
+    scale_out_rate_per_second     = 3
     scale_out_cooldown_seconds    = 60
-    scale_out_evaluation_periods  = 1
+    scale_out_evaluation_periods  = 2
   }
 }
 
@@ -83,11 +85,11 @@ resource "aws_cloudwatch_metric_alarm" "async_worker_backlog_high" {
     QueueName = aws_sqs_queue.delivery[0].name
   }
   evaluation_periods = local.worker_autoscaling_policy.scale_out_evaluation_periods
-  metric_name        = "NumberOfMessagesSent"
-  namespace          = "AWS/SQS"
-  period             = local.worker_autoscaling_policy.metric_period_seconds
-  statistic          = "Sum"
-  threshold          = local.worker_autoscaling_policy.scale_out_messages_per_minute
+  metric_name        = "ArrivalRate"
+  namespace          = "TrackRelay/Elasticity"
+  period             = local.worker_autoscaling_policy.scale_out_period_seconds
+  statistic          = "Maximum"
+  threshold          = local.worker_autoscaling_policy.scale_out_rate_per_second
   treat_missing_data = "notBreaching"
 
   tags = {

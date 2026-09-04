@@ -872,7 +872,17 @@ approved session must repeat both treatments together.
   returned to one worker with only 45 seconds of observed recovery. Local checks:
   655 default Python tests, 10 executable JavaScript tests and pinned k6
   inspection passed; no cloud retry was started.
-- [ ] Validate candidate-v4 autoscaling in a fresh explicitly approved diagnostic
+- [x] Implement policy v4 high-resolution accepted-demand telemetry inside the
+  API platform, present in fixed and elastic deployments. Publish global rate
+  and outstanding-event gauges every ten seconds; require two ten-second
+  Maximum rate buckets at or above 3/s for expansion to eight. Retain policy-v3
+  scale-in, workload v4, all acceptance gates and native minute evidence.
+  Collect auxiliary high-resolution series, alarm history and scaling activities;
+  preserve historical policy readability. No AWS run is authorized by this item.
+  Local checks: 671 default Python tests passed (16 database integration tests
+  excluded), all 17 mocked Terraform tests passed, Terraform validation passed,
+  and Ruff lint passed.
+- [ ] Validate workload-v4 / policy-v4 autoscaling in a fresh explicitly approved diagnostic
   session, then repeat both treatments in one final paired session. A diagnostic
   pass does not supply a fixed-control denominator or an async-versus-sync ratio.
 - [ ] Verify that workers scale from A to B as load rises, backlog remains bounded and drains, and workers return to A after demand falls.

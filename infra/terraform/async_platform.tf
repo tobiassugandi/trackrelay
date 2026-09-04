@@ -135,6 +135,14 @@ resource "aws_iam_role_policy" "api_queue" {
         Effect   = "Allow"
         Resource = aws_sqs_queue.delivery[0].arn
       },
+      {
+        Action   = ["cloudwatch:PutMetricData"]
+        Effect   = "Allow"
+        Resource = "*"
+        Condition = {
+          StringEquals = { "cloudwatch:namespace" = "TrackRelay/Elasticity" }
+        }
+      },
     ]
   })
 }

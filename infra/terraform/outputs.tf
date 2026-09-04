@@ -79,15 +79,16 @@ output "async_api_url" {
 output "async_observability_dimensions" {
   description = "Non-secret dimensions used to collect asynchronous experiment evidence."
   value = var.async_services_enabled && local.async_runtime_enabled ? {
-    api_service_name        = aws_ecs_service.async_api[0].name
-    cluster_name            = aws_ecs_cluster.async[0].name
-    dashboard_name          = aws_cloudwatch_dashboard.async[0].dashboard_name
-    dead_letter_queue_name  = aws_sqs_queue.delivery_dead_letter[0].name
-    delivery_queue_name     = aws_sqs_queue.delivery[0].name
-    load_balancer_dimension = aws_lb.async[0].arn_suffix
-    rds_identifier          = aws_db_instance.postgres.identifier
-    simulator_service_name  = aws_ecs_service.async_simulator[0].name
-    worker_service_name     = aws_ecs_service.async_worker[0].name
+    api_service_name          = aws_ecs_service.async_api[0].name
+    cluster_name              = aws_ecs_cluster.async[0].name
+    dashboard_name            = aws_cloudwatch_dashboard.async[0].dashboard_name
+    dead_letter_queue_name    = aws_sqs_queue.delivery_dead_letter[0].name
+    delivery_queue_name       = aws_sqs_queue.delivery[0].name
+    load_balancer_dimension   = aws_lb.async[0].arn_suffix
+    rds_identifier            = aws_db_instance.postgres.identifier
+    simulator_service_name    = aws_ecs_service.async_simulator[0].name
+    worker_service_name       = aws_ecs_service.async_worker[0].name
+    scaling_metrics_namespace = "TrackRelay/Elasticity"
   } : {}
 }
 
@@ -111,6 +112,8 @@ output "worker_autoscaling_policy" {
     scale_out_cooldown_seconds    = local.worker_autoscaling_policy.scale_out_cooldown_seconds
     scale_out_evaluation_periods  = local.worker_autoscaling_policy.scale_out_evaluation_periods
     scale_out_messages_per_minute = local.worker_autoscaling_policy.scale_out_messages_per_minute
+    scale_out_period_seconds      = local.worker_autoscaling_policy.scale_out_period_seconds
+    scale_out_rate_per_second     = local.worker_autoscaling_policy.scale_out_rate_per_second
     scale_out_policy_name         = aws_appautoscaling_policy.async_worker_scale_out[0].name
   } : null
 }

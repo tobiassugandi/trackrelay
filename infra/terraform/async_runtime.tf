@@ -158,6 +158,10 @@ resource "aws_ecs_task_definition" "async_api" {
         local.async_database_environment,
         local.async_queue_environment,
         local.async_downstream_environment,
+        [{
+          name  = "TRACKRELAY_SCALING_METRICS_QUEUE_NAME"
+          value = aws_sqs_queue.delivery[0].name
+        }],
       )
       secrets = local.async_database_secrets
       portMappings = [{

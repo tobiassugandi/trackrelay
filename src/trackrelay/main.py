@@ -41,6 +41,7 @@ from trackrelay.models import (
 from trackrelay.models import TestRun as ExperimentRunModel
 from trackrelay.partners import PARTNER_ADAPTERS
 from trackrelay.runtime_metrics import RuntimeMetricsSnapshot, capture_runtime_metrics
+from trackrelay.scaling_metrics import scaling_metrics_lifespan
 from trackrelay.services import (
     DownstreamDeliveryQueue,
     DownstreamDeliveryQueueError,
@@ -60,7 +61,9 @@ from trackrelay.services.experiment_reset import (
 from trackrelay.sqs_delivery import SqsDownstreamDeliveryQueue, create_sqs_client
 
 settings = Settings()
-app = FastAPI(title=settings.app_name, debug=settings.debug)
+app = FastAPI(
+    title=settings.app_name, debug=settings.debug, lifespan=scaling_metrics_lifespan
+)
 logger = logging.getLogger(__name__)
 
 EventPersister = Callable[[NormalizedEvent], EventPersistenceResult]

@@ -6,6 +6,17 @@ estimate in USD, not a bill, a hard spending cap, or an elasticity result.
 
 ## Proposed operating envelope
 
+Policy-v4 addendum (2026-09-04): new runs also publish two custom high-resolution
+CloudWatch metrics. Each of the two API replicas submits one two-metric request
+every ten seconds (about 720 PutMetricData requests/hour combined while both
+publishers run). One scale-out alarm now uses ten-second evaluation rather than
+standard resolution. Publisher database reads use one additional bounded
+connection per API replica, with no additional ECS task. Recheck current regional
+custom-metric, API-request and high-resolution-alarm charges before approval;
+the historical estimate below does not price this addition. Publishing stops with
+task teardown; retained custom metric data follows CloudWatch retention rather
+than Terraform resource deletion. No approval or cost ceiling is increased here.
+
 - Region: `ap-southeast-3` (Jakarta), profile `trackrelay-admin`.
 - One fixed-versus-elastic experiment on the unchanged asynchronous stack.
   Two API tasks at 1 vCPU / 2 GiB each; one simulator at 0.25 vCPU / 0.5 GiB;

@@ -416,7 +416,18 @@ The primary figure will be one aligned time-series story: offered load rises and
 
 The causal experiment compares the same modernized AWS deployment with **worker autoscaling off** and **worker autoscaling on**. SQS, ECS task definitions, RDS, fixed API capacity, workload, SLO, and minimum worker count must remain the same. Only the worker-capacity policy changes. The asynchronous architecture is a prerequisite that makes delivery independently scalable; access to additional on-demand compute is the cloud capability being tested.
 
-The local legacy baseline remains important as the starting point and benchmark rehearsal, but it is not the denominator for either cloud claim. The `t3.small` economical baseline must be rerun against RDS because the earlier 25 events/s cloud portability result used host-local PostgreSQL. A local asynchronous implementation is optional and is not required for the elasticity experiment.
+**Current priority, 2026-09-04:** the workload-v6 / policy-v6 elastic-only
+diagnostic has passed, including scale-out, return to minimum, correctness and
+verified teardown. Preserve that bounded elasticity demonstration. Defer the
+single-worker async control and final paired async experiment while preparing
+the separate matched synchronous-versus-async capacity comparison requested
+for the `X×` headline. The paired experiment remains useful for isolating the
+effect of autoscaling, but is not a prerequisite or a synchronous denominator.
+See the [successful-run and baseline review](aws-async-capacity-baseline-review.md).
+This sequencing change does not relax either existing controller's gates or
+authorize a cloud session.
+
+The local legacy baseline remains important as the starting point and benchmark rehearsal, but it is not the denominator for either cloud claim. Stage 9.3 subsequently reran the `t3.small` economical baseline against RDS; its single 10-second trials establish a short-run hardware-flexibility result, not a matched capacity denominator for the current async demo. A local asynchronous implementation is optional and is not required for the elasticity experiment.
 
 ### Phase 9 operating model
 
@@ -825,19 +836,21 @@ A fresh saved plan and explicit approval are required for any new attempt.
   rejection, drift, interruption, serialization handoff, and cleanup failures.
 
 The remaining checkboxes below describe actual cloud execution, not local code
-readiness. Seven session-4 attempts ran. The sixth completed both candidate-v2
+readiness. At the candidate-v3 checkpoint, seven session-4 attempts had run.
+The sixth completed both candidate-v2
 treatments and exact delivery but was correctly rejected: worker scale-out was
 too late to keep outstanding work below 1,500 and recovery to one worker was not
 observed long enough before load ended. Its offline negative report publishes
 no multiplier, and teardown was verified with all 30 native categories zero.
 
-Candidate v3 is now frozen locally. It retains the 1/5/10/25/10/5/1 rate shape
-and guardrails, extends the waveform to 60/120/120/300/60/60/420 seconds
-(10,680 events), scales from one to eight on at least 300 SQS sends in one
-minute, and returns to one only after three periods with fewer than 120 sends
+Candidate v3 was frozen locally at that checkpoint. It retained the
+1/5/10/25/10/5/1 rate shape and guardrails, extended the waveform to
+60/120/120/300/60/60/420 seconds (10,680 events), scaled from one to eight on
+at least 300 SQS sends in one minute, and returned to one only after three
+periods with fewer than 120 sends
 and fewer than ten total visible/in-flight/delayed messages. Historical v2
-workload, policy, and CloudWatch evidence remain schema-compatible. A fresh
-approved session must repeat both treatments together.
+workload, policy, and CloudWatch evidence remain schema-compatible. Any final
+paired comparison still requires a fresh approved session with both treatments.
 
 - [x] Freeze candidate-v3's demand-based scale-out and backlog-aware scale-in
   policy with the same minimum and bounded maximum worker count; retain exactly
@@ -882,9 +895,14 @@ approved session must repeat both treatments together.
   Local checks: 671 default Python tests passed (16 database integration tests
   excluded), all 17 mocked Terraform tests passed, Terraform validation passed,
   and Ruff lint passed.
-- [ ] Validate workload-v5 / policy-v5 autoscaling in a fresh explicitly approved diagnostic
-  session, then repeat both treatments in one final paired session. A diagnostic
-  pass does not supply a fixed-control denominator or an async-versus-sync ratio.
+- [x] Validate the current workload-v6 / policy-v6 autoscaling in a fresh approved
+  diagnostic session: `cloud-session-4-20260904T121328Z` passed all qualification
+  gates with verified teardown. Historical v5 failures remain unchanged. A
+  diagnostic pass does not supply a fixed-control denominator or an
+  async-versus-sync ratio.
+- [ ] Deferred: repeat both async treatments in one final paired session when
+  the isolated autoscaling-effect comparison is needed; do not require this
+  before preparing the matched synchronous-versus-async capacity experiment.
 - [x] Correct the first policy-v4 deployment's transition-input regression:
   share the extended observability-output schema across transition, fixed,
   reset and both metric collectors. Exercise current Terraform-shaped outputs
@@ -903,7 +921,7 @@ approved session must repeat both treatments together.
   Terraform validation, Ruff, 10 executable driver tests and pinned k6 inspection
   passed. A short real-k6/local-HTTP probe verified the raw request export format;
   it was not a complete waveform or cloud qualification run.
-- [ ] Verify that workers scale from A to B as load rises, backlog remains bounded and drains, and workers return to A after demand falls.
+- [x] Verify in the elastic-only diagnostic that workers scale from A to B as load rises, backlog remains bounded and drains, and workers return to A after demand falls. This is not a completed paired experiment.
 - [x] Implement the prospective [v6 amendment](aws-elasticity-v6-contract.md):
   bounded five-second driver concurrency headroom at unchanged offered rates,
   live 60-second service-count recovery with timestamped native corroboration,
@@ -929,7 +947,35 @@ Local checks: 715 default Python tests, 17 mocked Terraform tests, Terraform
 validation/format checks and Ruff passed. Saved policy-v5 diagnostic validation
 retained its 180-second threshold and original recovery rejection.
 
+**Cloud validation completed:** `cloud-session-4-20260904T121328Z`, application
+revision `d2ca9d465d19e3c7642a95111a58cce213da5ec0`, workload v6 / policy v6.
+All 5,730 scheduled events were accepted, processed and reconciled to unique
+simulator receipts, with zero dropped iterations, request errors, unaccounted
+events or duplicate business effects. Two successful delivery retries did not
+duplicate effects. Peak load was 25/s for 180 seconds, with 79.459 ms ingestion
+p95. Workers were first observed at eight at 119.110 seconds and back at one at
+510.136 seconds; the final live recovery suffix lasted 117.659 seconds.
+Maximum observed outstanding events were 479 and native oldest-message age was
+20 seconds. Stable drain and all qualification gates passed. The journal records
+`cloud_complete`, no workflow/cleanup errors, and `teardown_verified` at
+2026-09-04 12:48:29 UTC with all 30 native inventory categories zero. Retain the
+original session evidence in place; `headline_eligible=false` and no comparison
+multiplier are correct for this diagnostic. See the
+[baseline review](aws-async-capacity-baseline-review.md) for evidence links,
+claim boundaries and the next comparison work.
+
 ### Stage 9.8 — Publish the elasticity headline
+
+Current execution order: retain the successful standalone elasticity result,
+prepare the matched synchronous-versus-async capacity protocol and local runner,
+then seek separate cloud-session approval. The fixed-versus-elastic report
+items below remain deferred, not completed or silently replaced by diagnostic
+evidence.
+
+- [x] Audit the existing synchronous baseline and record the successful elastic
+  diagnostic. The old 10-second ladder cannot establish the new `X×` ratio;
+  document the measurement differences and proposed comparison work in the
+  [baseline review](aws-async-capacity-baseline-review.md).
 
 - [x] Implement and locally test the AWS-off comparison/report generator before
   session 4. Recheck the saved reset, policy, revision, measurement, and teardown

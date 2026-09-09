@@ -62,11 +62,13 @@ Next steps:
 - [x] Define and implement sampled full-expansion, recovery-relative return,
   and sustained peak-backlog-clearance diagnostics, retaining historical timing
   fields and testing missing/insufficient evidence.
-- [ ] Freeze the paired protocol, including identical per-step completion,
+- [x] Freeze the paired protocol, including identical per-step completion,
   backlog, latency, and correctness gates. Define timing origins for scale-out,
   backlog drain, and return to minimum; distinguish valid fixed-worker overload
   from a broken experiment or incomplete evidence. Keep any short-waveform
-  capacity claim explicitly limited to the tested demand steps.
+  capacity claim explicitly limited to the tested demand steps. See
+  [paired protocol revision 1](post-mvp-paired-protocol.md); fresh full local
+  preflight and a concrete cloud-session proposal remain separate work.
 - [ ] Complete necessary local fixes and focused checks for collection,
   qualification, reporting, failure handling, and unconditional cleanup.
 - [ ] Prepare the concrete cloud session and cost review, then obtain approval

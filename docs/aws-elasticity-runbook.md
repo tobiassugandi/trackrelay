@@ -1,5 +1,11 @@
 # Cloud session 4: fixed control and elastic treatment
 
+For the next post-MVP attempt, use the
+[paired protocol](post-mvp-paired-protocol.md) for frozen study decisions and
+the [reporting contract](post-mvp-reporting-contract.md) for current report
+semantics. The operational procedure below still requires a fresh preflight,
+saved plan, cost review, and explicit session approval.
+
 This is the operator procedure for Stages 9.6–9.8. It provisions the asynchronous
 stack once, measures one fixed worker, resets application state, enables only
 worker autoscaling, replays the identical workload, destroys the stack, verifies
@@ -177,8 +183,9 @@ fresh directory, never contacts AWS, and does not measure application capacity.
 Each step now caps HTTP work at its own manifest slice. A single extra closing
 iteration may be dispatched by the time-based executor; it sends no request and
 is recorded as `driver_boundary_iterations{step:...}` (maximum one per step).
-Larger overruns also increment `driver_errors` and fail. The full 60-second
-step boundaries and nine-minute recovery remain intact; no millisecond-shortened
+Larger overruns also increment `driver_errors` and fail. The current v6 waveform
+retains its 30-second transitions, 180-second peak, and 300-second recovery;
+no millisecond-shortened
 duration is relied upon for safety. Missing/extra HTTP requests, duplicate
 responses, dropped iterations, and driver errors still reject the treatment.
 

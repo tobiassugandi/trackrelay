@@ -50,11 +50,13 @@ unfinished work/queue age, latency, reconciliation, and teardown evidence.
 
 Next steps:
 
-- [ ] Audit the existing paired controller and reporter against the current
+- [x] Audit the existing paired controller and reporter against the current
   [experiment definition](aws-elasticity-experiment.md),
   [v6 contract](aws-elasticity-v6-contract.md), and
   [paired runbook](aws-elasticity-runbook.md). Identify local gaps before
-  proposing another run; preserve historical qualification rules.
+  proposing another run; preserve historical qualification rules. See the
+  [readiness audit](post-mvp-paired-audit.md) for findings and the next local
+  implementation step: version the consecutive-rate reporting rule.
 - [ ] Freeze the paired protocol, including identical per-step completion,
   backlog, latency, and correctness gates. Define timing origins for scale-out,
   backlog drain, and return to minimum; distinguish valid fixed-worker overload

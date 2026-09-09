@@ -1,5 +1,11 @@
 # TrackRelay implementation plan
 
+> **MVP implementation history.** Ongoing work is tracked in
+> [Implementation plan 2 — Post-MVP](implementation-plan-2_post-mvp.md).
+> This document preserves completed steps, experiment history, and unfinished
+> checkboxes as recorded at the MVP checkpoint. Use the new plan for current
+> priorities; an unchecked historical item is not automatically the next task.
+
 This plan turns the project into a sequence of small learning steps. We will follow it one step at a time rather than implementing an entire milestone at once.
 
 Every implementation step should end with:

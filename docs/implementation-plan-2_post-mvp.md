@@ -57,6 +57,8 @@ Next steps:
   proposing another run; preserve historical qualification rules. See the
   [readiness audit](post-mvp-paired-audit.md) for findings and the next local
   implementation step: version the consecutive-rate reporting rule.
+- [x] Version the consecutive-rate reporting rule and preserve historical
+  report semantics. See the [reporting contract](post-mvp-reporting-contract.md).
 - [ ] Freeze the paired protocol, including identical per-step completion,
   backlog, latency, and correctness gates. Define timing origins for scale-out,
   backlog drain, and return to minimum; distinguish valid fixed-worker overload

@@ -63,11 +63,27 @@ class StepSupportResult(BaseModel):
         return self
 
 
+RateRule = Literal["all-occurrences", "consecutive"]
+
+
+def _supported_rate(steps: tuple[StepSupportResult, ...], rule: RateRule) -> int | None:
+    highest = None
+    for rate in sorted({step.offered_rate_per_second for step in steps}):
+        if all(
+            step.supported for step in steps if step.offered_rate_per_second == rate
+        ):
+            highest = rate
+        elif rule == "consecutive":
+            break
+    return highest
+
+
 class TreatmentReport(BaseModel):
     """Compact treatment result with explicit unavailable measurements."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    rate_rule: RateRule = "all-occurrences"
     treatment: Literal["fixed", "elastic"]
     test_run_id: UUID
     qualified: bool
@@ -87,19 +103,7 @@ class TreatmentReport(BaseModel):
 
     @model_validator(mode="after")
     def require_observed_rate(self) -> "TreatmentReport":
-        rates = {step.offered_rate_per_second for step in self.step_results}
-        expected = max(
-            (
-                rate
-                for rate in rates
-                if all(
-                    step.supported
-                    for step in self.step_results
-                    if step.offered_rate_per_second == rate
-                )
-            ),
-            default=None,
-        )
+        expected = _supported_rate(self.step_results, self.rate_rule)
         if self.highest_supported_rate_per_second != expected:
             raise ValueError("highest supported rate disagrees with step results")
         if self.qualified is bool(self.rejection_reasons):
@@ -117,6 +121,7 @@ class ElasticityComparisonReport(BaseModel):
         "short-plateau-completion-v1",
         "short-plateau-completion-v2",
         "short-plateau-completion-v3",
+        "short-plateau-completion-v4",
     ] = "short-plateau-completion-v1"
     generated_at: AwareDatetime
     session_id: str
@@ -138,6 +143,13 @@ class ElasticityComparisonReport(BaseModel):
             or self.fixed.test_run_id == self.elastic.test_run_id
         ):
             raise ValueError("comparison requires distinct ordered treatments")
+        expected_rule = (
+            "consecutive"
+            if self.method == "short-plateau-completion-v4"
+            else "all-occurrences"
+        )
+        if any(t.rate_rule != expected_rule for t in (self.fixed, self.elastic)):
+            raise ValueError("report method disagrees with treatment rate rule")
         demonstrated = (
             self.fixed.qualified
             and self.elastic.qualified
@@ -370,6 +382,8 @@ def _step_results(
 
 def summarize_treatment(
     summary: FixedControlSummary | ElasticTreatmentSummary,
+    *,
+    rate_rule: RateRule = "all-occurrences",
 ) -> TreatmentReport:
     """Apply identical observed-step rules without treating transient bursts as capacity."""
     fixed = isinstance(summary, FixedControlSummary)
@@ -379,12 +393,6 @@ def summarize_treatment(
     steps = _step_results(
         result, summary.cloudwatch, (*measurement_reasons, *common.rejection_reasons)
     )
-    rates = {step.offered_rate_per_second for step in steps}
-    supported_rates = [
-        rate
-        for rate in rates
-        if all(step.supported for step in steps if step.offered_rate_per_second == rate)
-    ]
     observations = result.observations
     expanded = next(
         (item for item in observations if item.worker_running_count > 1), None
@@ -413,11 +421,12 @@ def summarize_treatment(
             return_seconds = first_return
     drained, confirmed = _stable_drain(result)
     return TreatmentReport(
+        rate_rule=rate_rule,
         treatment="fixed" if fixed else "elastic",
         test_run_id=result.test_run_id,
         qualified=summary.qualification.qualified,
         rejection_reasons=summary.qualification.rejection_reasons,
-        highest_supported_rate_per_second=max(supported_rates, default=None),
+        highest_supported_rate_per_second=_supported_rate(steps, rate_rule),
         step_results=steps,
         minimum_workers=min(
             (item.worker_running_count for item in observations), default=None
@@ -455,6 +464,7 @@ def build_comparison(
     teardown_verified_at: datetime,
     source_sha256: dict[str, str],
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    rate_rule: RateRule = "all-occurrences",
 ) -> ElasticityComparisonReport:
     """Recompute qualifications and write only conclusions supported by both runs."""
     if (
@@ -480,7 +490,9 @@ def build_comparison(
     elastic = ElasticTreatmentSummary.model_validate_json(
         elastic.model_dump_json(round_trip=True)
     )
-    source, target = summarize_treatment(fixed), summarize_treatment(elastic)
+    source, target = (
+        summarize_treatment(item, rate_rule=rate_rule) for item in (fixed, elastic)
+    )
     demonstrated = (
         source.qualified
         and target.qualified
@@ -503,13 +515,16 @@ def build_comparison(
         if demonstrated
         else "This evidence does not establish the complete worker-elasticity claim; review the failed or missing guardrails below."
     )
+    rate_label = "consecutive supported" if rate_rule == "consecutive" else "supported"
     if multiplier is not None:
-        conclusion += f" The highest supported short-step rate changed from {source_rate} to {target_rate} events/s ({multiplier:.2f}x)."
+        conclusion += f" The highest {rate_label} short-step rate changed from {source_rate} to {target_rate} events/s ({multiplier:.2f}x)."
     else:
         conclusion += " A supported-step rate multiplier is not established."
     return ElasticityComparisonReport(
         method=(
-            "short-plateau-completion-v3"
+            "short-plateau-completion-v4"
+            if rate_rule == "consecutive"
+            else "short-plateau-completion-v3"
             if fixed.measurement.definition.name == "aws-elasticity-demo-v6"
             else "short-plateau-completion-v2"
             if fixed.measurement.definition.uses_request_timings
@@ -934,6 +949,15 @@ def render_markdown(report: ElasticityComparisonReport) -> str:
         "",
         f"Method: `{report.method}`.",
         "",
+        (
+            "Distinct tested rates are evaluated in ascending order. The first unsupported "
+            "rate ends the consecutive envelope; higher passing rates remain diagnostics. "
+            "If the lowest rate fails, no supported rate or multiplier is established."
+            if report.method == "short-plateau-completion-v4"
+            else "Historical rule: the highest rate whose occurrences all pass is reported; "
+            "lower-rate failures do not end the envelope."
+        ),
+        "",
         "![Aligned fixed/elastic comparison](comparison.png)",
         "",
         "| Measure | Fixed | Elastic |",
@@ -941,7 +965,9 @@ def render_markdown(report: ElasticityComparisonReport) -> str:
     ]
     for label, field, suffix in (
         (
-            "Highest supported short-step rate",
+            "Highest consecutive supported short-step rate"
+            if report.method == "short-plateau-completion-v4"
+            else "Highest supported short-step rate",
             "highest_supported_rate_per_second",
             " events/s",
         ),
@@ -1048,6 +1074,7 @@ def generate_elasticity_report(
     *,
     output_directory: Path | None = None,
     plotter: Callable[..., None] = render_comparison_figure,
+    rate_rule: RateRule = "consecutive",
 ) -> ElasticityComparisonReport:
     """Stage all output before publishing; refuse existing report directories."""
     output = output_directory or session_directory / "elasticity/report"
@@ -1066,6 +1093,7 @@ def generate_elasticity_report(
         git_revision=manifest["git_revision"],
         teardown_verified_at=verified,
         source_sha256=hashes,
+        rate_rule=rate_rule,
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(
@@ -1103,10 +1131,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = ArgumentParser(description=__doc__)
     parser.add_argument("--session-directory", type=Path, required=True)
     parser.add_argument("--output-directory", type=Path)
+    parser.add_argument(
+        "--rate-rule",
+        choices=("consecutive", "all-occurrences"),
+        default="consecutive",
+        help="Use all-occurrences to reproduce the historical rate-selection method.",
+    )
     arguments = parser.parse_args(argv)
     try:
         report = generate_elasticity_report(
-            arguments.session_directory, output_directory=arguments.output_directory
+            arguments.session_directory,
+            output_directory=arguments.output_directory,
+            rate_rule=arguments.rate_rule,
         )
     except (ElasticityReportError, OSError, ValueError) as error:
         raise SystemExit(f"AWS elasticity report failed: {error}") from error

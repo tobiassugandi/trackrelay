@@ -100,7 +100,9 @@ semantic changes need their own focused regression cases.
 
 ## Next action
 
-Implement and verify the versioned consecutive-rate reporting rule first. Then
-freeze the remaining timing definitions and paired protocol, complete any
+The versioned consecutive-rate reporting rule is now implemented; see the
+[reporting contract](post-mvp-reporting-contract.md). The findings above describe
+the implementation at the time of this audit. Next, freeze the remaining timing
+definitions and paired protocol, complete any
 required local checks, and prepare a concrete session/cost review. Historical
 results and the README headline remain unchanged during this preparation.

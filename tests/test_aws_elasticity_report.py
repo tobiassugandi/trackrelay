@@ -106,11 +106,12 @@ def comparison_summaries():
     )
 
 
-def comparison(fixed=None, elastic=None):
+def comparison(fixed=None, elastic=None, *, rate_rule="all-occurrences"):
     source, target = comparison_summaries()
     return build_comparison(
         fixed or source,
         elastic or target,
+        rate_rule=rate_rule,
         session_id=SESSION_ID,
         region="ap-southeast-3",
         git_revision="d" * 40,
@@ -548,3 +549,72 @@ def test_raw_no_state_file_log_is_valid_teardown(tmp_path):
         CompletedProcess([], 1, "", "No state file was found!"),
     )
     assert load_comparison_evidence(root)[0].qualification.qualified
+
+
+@mark.parametrize("seconds,expected", [(40, 1), (10, None)])
+def test_consecutive_rate_stops_at_lower_failure(seconds, expected):
+    fixed, elastic = comparison_summaries()
+    points = tuple(
+        point.model_copy(update={"source_queue_visible_messages": 1501})
+        if point.seconds_after_load_started == seconds
+        else point
+        for point in fixed.measurement.observations
+    )
+    fixed = fixed.model_copy(
+        update={
+            "measurement": fixed.measurement.model_copy(update={"observations": points})
+        }
+    )
+    historical = comparison(fixed, elastic)
+    current = comparison(fixed, elastic, rate_rule="consecutive")
+    assert historical.fixed.highest_supported_rate_per_second == 10
+    assert current.fixed.highest_supported_rate_per_second == expected
+    assert current.observed_step_rate_multiplier == (25 if expected else None)
+    assert current.method == "short-plateau-completion-v4"
+    assert any(
+        s.supported and s.offered_rate_per_second == 10
+        for s in current.fixed.step_results
+    )
+    assert current.fixed.step_results == historical.fixed.step_results
+    assert "first unsupported" in render_markdown(current)
+    assert (
+        ElasticityComparisonReport.model_validate_json(current.model_dump_json())
+        == current
+    )
+    forged = current.model_dump()
+    forged["fixed"]["highest_supported_rate_per_second"] = 10
+    with raises(ValueError, match="highest supported rate"):
+        ElasticityComparisonReport.model_validate(forged)
+    forged = current.model_dump()
+    forged["method"] = "short-plateau-completion-v3"
+    with raises(ValueError, match="rate rule"):
+        ElasticityComparisonReport.model_validate(forged)
+
+
+def test_historical_report_without_rate_rule_remains_readable():
+    original = comparison()
+    saved = original.model_dump()
+    for name in ("fixed", "elastic"):
+        del saved[name]["rate_rule"]
+    restored = ElasticityComparisonReport.model_validate(saved)
+    assert restored == original
+    assert restored.observed_step_rate_multiplier == 2.5
+
+
+def test_generator_defaults_to_consecutive_and_can_reproduce_historical(tmp_path):
+    root = saved_session(tmp_path / "session")
+    current = generate_elasticity_report(root, plotter=fake_plotter)
+    historical = generate_elasticity_report(
+        root,
+        output_directory=tmp_path / "historical",
+        plotter=fake_plotter,
+        rate_rule="all-occurrences",
+    )
+    assert current.method == "short-plateau-completion-v4"
+    assert historical.method == "short-plateau-completion-v3"
+    assert current.source_sha256 == historical.source_sha256
+    assert (
+        current.observed_step_rate_multiplier
+        == historical.observed_step_rate_multiplier
+        == 2.5
+    )

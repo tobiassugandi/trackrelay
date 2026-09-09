@@ -78,12 +78,28 @@ def _supported_rate(steps: tuple[StepSupportResult, ...], rule: RateRule) -> int
     return highest
 
 
+class TimingReport(BaseModel):
+    """Sampled timing diagnostics, separate from treatment qualification."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    method: Literal["observed-timings-v1"] = "observed-timings-v1"
+    demand_rise_seconds_after_start: float
+    recovery_seconds_after_start: float
+    full_expansion_seconds_after_start: float | None
+    full_expansion_seconds_after_demand_rise: float | None
+    return_to_minimum_seconds_after_recovery: float | None
+    peak_backlog_clear_seconds_after_peak_start: float | None
+    peak_backlog_clear_confirmed_seconds_after_peak_start: float | None
+
+
 class TreatmentReport(BaseModel):
     """Compact treatment result with explicit unavailable measurements."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     rate_rule: RateRule = "all-occurrences"
+    timings: TimingReport | None = None
     treatment: Literal["fixed", "elastic"]
     test_run_id: UUID
     qualified: bool
@@ -380,6 +396,97 @@ def _step_results(
     return tuple(reports)
 
 
+def _timing_report(
+    result: ElasticityResult,
+    *,
+    fixed: bool,
+    return_seconds: float | None,
+    measurement_reasons: tuple[str, ...],
+) -> TimingReport:
+    boundaries = []
+    elapsed = 0
+    for step in result.definition.steps:
+        boundaries.append((elapsed, elapsed + step.duration_seconds, step))
+        elapsed += step.duration_seconds
+    rise = next(
+        start
+        for start, _, step in boundaries
+        if step.offered_rate_per_second
+        > result.definition.steps[0].offered_rate_per_second
+    )
+    recovery = boundaries[-1][0]
+    peak_start, peak_end, _ = next(
+        boundary
+        for boundary in boundaries
+        if boundary[2].offered_rate_per_second == result.definition.peak_rate_per_second
+    )
+    full = None
+    cleared = confirmed = None
+    if not measurement_reasons:
+        if not fixed:
+            full = next(
+                (
+                    p.seconds_after_load_started
+                    for p in result.observations
+                    if rise <= p.seconds_after_load_started < recovery
+                    and p.worker_running_count == 8
+                    and p.worker_desired_count == 8
+                    and p.worker_pending_count == 0
+                ),
+                None,
+            )
+        # Require a previously observed backlog and a zero-outstanding suffix
+        # lasting at least 60 seconds within the peak, reaching its end boundary.
+        peak = [
+            p
+            for p in result.observations
+            if peak_start <= p.seconds_after_load_started <= peak_end
+        ]
+        suffix = []
+        for point in reversed(peak):
+            if _outstanding(point) != 0:
+                break
+            suffix.append(point)
+        suffix.reverse()
+        if (
+            suffix
+            and peak_end - suffix[-1].seconds_after_load_started <= MAXIMUM_GAP_SECONDS
+            and any(
+                _outstanding(p) > 0
+                for p in result.observations
+                if rise
+                <= p.seconds_after_load_started
+                < suffix[0].seconds_after_load_started
+            )
+        ):
+            confirmation = next(
+                (
+                    p
+                    for p in suffix
+                    if p.seconds_after_load_started
+                    - suffix[0].seconds_after_load_started
+                    >= 60
+                ),
+                None,
+            )
+            if confirmation is not None:
+                cleared = suffix[0].seconds_after_load_started - peak_start
+                confirmed = confirmation.seconds_after_load_started - peak_start
+    return TimingReport(
+        demand_rise_seconds_after_start=rise,
+        recovery_seconds_after_start=recovery,
+        full_expansion_seconds_after_start=full,
+        full_expansion_seconds_after_demand_rise=full - rise
+        if full is not None
+        else None,
+        return_to_minimum_seconds_after_recovery=(
+            return_seconds - recovery if return_seconds is not None else None
+        ),
+        peak_backlog_clear_seconds_after_peak_start=cleared,
+        peak_backlog_clear_confirmed_seconds_after_peak_start=confirmed,
+    )
+
+
 def summarize_treatment(
     summary: FixedControlSummary | ElasticTreatmentSummary,
     *,
@@ -422,6 +529,14 @@ def summarize_treatment(
     drained, confirmed = _stable_drain(result)
     return TreatmentReport(
         rate_rule=rate_rule,
+        timings=_timing_report(
+            result,
+            fixed=fixed,
+            return_seconds=return_seconds,
+            measurement_reasons=measurement_reasons,
+        )
+        if rate_rule == "consecutive"
+        else None,
         treatment="fixed" if fixed else "elastic",
         test_run_id=result.test_run_id,
         qualified=summary.qualification.qualified,
@@ -972,7 +1087,11 @@ def render_markdown(report: ElasticityComparisonReport) -> str:
             " events/s",
         ),
         ("Maximum observed running workers", "maximum_workers", ""),
-        ("First scale-out, after load start", "scale_out_seconds_after_start", " s"),
+        (
+            "First observed >1 running worker, after load start",
+            "scale_out_seconds_after_start",
+            " s",
+        ),
         (
             "Return to one, after load start",
             "return_to_minimum_seconds_after_start",
@@ -999,6 +1118,49 @@ def render_markdown(report: ElasticityComparisonReport) -> str:
         rows.append(
             f"| {label} | {value(getattr(report.fixed, field), suffix)} | {value(getattr(report.elastic, field), suffix)} |"
         )
+    if report.fixed.timings is not None and report.elastic.timings is not None:
+        rows.extend(
+            [
+                "",
+                "## Observed timing diagnostics",
+                "",
+                (
+                    "Times are sampled observations, not exact transitions or billing timestamps. "
+                    "Demand rise is the scheduled first increase, not alarm detection. "
+                    "Peak clearance requires observed backlog followed by a zero-outstanding "
+                    "suffix lasting at least 60 seconds through the sampled peak end. "
+                    "It is separate from post-load stable drain and per-event delivery latency."
+                ),
+                "",
+                "| Measure | Fixed | Elastic |",
+                "| --- | ---: | ---: |",
+            ]
+        )
+        for label, field in (
+            (
+                "First observed eight desired/running, none pending, after load start",
+                "full_expansion_seconds_after_start",
+            ),
+            (
+                "Full expansion, after scheduled demand rise",
+                "full_expansion_seconds_after_demand_rise",
+            ),
+            (
+                "Return to minimum, after recovery begins",
+                "return_to_minimum_seconds_after_recovery",
+            ),
+            (
+                "Peak backlog-clear suffix begins, after peak starts",
+                "peak_backlog_clear_seconds_after_peak_start",
+            ),
+            (
+                "60s peak clearance confirmed, after peak starts",
+                "peak_backlog_clear_confirmed_seconds_after_peak_start",
+            ),
+        ):
+            rows.append(
+                f"| {label} | {value(getattr(report.fixed.timings, field), ' s')} | {value(getattr(report.elastic.timings, field), ' s')} |"
+            )
     rows.extend(
         [
             "",

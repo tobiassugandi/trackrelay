@@ -3,7 +3,8 @@
 This records the local reporting change for
 [Milestone 1](implementation-plan-2_post-mvp.md). It does not authorize a cloud
 run or change workload v6, policy v6, collection, or qualification gates.
-Scaling and drain timing definitions still need the separate protocol review.
+The definitions below govern report diagnostics; the complete paired execution
+protocol still needs review before a cloud session is proposed.
 
 ## Consecutive supported rates
 
@@ -59,3 +60,39 @@ failure at the lowest rate, unchanged per-step evidence, withheld multipliers,
 method/rule mismatch rejection, old JSON without the new field, and new versus
 historical generation from the same saved evidence. Existing reporter/session
 tests also exercise rendering, evidence checks, and cleanup behavior.
+
+## Observed timing diagnostics
+
+New consecutive-rate reports include an optional `timings` object with method
+`observed-timings-v1`. Old JSON without it remains readable and historical
+rate-rule generation leaves it unavailable. These fields do not change
+qualification or the rate multiplier.
+
+All times use retained sample timestamps and scheduled waveform boundaries.
+For the current workload, the first demand rise starts at 30 seconds, the peak
+at 90 seconds, and low-demand recovery at 330 seconds. Demand rise means the
+first scheduled rate above baseline, not when an alarm detects demand.
+
+| Measurement | Definition |
+| --- | --- |
+| Existing first expansion | First observed running count >1 after load starts. Its historical field retains its meaning. |
+| Full expansion | First sample after demand rise and before recovery with desired=running=8 and pending=0; report both time after load start and elapsed time from scheduled demand rise. Fixed controls have no full-expansion value. |
+| Return after recovery starts | Existing observed return-to-minimum time minus scheduled recovery start. Existing qualification separately establishes the required live suffix and native corroboration. |
+| Peak backlog-clear suffix | First zero-outstanding sample in the final zero-outstanding suffix of the peak, after a positive backlog was observed since demand rose. The suffix must span at least 60 seconds and its final sample must be within 30 seconds of peak end. |
+| Peak clearance confirmation | First sample at least 60 seconds into that qualifying suffix, measured from peak start. |
+| Existing post-load stable drain | First sample in the qualifying empty post-load suffix, followed by confirmation of 180 seconds of stability; both remain relative to actual load end. |
+
+Outstanding means persisted events minus completed deliveries. Peak clearance
+does not mean SQS is empty, measure an individual event's waiting time, or prove
+zero backlog between samples. If no backlog was observed, clearance is
+unavailable rather than an invented zero-duration recovery. A late clearance,
+a transient empty sample, or incomplete measurement coverage cannot establish
+the peak-clearance result. New full-expansion and peak-clearance observations
+are withheld on measurement failures. Current coverage permits gaps up to 30
+seconds; no exact transition time is inferred inside those intervals.
+
+The first full-expansion sample is distinct from the existing sustained
+expanded-peak qualification. Timings can describe a rejected treatment and must
+be read with its rejection reasons. Service counts do not establish when every
+container exited or billing ended. A successful post-load drain cannot rescue a
+failed load step or establish that backlog cleared during peak demand.

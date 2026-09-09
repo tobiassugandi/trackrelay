@@ -59,6 +59,9 @@ Next steps:
   implementation step: version the consecutive-rate reporting rule.
 - [x] Version the consecutive-rate reporting rule and preserve historical
   report semantics. See the [reporting contract](post-mvp-reporting-contract.md).
+- [x] Define and implement sampled full-expansion, recovery-relative return,
+  and sustained peak-backlog-clearance diagnostics, retaining historical timing
+  fields and testing missing/insufficient evidence.
 - [ ] Freeze the paired protocol, including identical per-step completion,
   backlog, latency, and correctness gates. Define timing origins for scale-out,
   backlog drain, and return to minimum; distinguish valid fixed-worker overload

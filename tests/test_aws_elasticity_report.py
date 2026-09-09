@@ -618,3 +618,96 @@ def test_generator_defaults_to_consecutive_and_can_reproduce_historical(tmp_path
         == historical.observed_step_rate_multiplier
         == 2.5
     )
+
+
+def test_timing_diagnostics_distinguish_partial_full_and_recovery():
+    fixed, elastic = comparison_summaries()
+    points = tuple(
+        p.model_copy(update={"worker_running_count": 2})
+        if p.seconds_after_load_started == 60
+        else p.model_copy(update={"worker_pending_count": 1})
+        if p.seconds_after_load_started == 70
+        else p
+        for p in elastic.measurement.observations
+    )
+    summary = elastic.model_copy(
+        update={
+            "measurement": elastic.measurement.model_copy(
+                update={"observations": points}
+            )
+        }
+    )
+    report = summarize_treatment(summary, rate_rule="consecutive")
+    assert report.scale_out_seconds_after_start == 60
+    assert report.timings.full_expansion_seconds_after_start == 80
+    assert report.timings.full_expansion_seconds_after_demand_rise == 50
+    assert report.timings.return_to_minimum_seconds_after_recovery == 210
+    assert (
+        summarize_treatment(
+            fixed, rate_rule="consecutive"
+        ).timings.full_expansion_seconds_after_start
+        is None
+    )
+    assert summarize_treatment(summary).timings is None
+
+
+@mark.parametrize(
+    "case,clear,confirmed",
+    [
+        ("cleared", 60, 120),
+        ("transient", None, None),
+        ("never_backlogged", None, None),
+        ("gap", None, None),
+        ("late", None, None),
+    ],
+)
+def test_peak_clearance_requires_sustained_observed_catchup(case, clear, confirmed):
+    from trackrelay.aws_elasticity_report import _timing_report, _validate_measurement
+
+    result = elastic_result()
+    points = []
+    for point in result.observations:
+        seconds = point.seconds_after_load_started
+        clears_at = 240 if case == "late" else 150
+        backlog = 50 if 60 <= seconds < clears_at and case != "never_backlogged" else 0
+        point = point.model_copy(
+            update={
+                "completed_delivery_events": point.database_persisted_events - backlog,
+            }
+        )
+        if case == "transient" and seconds == 230:
+            point = point.model_copy(
+                update={
+                    "completed_delivery_events": point.database_persisted_events - 1,
+                }
+            )
+        if case == "gap" and 160 <= seconds <= 200:
+            continue
+        points.append(point)
+    result = result.model_copy(update={"observations": tuple(points)})
+    timing = _timing_report(
+        result,
+        fixed=False,
+        return_seconds=None,
+        measurement_reasons=_validate_measurement(result),
+    )
+    assert timing.peak_backlog_clear_seconds_after_peak_start == clear
+    assert timing.peak_backlog_clear_confirmed_seconds_after_peak_start == confirmed
+    if case == "gap":
+        assert timing.full_expansion_seconds_after_start is None
+
+
+def test_old_reports_without_timing_diagnostics_still_load():
+    saved = comparison().model_dump()
+    for treatment in ("fixed", "elastic"):
+        del saved[treatment]["timings"]
+    loaded = ElasticityComparisonReport.model_validate(saved)
+    assert loaded.fixed.timings is None
+    assert loaded.elastic.timings is None
+    assert "Observed timing diagnostics" not in render_markdown(loaded)
+    current = comparison(rate_rule="consecutive")
+    assert "Observed timing diagnostics" in render_markdown(current)
+    assert (
+        ElasticityComparisonReport.model_validate_json(current.model_dump_json())
+        == current
+    )

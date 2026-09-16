@@ -90,7 +90,10 @@ Next steps:
   and the multiplier remain unavailable; peak-clearance timing is also unavailable.
 - [x] Prepare a readable report and README change on the development branch:
   85.2% lower maximum sampled unfinished work, with all original step failures retained.
-- [ ] Review the paired presentation and merge the approved README update to main.
+- [x] Review the paired presentation and merge the approved README update to local
+  main. Landing-page review passed with 736 default tests and lint; remote
+  publication is a separate Git push. Continue later experiments on a development
+  branch.
 
 **Success evidence:** A valid pair explains whether autoscaling changes which
 demand steps meet every shared end-to-end guardrail, and whether added capacity

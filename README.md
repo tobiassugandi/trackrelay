@@ -1,6 +1,6 @@
 # TrackRelay
 
-### Same demand. Less unfinished work with autoscaling.
+### Elastic: More traffic, more workers. Fewer workers when traffic falls.
 
 TrackRelay is a shipment-event gateway: it turns courier updates into a consistent
 event stream for an order-management system. It studies how cloud capacity can
@@ -8,9 +8,31 @@ adapt to demand while preserving reliable delivery.
 
 ![TrackRelay architecture: a fixed-capacity API records events through a transactional outbox and SQS, while independently scaled workers deliver them downstream.](docs/assets/trackrelay-architecture.png)
 
-**In one paired AWS experiment with the same 25-events/second peak, autoscaling
+### Same demand. Less unfinished work with autoscaling.
+
+In one paired AWS experiment with the same 25-events/second peak, autoscaling
 reduced maximum observed unfinished deliveries by 85%—from 3,583 to 529.
-Workers scaled 1→8→1, and both runs delivered all 5,730 events correctly.**
+Workers scaled 1→8→1, and both runs delivered all 5,730 events correctly.
+
+```text
+             SAME TRAFFIC
+
+1 → 5 → 10 → 25 → 10 → 5 → 1 events/s
+
+                   │
+          ┌────────┴────────┐
+          │                 │
+       FIXED             ELASTIC
+      1 worker            1→8→1
+          │                 │
+          ▼                 ▼
+
+ sampled peak rate     sampled peak rate
+    ~6.3/s                ~25.7/s
+
+ max unfinished work   max unfinished work
+    → 3,583               → 529
+```
 
 ![Fixed and elastic runs under identical offered traffic: the fixed worker accumulates thousands of unfinished deliveries; autoscaling bounds the backlog and returns to one worker.](docs/assets/paired/comparison.png)
 
@@ -46,7 +68,7 @@ capacity when demand rises and releasing it after demand falls.
 
 ## What this result does—and does not—say
 
-This was **one fixed-then-elastic pair on 16 September 2026**, using synthetic
+This was **one fixed-then-elastic** experiment run, using synthetic
 courier events and a healthy downstream simulator. The 85% figure compares
 maximum sampled unfinished events under this workload; it is not a capacity
 multiplier or a cost-saving estimate.
@@ -66,25 +88,26 @@ Teardown was verified with **zero resources in all 30 tracked native inventory
 categories**. The current evidence does not compare synchronous architecture,
 measure maximum sustainable throughput, or establish lower cost.
 
-## Explore or reproduce
+## Explore and/or reproduce
 
-- [Paired results and measurement notes](docs/paired-elasticity-report.md)
-- [Public chart dataset](docs/assets/paired/data.json)
-- [Active post-MVP plan](docs/implementation-plan-2_post-mvp.md) · [Architecture](docs/aws-async-architecture.md)
-- [Run the paired experiment](docs/aws-elasticity-runbook.md) — requires preflight, a fresh plan, budget review, and session approval.
-- [Earlier standalone demo](docs/autoscaling-report.md) · [Original implementation history](docs/implementation-plan.md)
+- [Fixed vs. autoscaled experiment results and measurement notes](docs/paired-elasticity-report.md)
+- [Architecture](docs/aws-async-architecture.md)
+- [Active post-MVP plan](docs/implementation-plan-2_post-mvp.md) · [Original implementation history](docs/implementation-plan.md)
 
-The stack uses Python / FastAPI, PostgreSQL, SQS, ECS Fargate, CloudWatch,
-Terraform and k6. Local checks do not provision AWS:
+### Reproduce the published figure locally
 
-```shell
-uv sync --locked
-make test
-make lint
-```
-
-Regenerate the paired figure from the committed dataset with AWS off:
+The sanitized dataset used for the published comparison is committed to the repository.
+No AWS access is required:
 
 ```shell
 uv run --locked python scripts/render_paired_results.py
 ```
+
+### Run the experiment yourself
+
+To produce a fresh fixed-vs.-autoscaled AWS run and new evidence:
+
+- [Run the paired experiment](docs/aws-elasticity-runbook.md)
+
+This provisions AWS resources and requires preflight checks, a fresh Terraform plan,
+budget review, and explicit session approval.

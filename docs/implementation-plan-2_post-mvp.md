@@ -71,18 +71,26 @@ Next steps:
   preflight and a concrete cloud-session proposal remain separate work.
 - [ ] Complete necessary local fixes and focused checks for collection,
   qualification, reporting, failure handling, and unconditional cleanup.
-- [ ] Prepare the concrete cloud session and cost review, then obtain approval
+- [x] Execute the user-started paired session under the frozen protocol and
+  verify retained teardown evidence: `cloud-session-4-20260916T090513Z`, all six
+  phases completed and all 30 inventory categories zero. This records observed
+  execution, not a retroactive audit of the user's preflight or approval steps.
+- [ ] For any future attempt, prepare the concrete cloud session and cost review, then obtain approval
   before provisioning. Collect both treatments under the frozen protocol and
   verify complete teardown.
-- [ ] Analyze frozen evidence and build the report locally with AWS off. Produce
+- [x] Analyze frozen evidence and build the report locally with AWS off. Produce
   one large aligned figure comparing offered load, running workers, unfinished
   work or queue age, and ingestion p95 with its 500 ms SLO line. Show completion
   evidence alongside it; label latency windows and preserve transient failures.
-- [ ] Report each treatment's highest consecutive passing tested demand step,
+  See the [paired results](paired-elasticity-report.md) and committed numeric data.
+- [x] Report each treatment's highest consecutive passing tested demand step,
   the ratio only when supported, worker expansion A→B, observed scale-out time,
   backlog drain time, and return to A. Retain unavailable values and sampling
-  limits instead of inventing precision or a multiplier.
-- [ ] Prepare a readable report and README change for review and merge.
+  limits instead of inventing precision or a multiplier. Both supported rates
+  and the multiplier remain unavailable; peak-clearance timing is also unavailable.
+- [x] Prepare a readable report and README change on the development branch:
+  85.2% lower maximum sampled unfinished work, with all original step failures retained.
+- [ ] Review the paired presentation and merge the approved README update to main.
 
 **Success evidence:** A valid pair explains whether autoscaling changes which
 demand steps meet every shared end-to-end guardrail, and whether added capacity

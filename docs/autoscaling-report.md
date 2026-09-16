@@ -1,6 +1,8 @@
 # Autoscaling demo: evidence and chart notes
 
-The [repository welcome page](../README.md) is the short report. This page
+The [archived standalone README](archive/README-standalone-mvp.md) is the original
+short report. The [current README](../README.md) now presents the later paired
+experiment; see its [measurement notes](paired-elasticity-report.md). This page
 records its sources and measurement boundaries. This is a standalone
 demonstration, not the fixed-versus-elastic or async-versus-sync comparison.
 

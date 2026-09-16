@@ -1,96 +1,81 @@
 # TrackRelay
 
-### Elastic: More traffic, more workers. Fewer workers when traffic falls.
+### Same demand. Less unfinished work with autoscaling.
 
 TrackRelay is a shipment-event gateway: it turns courier updates into a consistent
-event stream for an order-management system. This project shows how moving
-delivery work behind a queue lets cloud compute **expand and contract with demand**.
+event stream for an order-management system. It studies how cloud capacity can
+adapt to demand while preserving reliable delivery.
 
-![TrackRelay architecture: courier updates pass through a load balancer and fixed-capacity API into a PostgreSQL transactional outbox and SQS queue. Fargate workers deliver events downstream, with CloudWatch demand and unfinished-work signals controlling worker autoscaling.](docs/assets/trackrelay-architecture.png)
+![TrackRelay architecture: a fixed-capacity API records events through a transactional outbox and SQS, while independently scaled workers deliver them downstream.](docs/assets/trackrelay-architecture.png)
 
-The API accepts and durably records updates; the queue lets delivery workers
-scale independently. As demand rises and falls, the scaling policy changes
-worker capacity—the behavior measured below.
+**In one paired AWS experiment with the same 25-events/second peak, autoscaling
+reduced maximum observed unfinished deliveries by 85%—from 3,583 to 529.
+Workers scaled 1→8→1, and both runs delivered all 5,730 events correctly.**
 
-**In a 10½-minute AWS experiment, traffic rose from 1 to 25 events/second.
-Workers automatically scaled from 1 → 8 → 1, and all 5,730 events were delivered.**
+![Fixed and elastic runs under identical offered traffic: the fixed worker accumulates thousands of unfinished deliveries; autoscaling bounds the backlog and returns to one worker.](docs/assets/paired/comparison.png)
 
-![Offered traffic rises to 25 events per second; running workers expand from one to eight, then return to one as demand falls.](docs/assets/autoscaling/demand-workers.png)
+## What changed when workers could scale?
 
-## What happened
+Both runs used the same asynchronous application and traffic waveform. The
+fixed run kept one worker. After resetting application state, the elastic run
+enabled worker autoscaling. API, database, and simulator capacity stayed fixed.
 
-The system started with one worker. As incoming traffic increased, the scaling
-policy requested more capacity; eight workers were running about two minutes
-after the workload began. When traffic returned to 1 event/second, the system
-caught up and returned to one worker—without an operator changing the worker count.
+| Observed in this pair | Fixed | Elastic |
+| --- | ---: | ---: |
+| Workers | 1 | 1→8→1 |
+| Maximum sampled unfinished deliveries | **3,583** | **529** |
+| Completed events/s during sampled peak | 6.29 | 25.65 |
+| Maximum native oldest-message age | 405 s | 28 s |
+| Worst full-phase ingestion p95 | 73.5 ms | 86.3 ms |
+| Events delivered and reconciled | 5,730 / 5,730 | 5,730 / 5,730 |
+| Missing events / duplicate effects / incorrect final states | 0 / 0 / 0 | 0 / 0 / 0 |
 
-| During the experiment | Observed result |
-| --- | --- |
-| Peak traffic | **25 events/s for 3 minutes** |
-| Worker capacity | **1 → 8 → 1 tasks** |
-| Ingestion p95 at peak | **79 ms** |
-| Accepted and delivered | **5,730 / 5,730 events** |
-| Request errors / dropped requests / duplicate effects | **0 / 0 / 0** |
-| Largest sampled backlog | **479 unfinished events**, below the 1,500 limit |
+One worker fell behind while the API continued responding quickly. With scaling,
+processing caught up with peak demand and unfinished work fell to a few events.
+Eight workers were first observed about **85 seconds after demand increased**;
+one worker was observed again about **175 seconds after low-demand recovery began**.
+These are sampled service counts, not exact task transitions or billing times.
 
 ## Why the cloud matters
 
 A queue separates accepting an update from delivering it. Workers can process
-that queue independently, so increasing delivery capacity does not require
-rebuilding the API.
+that queue independently, so delivery capacity can change while API capacity
+stays fixed. CloudWatch signals drive ECS Service Auto Scaling, and Fargate runs
+the worker containers. This experiment demonstrates acquiring extra worker
+capacity when demand rises and releasing it after demand falls.
 
-```text
-Courier updates → API → durable outbox → SQS queue → workers → order system
-                   │                                  ↑
-                   └─ demand & unfinished work ─→ scaling policy
-```
+## What this result does—and does not—say
 
-Here, CloudWatch signals drive ECS Service Auto Scaling, while Fargate runs the
-worker containers. AWS supplies the underlying compute: TrackRelay's owner does
-not need to buy, install, and maintain physical servers sized for the peak.
-When demand stays low and little work remains, the policy reduces the worker
-count again. See [ECS autoscaling](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-auto-scaling.html)
-and [Fargate](https://aws.amazon.com/fargate/).
+This was **one fixed-then-elastic pair on 16 September 2026**, using synthetic
+courier events and a healthy downstream simulator. The 85% figure compares
+maximum sampled unfinished events under this workload; it is not a capacity
+multiplier or a cost-saving estimate.
 
-That is the benefit demonstrated here: **access to more compute when needed,
-and the ability to release extra worker capacity afterward.** Only workers
-autoscale in this experiment; API and database capacity remain fixed.
+Both runs passed ingestion and correctness requirements. The fixed run qualified
+as a valid control but **failed several delivery/backlog load steps**. The elastic
+run passed the peak step and the elasticity qualification, but did not pass every
+step either. Both baseline steps failed the frozen capacity calculation, so the
+report correctly publishes **no supported-rate multiplier**.
 
-## Did speed and delivery hold up?
+Latency here means API acceptance, not time to downstream delivery. Both runs
+ultimately drained; that does not rescue failed load steps. The
+[paired report](docs/paired-elasticity-report.md) explains startup effects,
+sampling-sensitive failures, timing definitions, and the remaining limits.
 
-![Ingestion p95 is mostly low, with one ten-second spike to 572 milliseconds. Unfinished deliveries peak at 479 and clear while peak traffic continues.](docs/assets/autoscaling/latency-backlog.png)
-
-Peak-phase ingestion p95 was **79 ms**, and every workload phase passed the
-500 ms p95 limit. The backlog grew while workers were starting, then cleared.
-Final reconciliation found no missing events or duplicate business effects.
-Two delivery retries succeeded without duplicating the downstream action.
-
-Latency here means **API acceptance**, not time to final downstream delivery.
-One ten-second p95 bucket reached **572 ms**; the pass rule uses each entire
-phase, not each bucket or individual request. The spike is retained in the plot.
-Scaling is not instantaneous: this run returned to one worker about three minutes
-after low-demand recovery began, including the two-minute quiet qualification
-period and scaling delay.
-
-## A measured demo, not a universal benchmark
-
-This is one successful AWS run on **4 September 2026**, using synthetic courier
-events and a healthy downstream simulator. It demonstrates bounded elasticity,
-not maximum production throughput, measured cost savings, or an X× improvement
-over the synchronous architecture. Those comparisons remain separate work.
-
-All configured diagnostic guardrails passed. Afterward, teardown was verified
-with **zero resources remaining in all 30 tracked inventory categories**.
+Teardown was verified with **zero resources in all 30 tracked native inventory
+categories**. The current evidence does not compare synchronous architecture,
+measure maximum sustainable throughput, or establish lower cost.
 
 ## Explore or reproduce
 
-- [Evidence, chart data and measurement notes](docs/autoscaling-report.md)
-- [Architecture](docs/aws-async-architecture.md) · [Implementation history](docs/implementation-plan.md)
-- [Run the AWS demo](docs/aws-elasticity-diagnostic-runbook.md) — requires a fresh plan, explicit budget approval and teardown.
-- [Earlier setup and development notes](docs/archive/README-before-autoscaling.md) — archived technical reference.
+- [Paired results and measurement notes](docs/paired-elasticity-report.md)
+- [Public chart dataset](docs/assets/paired/data.json)
+- [Active post-MVP plan](docs/implementation-plan-2_post-mvp.md) · [Architecture](docs/aws-async-architecture.md)
+- [Run the paired experiment](docs/aws-elasticity-runbook.md) — requires preflight, a fresh plan, budget review, and session approval.
+- [Earlier standalone demo](docs/autoscaling-report.md) · [Original implementation history](docs/implementation-plan.md)
 
-The stack uses **Python / FastAPI, PostgreSQL, SQS, ECS Fargate, CloudWatch,
-Terraform and k6**. Local checks do not provision AWS resources:
+The stack uses Python / FastAPI, PostgreSQL, SQS, ECS Fargate, CloudWatch,
+Terraform and k6. Local checks do not provision AWS:
 
 ```shell
 uv sync --locked
@@ -98,8 +83,8 @@ make test
 make lint
 ```
 
-Regenerate the charts from the committed, sanitized dataset without AWS access:
+Regenerate the paired figure from the committed dataset with AWS off:
 
 ```shell
-uv run --locked python scripts/render_autoscaling_readme.py
+uv run --locked python scripts/render_paired_results.py
 ```

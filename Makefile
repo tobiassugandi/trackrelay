@@ -58,6 +58,13 @@ APPROVED_UNCONDITIONAL_TEARDOWN_SESSION_ID ?=
 sync:
 	$(UV) sync --locked --python 3.12
 
+.PHONY: ci
+# Keep setup ordered before checks, including when invoked with make -j.
+ci:
+	$(MAKE) sync
+	$(MAKE) lint
+	$(MAKE) test
+
 test:
 	$(UV) run --locked pytest
 

@@ -32,3 +32,50 @@ jobs:
 
       - name: Run CI checks
         run: make ci
+
+  integration:
+    name: PostgreSQL integration tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      TRACKRELAY_ENVIRONMENT: test
+      TRACKRELAY_DATABASE_URL: postgresql+psycopg://trackrelay:trackrelay@127.0.0.1:5432/trackrelay
+      TRACKRELAY_RESET_TEST_DATABASE_URL: postgresql+psycopg://trackrelay:trackrelay@127.0.0.1:5432/trackrelay_reset_contract
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: trackrelay
+          POSTGRES_USER: trackrelay
+          POSTGRES_PASSWORD: trackrelay
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U trackrelay -d trackrelay"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 5s
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.13"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: make sync
+
+      - name: Apply database migrations
+        run: make migrate
+
+      - name: Create isolated reset-contract database
+        run: docker exec "${{ job.services.postgres.id }}" createdb -U trackrelay trackrelay_reset_contract
+
+      - name: Run integration tests
+        run: make test-integration

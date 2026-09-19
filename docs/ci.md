@@ -1,6 +1,6 @@
 # Continuous integration
 
-Run the same checks locally that GitHub runs on a pull request:
+Run the lint and default test checks locally:
 
 ```shell
 make ci
@@ -17,18 +17,21 @@ The target runs these existing Make targets in order, stopping on a failure:
 | `test` | Run the default pytest suite, including unit and contract tests. |
 
 The default pytest configuration excludes tests marked `integration`, which
-require PostgreSQL. This first CI does not run database integration tests,
-container smoke tests, Terraform validation, or live AWS experiments. It needs
-no AWS credentials and does not deploy anything. Passing this check establishes
-that lint and the default tests pass; it does not prove a deployment works.
+require PostgreSQL. A separate `PostgreSQL integration tests` job runs those
+tests against a fresh database, as described below. CI does not run container
+smoke tests, Terraform validation, or live AWS experiments. It needs no AWS
+credentials and does not deploy anything.
 
 ## How GitHub runs it
 
 [The workflow](../.github/workflows/ci.yml) connects GitHub events to `make ci`:
 
 1. Opening or updating a pull request targeting `main` starts the workflow.
-2. GitHub gives the `Lint and tests` job a fresh Ubuntu runner (a temporary VM).
-3. Steps check out the code, install uv, and run `make ci`. For pull requests,
+2. GitHub gives each job its own fresh Ubuntu runner (a temporary VM). The two
+   jobs can run in parallel and report independent results.
+3. The `Lint and tests` job checks out the code, installs uv, and runs `make ci`.
+   The PostgreSQL job installs dependencies, migrates a fresh database, and
+   runs `make test-integration`. For pull requests,
    the default checkout tests GitHub's proposed merge with the base branch.
 4. A command returning a nonzero exit code fails the job and produces a red
    check. Expand the failed step in the Actions log to see the error.
@@ -71,15 +74,62 @@ line in another commit and push to see the check turn green again.
 
 CI reporting and merge enforcement are separate: this workflow reports a
 result. To require a passing result before merging, configure a ruleset or
-branch protection for `main` after the check has run, and select `Lint and tests`
-as a required status check. Availability depends on your repository and plan.
+branch protection for `main` after the checks have run, and select both
+`Lint and tests` and `PostgreSQL integration tests` as required status checks.
+Availability depends on your repository and plan.
 
-## A useful next increment
+## PostgreSQL integration tests
 
-Add a separate job with a disposable PostgreSQL service and run
-`make test-integration`. Keeping it separate gives database failures their own
-logs and status. Container builds and Terraform checks can follow as additional
-jobs when those checks are useful for your development workflow.
+The `integration` job starts a disposable `postgres:17-alpine` service, matching
+the PostgreSQL version in `compose.yaml`. GitHub waits for its `pg_isready`
+health check before running the job's steps. The runner connects through
+`127.0.0.1:5432`; `TRACKRELAY_DATABASE_URL` points both Alembic and the tests at
+that service. The credentials in the workflow are only for this temporary test
+database, so repository secrets are unnecessary.
+
+The job runs `make sync`, then `make migrate` to apply all Alembic migrations
+to the empty database, then `make test-integration`. The test target overrides
+pytest's default exclusion and selects only tests marked `integration`. These
+exercise persistence, concurrent deduplication, API flows, correctness scenarios,
+and reconciliation against real PostgreSQL. API and downstream simulator clients
+run inside the tests, so no separate web servers or AWS services are needed.
+
+The reset-contract test requires its own database, `trackrelay_reset_contract`.
+CI creates that database and sets `TRACKRELAY_RESET_TEST_DATABASE_URL`; the test
+fixture creates its schema. This isolates its destructive reset operations from
+the migrated application database. Without that variable, this test skips.
+
+GitHub removes the service when the job ends. Each run starts with a new
+database. A failure in `Apply database migrations` points to setup or schema
+creation; a failure in `Run integration tests` points to a test or fixture.
+The separate check keeps those failures distinct from lint and default tests.
+
+To reproduce locally using the development database (Docker must be running):
+
+```shell
+export TRACKRELAY_ENVIRONMENT=test
+export TRACKRELAY_DATABASE_URL=postgresql+psycopg://trackrelay:trackrelay@127.0.0.1:5433/trackrelay
+make sync
+make db-up
+make migrate
+docker compose exec -T postgres createdb -U trackrelay trackrelay_reset_contract
+export TRACKRELAY_RESET_TEST_DATABASE_URL=postgresql+psycopg://trackrelay:trackrelay@127.0.0.1:5433/trackrelay_reset_contract
+make test-integration
+make db-down
+```
+
+These commands use the default Compose credentials and port from `.env.example`;
+adjust the URL if you have customized them. Use a development database: the tests
+insert and delete fixture records. Local Compose retains its database volume
+after `make db-down`, whereas GitHub's service is fresh for every job. Run the
+`createdb` command with a fresh database: the reset test requires no existing
+tables. For a repeat run, remove only this disposable test database with
+`docker compose exec -T postgres dropdb -U trackrelay trackrelay_reset_contract`
+before recreating it (while PostgreSQL is running).
+
+Container builds and Terraform checks can follow as additional jobs when those
+checks are useful for your development workflow.
 
 References: [uv in GitHub Actions](https://docs.astral.sh/uv/guides/integration/github/)
 and [GitHub workflow triggers](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
+See also [PostgreSQL service containers](https://docs.github.com/en/actions/tutorials/use-containerized-services/create-postgresql-service-containers).

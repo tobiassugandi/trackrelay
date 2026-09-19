@@ -21,6 +21,7 @@ def test_liveness(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+    assert False, "Intentional failure for the CI learning exercise"
 
 
 def test_readiness_when_database_is_available(client: TestClient) -> None:

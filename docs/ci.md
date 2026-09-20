@@ -152,6 +152,21 @@ and run the commands above from the repository root. When changing provider
 requirements, update and commit the provider lockfile intentionally; CI should
 not silently select new provider versions.
 
+Keep provider checksums for both the ARM Mac development environment and the
+Linux amd64 CI runner in the lockfile. After changing provider requirements,
+generate and commit those checksums with:
+
+```shell
+terraform -chdir=infra/terraform providers lock \
+  -platform=darwin_arm64 -platform=linux_amd64
+```
+
+This verifies packages against the publisher's signed checksums and records
+platform-specific content hashes. With read-only initialization, a lockfile
+containing only the Mac content hash can pass local checks but fail validation
+of the unpacked Linux provider. Keep read-only initialization in CI and update
+the lockfile explicitly rather than allowing CI to rewrite it.
+
 ## Container builds and smoke tests
 
 The container job runs these existing targets in separate steps:

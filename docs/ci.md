@@ -18,20 +18,22 @@ The target runs these existing Make targets in order, stopping on a failure:
 
 The default pytest configuration excludes tests marked `integration`, which
 require PostgreSQL. A separate `PostgreSQL integration tests` job runs those
-tests against a fresh database, as described below. CI does not run container
-smoke tests, Terraform validation, or live AWS experiments. It needs no AWS
-credentials and does not deploy anything.
+tests against a fresh database, as described below. Two further jobs check
+Terraform and build and smoke-test the container images. CI needs no AWS
+credentials and does not deploy anything or run live AWS experiments.
 
 ## How GitHub runs it
 
 [The workflow](../.github/workflows/ci.yml) connects GitHub events to `make ci`:
 
 1. Opening or updating a pull request targeting `main` starts the workflow.
-2. GitHub gives each job its own fresh Ubuntu runner (a temporary VM). The two
+2. GitHub gives each job its own fresh Ubuntu runner (a temporary VM). The four
    jobs can run in parallel and report independent results.
 3. The `Lint and tests` job checks out the code, installs uv, and runs `make ci`.
    The PostgreSQL job installs dependencies, migrates a fresh database, and
-   runs `make test-integration`. For pull requests,
+   runs `make test-integration`. The Terraform job runs `make infra-init` and
+   `make infra-check`; the container job runs the three image smoke targets.
+   For pull requests,
    the default checkout tests GitHub's proposed merge with the base branch.
 4. A command returning a nonzero exit code fails the job and produces a red
    check. Expand the failed step in the Actions log to see the error.
@@ -40,7 +42,8 @@ credentials and does not deploy anything.
 Pushing a feature branch without an open pull request does not trigger this
 workflow. Once its pull request is open, subsequent pushes rerun the checks.
 The workflow cancels an older run for the same ref when a new run starts and
-limits each job to ten minutes. It has read-only repository permissions.
+limits each job to ten minutes (twenty for container builds). It has read-only
+repository permissions.
 Actions are pinned to commit SHAs, with version comments for readability; uv
 is also pinned. The dependency download cache improves speed, while `uv.lock`
 determines the dependency versions.
@@ -74,8 +77,9 @@ line in another commit and push to see the check turn green again.
 
 CI reporting and merge enforcement are separate: this workflow reports a
 result. To require a passing result before merging, configure a ruleset or
-branch protection for `main` after the checks have run, and select both
-`Lint and tests` and `PostgreSQL integration tests` as required status checks.
+branch protection for `main` after the checks have run, and select
+`Lint and tests`, `PostgreSQL integration tests`, `Terraform checks`, and
+`Container builds and smoke tests` as required status checks.
 Availability depends on your repository and plan.
 
 ## PostgreSQL integration tests
@@ -127,9 +131,54 @@ tables. For a repeat run, remove only this disposable test database with
 `docker compose exec -T postgres dropdb -U trackrelay trackrelay_reset_contract`
 before recreating it (while PostgreSQL is running).
 
-Container builds and Terraform checks can follow as additional jobs when those
-checks are useful for your development workflow.
+## Terraform checks
+
+CI installs the version in `.terraform-version`, then runs:
+
+```shell
+TF_CLI_ARGS_init=-lockfile=readonly make infra-init
+make infra-check
+```
+
+`infra-init` downloads the providers with the backend disabled. CI uses the
+committed `.terraform.lock.hcl` without updating it. `infra-check` checks
+formatting, validates the configuration, and runs the Terraform test suite.
+The current tests use a mocked AWS provider and `command = plan`: they exercise
+infrastructure assertions without creating AWS resources or needing credentials.
+They do not establish that a real AWS deployment will succeed.
+
+To reproduce locally, install the Terraform version in `.terraform-version`
+and run the commands above from the repository root. When changing provider
+requirements, update and commit the provider lockfile intentionally; CI should
+not silently select new provider versions.
+
+## Container builds and smoke tests
+
+The container job runs these existing targets in separate steps:
+
+```shell
+make image-api-smoke
+make image-worker-smoke
+make image-simulator-smoke
+```
+
+Each target builds its Dockerfile stage and runs its smoke script. API and
+simulator checks wait for container health, call `/health/live`, and verify
+the process runs as UID 10001. The worker check verifies its entrypoint,
+imports, non-root user, and rejection of missing SQS configuration. It does
+not connect to SQS or process real messages. The HTTP checks cover liveness,
+not database readiness or end-to-end delivery.
+
+All three steps share one runner so Docker can reuse common build layers.
+Images are built for the runner's Linux amd64 architecture and are not pushed
+to a registry. Smoke scripts remove their temporary containers. Local runs
+require Docker and build for your machine's default architecture; use
+`DOCKER_DEFAULT_PLATFORM=linux/amd64 make images-smoke` to match CI on an ARM Mac.
+`make images-smoke` runs all three targets together. `make ci` remains the
+lightweight lint and default-test command; Terraform and Docker have their own
+jobs and local commands.
 
 References: [uv in GitHub Actions](https://docs.astral.sh/uv/guides/integration/github/)
 and [GitHub workflow triggers](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
 See also [PostgreSQL service containers](https://docs.github.com/en/actions/tutorials/use-containerized-services/create-postgresql-service-containers).
+Terraform installation uses [HashiCorp's setup-terraform action](https://github.com/hashicorp/setup-terraform).
